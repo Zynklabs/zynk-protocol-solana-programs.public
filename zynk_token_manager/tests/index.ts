@@ -1,0 +1,112 @@
+import * as anchor from "@coral-xyz/anchor";
+import { Program } from "@coral-xyz/anchor";
+import { PublicKey } from "@solana/web3.js";
+import { expect } from "chai";
+import { ZynkTokenManager } from "../target/types/zynk_token_manager";
+
+describe("zynk-token-manager", () => {
+  // Configure the client to use the local cluster
+  anchor.setProvider(anchor.AnchorProvider.env());
+
+  const program = anchor.workspace
+    .ZynkTokenManager as Program<ZynkTokenManager>;
+  const provider = program.provider as anchor.AnchorProvider;
+
+  // Generate a new keypair for the token manager account
+  const tokenManagerKeypair = anchor.web3.Keypair.generate();
+
+  // Create a mock token address
+  const mockToken = anchor.web3.Keypair.generate().publicKey;
+  const newAdmin = anchor.web3.Keypair.generate().publicKey;
+
+  it("Initialize token manager", async () => {
+    try {
+      await program.methods
+        .initialize()
+        .accounts({
+          tokenManager: tokenManagerKeypair.publicKey,
+          admin: provider.wallet.publicKey,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .signers([tokenManagerKeypair])
+        .rpc();
+
+      // Fetch the created account
+      const account = await program.account.tokenManager.fetch(
+        tokenManagerKeypair.publicKey
+      );
+
+      expect(account.admin.toString()).to.equal(
+        provider.wallet.publicKey.toString()
+      );
+      expect(account.tokens).to.be.empty;
+    } catch (error) {
+      console.error("Error:", error);
+      throw error;
+    }
+  });
+
+  it("Add token to whitelist", async () => {
+    try {
+      await program.methods
+        .addToken(mockToken)
+        .accounts({
+          tokenManager: tokenManagerKeypair.publicKey,
+          admin: provider.wallet.publicKey,
+        })
+        .rpc();
+
+      // Fetch the account and verify token was added
+      const account = await program.account.tokenManager.fetch(
+        tokenManagerKeypair.publicKey
+      );
+      expect(account.tokens).to.have.lengthOf(1);
+      expect(account.tokens[0].toString()).to.equal(mockToken.toString());
+    } catch (error) {
+      console.error("Error:", error);
+      throw error;
+    }
+  });
+
+  it("Remove token from whitelist", async () => {
+    try {
+      await program.methods
+        .removeToken(mockToken)
+        .accounts({
+          tokenManager: tokenManagerKeypair.publicKey,
+          admin: provider.wallet.publicKey,
+        })
+        .rpc();
+
+      // Fetch the account and verify token was removed
+      const account = await program.account.tokenManager.fetch(
+        tokenManagerKeypair.publicKey
+      );
+      expect(account.tokens).to.be.empty;
+    } catch (error) {
+      console.error("Error:", error);
+      throw error;
+    }
+  });
+
+  it("Update admin", async () => {
+    try {
+      await program.methods
+        .updateAdmin(newAdmin)
+        .accounts({
+          tokenManager: tokenManagerKeypair.publicKey,
+          admin: provider.wallet.publicKey,
+        })
+        .rpc();
+
+      // Fetch the account and verify admin was updated
+      const account = await program.account.tokenManager.fetch(
+        tokenManagerKeypair.publicKey
+      );
+      expect(account.admin.toString()).to.equal(newAdmin.toString());
+    } catch (error) {
+      console.error("Error:", error);
+      throw error;
+    }
+  });
+});
