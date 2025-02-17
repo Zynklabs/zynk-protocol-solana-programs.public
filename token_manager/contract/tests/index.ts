@@ -1,6 +1,5 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
-import { PublicKey } from "@solana/web3.js";
 import { expect } from "chai";
 import { ZynkTokenManager } from "../target/types/zynk_token_manager";
 
