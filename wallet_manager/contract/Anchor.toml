@@ -6,12 +6,15 @@ skip-lint = false
 zynk_wallet_manager = "BvBdTYWDWJQYUAWsLtEz9CX9f96b5z5mbcyt9vMEDFuE"
 zynk_token_manager = "GTN8hxXgSS34ChaDWDiyKp9R9oa6DWDTGyJotL6uou46"
 
+[programs.devnet]
+zynk_wallet_manager = "BvBdTYWDWJQYUAWsLtEz9CX9f96b5z5mbcyt9vMEDFuE"
+
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "Localnet"
-wallet = "~/.config/solana/id.json"
+cluster = "devnet"
+wallet = "/Users/rajesh/.config/solana/id.json"
 
 [toolchain]
 anchor_version = "0.30.1"

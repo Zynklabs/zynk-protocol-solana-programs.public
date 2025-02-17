@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program::clock::Clock;
 use anchor_lang::solana_program::keccak::hash;
 
-declare_id!("BvBdTYWDWJQYUAWsLtEz9CX9f96b5z5mbcyt9vMEDFuE");
+declare_id!("FC5bGixHvLLTY4YzMw2LHNozj9JnnEeX3AUiKtcVDuvY");
 
 // The chain id constant.
 pub const CHAIN_ID: u64 = 1151111081099710;
@@ -243,17 +243,17 @@ pub struct WalletManager {
 
 impl WalletManager {
     /// Maximum allowed deposit mappings.
-    pub const MAX_DEPOSIT_MAPPINGS: usize = 50;
+    pub const MAX_DEPOSIT_MAPPINGS: usize = 10;
     /// Maximum allowed operational mappings.
-    pub const MAX_OPERATIONAL_MAPPINGS: usize = 50;
+    pub const MAX_OPERATIONAL_MAPPINGS: usize = 10;
     /// Total account space needed:
     /// - 8 bytes for discriminator
     /// - 32 bytes for admin pubkey
     /// - 4 bytes for deposit mappings vec length
-    /// - 50 * 100 bytes for deposit mappings (5000 bytes)
+    /// - 10 * 100 bytes for deposit mappings (1000 bytes)
     /// - 4 bytes for operational mappings vec length
-    /// - 50 * 100 bytes for operational mappings (5000 bytes)
-    /// Total: 8 + 32 + 4 + 5000 + 4 + 5000 = 10048 bytes
+    /// - 10 * 100 bytes for operational mappings (1000 bytes)
+    /// Total: 8 + 32 + 4 + 1000 + 4 + 1000 = 2048 bytes
     pub const LEN: usize = 8 +  // discriminator
         32 + // admin
         4 + (Self::MAX_DEPOSIT_MAPPINGS * DepositMapping::SIZE) + // deposit mappings vector
