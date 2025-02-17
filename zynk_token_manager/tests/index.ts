@@ -19,6 +19,9 @@ describe("zynk-token-manager", () => {
   const mockToken = anchor.web3.Keypair.generate().publicKey;
   const newAdmin = anchor.web3.Keypair.generate().publicKey;
 
+  // Create an unauthorized user keypair
+  const unauthorizedUser = anchor.web3.Keypair.generate();
+
   it("Initialize token manager", async () => {
     try {
       await program.methods
@@ -68,6 +71,37 @@ describe("zynk-token-manager", () => {
     }
   });
 
+  it("Unauthorized user cannot add token to whitelist", async () => {
+    try {
+      // Request airdrop for the unauthorized user to pay for transaction fees
+      const airdropSignature = await program.provider.connection.requestAirdrop(
+        unauthorizedUser.publicKey,
+        1 * anchor.web3.LAMPORTS_PER_SOL
+      );
+      await program.provider.connection.confirmTransaction(airdropSignature);
+
+      // Attempt to add token as unauthorized user
+      await program.methods
+        .addToken(mockToken)
+        .accounts({
+          tokenManager: tokenManagerKeypair.publicKey,
+          admin: unauthorizedUser.publicKey,
+        })
+        .signers([unauthorizedUser])
+        .rpc();
+
+      // If we reach here, the test should fail
+      expect.fail("Expected error but transaction succeeded");
+    } catch (error) {
+      // Print the full error message
+      // console.log("Full error message:", error.message);
+      // Verify that the error is due to unauthorized access
+      expect(error.message).to.include(
+        "Unauthorized: Only the current admin can perform this action"
+      );
+    }
+  });
+
   it("Remove token from whitelist", async () => {
     try {
       await program.methods
@@ -89,6 +123,39 @@ describe("zynk-token-manager", () => {
     }
   });
 
+  it("Unauthorized user cannot remove token from whitelist", async () => {
+    try {
+      // First add a token back to remove
+      await program.methods
+        .addToken(mockToken)
+        .accounts({
+          tokenManager: tokenManagerKeypair.publicKey,
+          admin: provider.wallet.publicKey,
+        })
+        .rpc();
+
+      // Attempt to remove token as unauthorized user
+      await program.methods
+        .removeToken(mockToken)
+        .accounts({
+          tokenManager: tokenManagerKeypair.publicKey,
+          admin: unauthorizedUser.publicKey,
+        })
+        .signers([unauthorizedUser])
+        .rpc();
+
+      // If we reach here, the test should fail
+      expect.fail("Expected error but transaction succeeded");
+    } catch (error) {
+      // Print the full error message
+      // console.log("Full error message:", error.message);
+      // Verify that the error is due to unauthorized access
+      expect(error.message).to.include(
+        "Unauthorized: Only the current admin can perform this action"
+      );
+    }
+  });
+
   it("Update admin", async () => {
     try {
       await program.methods
@@ -107,6 +174,32 @@ describe("zynk-token-manager", () => {
     } catch (error) {
       console.error("Error:", error);
       throw error;
+    }
+  });
+
+  it("Unauthorized user cannot update admin", async () => {
+    try {
+      const fakeNewAdmin = anchor.web3.Keypair.generate().publicKey;
+
+      // Attempt to update admin as unauthorized user
+      await program.methods
+        .updateAdmin(fakeNewAdmin)
+        .accounts({
+          tokenManager: tokenManagerKeypair.publicKey,
+          admin: unauthorizedUser.publicKey,
+        })
+        .signers([unauthorizedUser])
+        .rpc();
+
+      // If we reach here, the test should fail
+      expect.fail("Expected error but transaction succeeded");
+    } catch (error) {
+      // Print the full error message
+      // console.log("Full error message:", error.message);
+      // Verify that the error is due to unauthorized access
+      expect(error.message).to.include(
+        "Unauthorized: Only the current admin can perform this action"
+      );
     }
   });
 });

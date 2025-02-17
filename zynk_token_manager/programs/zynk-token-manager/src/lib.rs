@@ -19,8 +19,15 @@ pub mod zynk_token_manager {
     }
 
     /// Adds a token to the whitelist.
-    /// Emits the TokenAdded event.
+    /// Only the current admin can add tokens.
     pub fn add_token(ctx: Context<ModifyTokenManager>, token: Pubkey) -> Result<()> {
+        // Verify admin
+        require_keys_eq!(
+            ctx.accounts.token_manager.admin,
+            ctx.accounts.admin.key(),
+            ErrorCode::UnauthorizedAccess
+        );
+
         let token_manager = &mut ctx.accounts.token_manager;
         if token_manager.tokens.contains(&token) {
             return Err(ErrorCode::TokenAlreadyExists.into());
@@ -34,8 +41,15 @@ pub mod zynk_token_manager {
     }
 
     /// Removes a token from the whitelist.
-    /// Emits the TokenRemoved event.
+    /// Only the current admin can remove tokens.
     pub fn remove_token(ctx: Context<ModifyTokenManager>, token: Pubkey) -> Result<()> {
+        // Verify admin
+        require_keys_eq!(
+            ctx.accounts.token_manager.admin,
+            ctx.accounts.admin.key(),
+            ErrorCode::UnauthorizedAccess
+        );
+
         let token_manager = &mut ctx.accounts.token_manager;
         let pos = token_manager
             .tokens
@@ -51,8 +65,15 @@ pub mod zynk_token_manager {
     }
 
     /// Updates the admin address.
-    /// Only the current admin can update.
+    /// Only the current admin can update the admin address.
     pub fn update_admin(ctx: Context<UpdateAdminToken>, new_admin: Pubkey) -> Result<()> {
+        // Verify admin
+        require_keys_eq!(
+            ctx.accounts.token_manager.admin,
+            ctx.accounts.admin.key(),
+            ErrorCode::UnauthorizedAccess
+        );
+
         let token_manager = &mut ctx.accounts.token_manager;
         token_manager.admin = new_admin;
         Ok(())
@@ -74,7 +95,7 @@ pub struct InitializeTokenManager<'info> {
 #[derive(Accounts)]
 pub struct ModifyTokenManager<'info> {
     /// The TokenManager account (must be mutable and have the correct admin).
-    #[account(mut, has_one = admin)]
+    #[account(mut)]
     pub token_manager: Account<'info, TokenManager>,
     /// The admin must sign.
     pub admin: Signer<'info>,
@@ -83,7 +104,7 @@ pub struct ModifyTokenManager<'info> {
 #[derive(Accounts)]
 pub struct UpdateAdminToken<'info> {
     /// The TokenManager account (must be mutable and have the correct admin).
-    #[account(mut, has_one = admin)]
+    #[account(mut)]
     pub token_manager: Account<'info, TokenManager>,
     /// The admin must sign.
     pub admin: Signer<'info>,
@@ -98,23 +119,12 @@ pub struct TokenManager {
 
 impl TokenManager {
     /// Maximum number of tokens allowed.
-    pub const MAX_TOKENS: usize = 100;
-    /// Calculated space:
-    /// 8 bytes for the discriminator, 32 bytes for admin, 4 bytes for the vector length,
-    /// plus 32 bytes per token (for MAX_TOKENS tokens).
-    pub const LEN: usize = 8 + 32 + 4 + (Self::MAX_TOKENS * 32);
+    pub const MAX_TOKENS: usize = 300;
+    /// Length of the account in bytes.
+    pub const LEN: usize = 8 + // discriminator
+        32 + // admin pubkey
+        4 + (32 * Self::MAX_TOKENS); // vec len + vec data
 }
-
-#[error_code]
-pub enum ErrorCode {
-    #[msg("Token already exists.")]
-    TokenAlreadyExists,
-    #[msg("Token not found.")]
-    TokenNotFound,
-}
-
-// =================================================================
-// EVENTS
 
 #[event]
 pub struct TokenAdded {
@@ -126,4 +136,14 @@ pub struct TokenAdded {
 pub struct TokenRemoved {
     pub token: Pubkey,
     pub chain_id: u64,
+}
+
+#[error_code]
+pub enum ErrorCode {
+    #[msg("Token already exists in the whitelist")]
+    TokenAlreadyExists,
+    #[msg("Token not found in the whitelist")]
+    TokenNotFound,
+    #[msg("Unauthorized: Only the current admin can perform this action")]
+    UnauthorizedAccess,
 }
