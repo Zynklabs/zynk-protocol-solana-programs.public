@@ -123,9 +123,12 @@ pub mod zynk_protocol {
         let config = &mut ctx.accounts.config;
         require!(!config.paused, CustomError::ContractPaused);
 
-        // Get and increment nonce with overflow protection
+        // Increment the nonce first, then use it as the order ID.
+        config.current_nonce = config
+            .current_nonce
+            .checked_add(1)
+            .ok_or(CustomError::NonceOverflow)?;
         let nonce = config.current_nonce;
-        config.current_nonce = nonce.checked_add(1).ok_or(CustomError::NonceOverflow)?;
 
         // Perform token transfer
         let cpi_accounts = Transfer {
@@ -136,7 +139,7 @@ pub mod zynk_protocol {
         let cpi_ctx = CpiContext::new(ctx.accounts.token_program.to_account_info(), cpi_accounts);
         token::transfer(cpi_ctx, amount)?;
 
-        // Store order details
+        // Store order details with the new (nonzero) order ID
         let order_tracker = &mut ctx.accounts.order_tracker;
         order_tracker.order_id = nonce;
         order_tracker.replenishment_wallet = replenishment_wallet;
@@ -289,7 +292,6 @@ pub struct SendTokens<'info> {
     pub zynk_op_wallet: Signer<'info>,
     #[account(
         mut,
-        constraint = source_token_account.owner == config.zynk_op_wallet @ CustomError::UnauthorizedSender,
         constraint = source_token_account.mint == destination_token_account.mint @ CustomError::InvalidTokenMint
     )]
     pub source_token_account: Box<Account<'info, TokenAccount>>,
