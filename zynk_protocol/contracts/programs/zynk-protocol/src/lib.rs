@@ -94,6 +94,21 @@ pub enum CustomError {
 pub mod zynk_protocol {
     use super::*;
 
+    /// Initialize the protocol with admin, zynk operator wallet, and payback wallet.
+    pub fn initialize(
+        ctx: Context<Initialize>,
+        zynk_op_wallet: Pubkey,
+        payback_wallet: Pubkey,
+    ) -> Result<()> {
+        let config = &mut ctx.accounts.config;
+        config.admin = ctx.accounts.admin.key();
+        config.zynk_op_wallet = zynk_op_wallet;
+        config.payback_wallet = payback_wallet;
+        config.paused = false;
+        config.current_nonce = 0;
+        Ok(())
+    }
+
     /// Sends tokens from the stored ZYNK_OP_WALLET to a destination.
     /// It verifies that the source token account is owned by ZYNK_OP_WALLET,
     /// performs the token transfer, computes a unique order id (using auto-incrementing nonce),
@@ -248,6 +263,19 @@ pub mod zynk_protocol {
         ctx.accounts.config.paused = paused;
         Ok(())
     }
+}
+
+#[derive(Accounts)]
+pub struct Initialize<'info> {
+    #[account(
+        init,
+        payer = admin,
+        space = Config::LEN
+    )]
+    pub config: Account<'info, Config>,
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
