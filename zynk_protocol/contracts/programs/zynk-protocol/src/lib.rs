@@ -158,7 +158,8 @@ pub mod zynk_protocol {
     }
 
     /// Replenishes tokens by transferring them from a deposit wallet to the payback wallet.
-    /// It verifies a validity period, performs the transfer, and emits a Replenish event.
+    /// The deposit_wallet is the actual wallet sending the tokens, while the replenishment_wallet
+    /// stored in the OrderTracker is used for verification only.
     pub fn replenish(
         ctx: Context<ReplenishTokens>,
         order_id: u64,
@@ -181,7 +182,13 @@ pub mod zynk_protocol {
             CustomError::ValidityExpired
         );
 
-        // Perform token transfer
+        // Verify that the deposit wallet is authorized by checking against stored replenishment_wallet
+        require!(
+            ctx.accounts.deposit_wallet.key() == ctx.accounts.order_tracker.replenishment_wallet,
+            CustomError::UnauthorizedSender
+        );
+
+        // Perform token transfer from deposit wallet to payback wallet
         let cpi_accounts = Transfer {
             from: ctx.accounts.deposit_token_account.to_account_info(),
             to: ctx.accounts.payback_token_account.to_account_info(),
@@ -313,6 +320,7 @@ pub struct ReplenishTokens<'info> {
     pub config: Account<'info, Config>,
     #[account(
         mut,
+        constraint = deposit_token_account.owner == deposit_wallet.key() @ CustomError::UnauthorizedSender,
         constraint = deposit_token_account.mint == payback_token_account.mint @ CustomError::InvalidTokenMint
     )]
     pub deposit_token_account: Box<Account<'info, TokenAccount>>,
