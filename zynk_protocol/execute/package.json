@@ -3,17 +3,20 @@
   "version": "1.0.0",
   "description": "Client for executing Zynk Token Manager smart contract",
   "main": "index.ts",
+  "type": "module",
   "scripts": {
-    "start": "ts-node src/index.ts"
+    "start": "tsx src/index.ts"
   },
   "dependencies": {
     "@project-serum/anchor": "^0.26.0",
+    "@solana/spl-token": "^0.3.9",
     "@solana/web3.js": "^1.87.6",
     "dotenv": "^16.3.1"
   },
   "devDependencies": {
     "typescript": "^5.3.3",
     "ts-node": "^10.9.2",
-    "@types/node": "^20.10.5"
+    "@types/node": "^20.10.5",
+    "tsx": "^4.7.1"
   }
 }

@@ -5,104 +5,292 @@ import {
   PublicKey,
   Keypair,
   LAMPORTS_PER_SOL,
+  SystemProgram,
 } from "@solana/web3.js";
 import { config } from "dotenv";
-import * as fs from "fs";
-import * as os from "os";
+import { fileURLToPath } from "url";
+import { dirname, resolve } from "path";
+import {
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
+  createMint,
+  createAssociatedTokenAccount,
+  mintTo,
+} from "@solana/spl-token";
+import { readFileSync } from "fs";
 
 config();
 
-// Program ID from the smart contract
-const PROGRAM_ID = new PublicKey(
-  "GTN8hxXgSS34ChaDWDiyKp9R9oa6DWDTGyJotL6uou46"
-);
+// Get current file path in ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
-function loadWalletKey(): Keypair {
-  const home = os.homedir();
-  const configFile = fs.readFileSync(`${home}/.config/solana/id.json`, "utf-8");
-  return Keypair.fromSecretKey(new Uint8Array(JSON.parse(configFile)));
+// Function to get program ID from keypair file
+function getProgramId(): PublicKey {
+  try {
+    const programKeypairPath = resolve(
+      __dirname,
+      "../../contracts/target/deploy/zynk_protocol-keypair.json"
+    );
+    const programKeypair = JSON.parse(
+      readFileSync(programKeypairPath, "utf-8")
+    );
+    return new PublicKey(
+      Keypair.fromSecretKey(new Uint8Array(programKeypair)).publicKey
+    );
+  } catch (error) {
+    console.error("Error reading program ID from keypair:", error);
+    throw error;
+  }
+}
+
+// Get program ID from keypair
+const PROGRAM_ID = getProgramId();
+console.log("Program ID:", PROGRAM_ID.toString());
+
+// Helper function to create associated token account
+async function getOrCreateAssociatedTokenAccount(
+  connection: Connection,
+  payer: Keypair,
+  mint: PublicKey,
+  owner: PublicKey
+) {
+  const associatedTokenAddress = await anchor.utils.token.associatedAddress({
+    mint: mint,
+    owner: owner,
+  });
+
+  try {
+    await connection.getAccountInfo(associatedTokenAddress);
+    return associatedTokenAddress;
+  } catch {
+    return await createAssociatedTokenAccount(connection, payer, mint, owner);
+  }
+}
+
+// Helper function to airdrop SOL
+async function requestAirdrop(
+  connection: Connection,
+  address: PublicKey,
+  amount: number
+) {
+  const signature = await connection.requestAirdrop(address, amount);
+  await connection.confirmTransaction(signature);
+}
+
+// Helper function to ensure an account has enough SOL
+async function ensureAccountHasSOL(
+  connection: Connection,
+  address: PublicKey,
+  minBalance: number = LAMPORTS_PER_SOL // 1 SOL by default
+) {
+  const balance = await connection.getBalance(address);
+  if (balance < minBalance) {
+    console.log(
+      `Airdropping ${
+        minBalance / LAMPORTS_PER_SOL
+      } SOL to ${address.toString()}`
+    );
+    await requestAirdrop(connection, address, minBalance);
+  }
 }
 
 async function main() {
-  // Initialize connection to devnet
-  const connection = new Connection(
-    "https://api.devnet.solana.com",
-    "confirmed"
-  );
+  // Initialize connection to localhost
+  const connection = new Connection("http://127.0.0.1:8899", "confirmed");
 
-  // Initialize provider with your wallet
-  const wallet = new anchor.Wallet(loadWalletKey());
+  // Create all necessary wallets
+  console.log("Creating wallets...");
+  const zynkOpWallet = Keypair.generate(); // operator wallet
+  const partnerDepositWallet = Keypair.generate(); // partner deposit wallet for replenish
+  const orderTracker = Keypair.generate(); // order tracker account
+
+  console.log("Zynk operator wallet:", zynkOpWallet.publicKey.toString());
+  console.log(
+    "Partner deposit wallet:",
+    partnerDepositWallet.publicKey.toString()
+  );
+  console.log("Order tracker:", orderTracker.publicKey.toString());
+
+  // Initialize provider with zynk operator wallet
+  const wallet = new anchor.Wallet(zynkOpWallet);
   const provider = new anchor.AnchorProvider(connection, wallet, {
     commitment: "confirmed",
   });
 
-  // print balance
-  const balance = await connection.getBalance(wallet.publicKey);
-  console.log(`Wallet balance: ${balance / LAMPORTS_PER_SOL} SOL`);
+  // Airdrop SOL to all wallets
+  console.log("\nAirdropping SOL to wallets...");
+
+  // Zynk operator needs more SOL as they'll be creating token mint and accounts
+  await ensureAccountHasSOL(
+    connection,
+    zynkOpWallet.publicKey,
+    2 * LAMPORTS_PER_SOL
+  );
+  await ensureAccountHasSOL(connection, partnerDepositWallet.publicKey);
+  await ensureAccountHasSOL(
+    connection,
+    orderTracker.publicKey,
+    LAMPORTS_PER_SOL / 2
+  );
+
+  // Print balances
+  const opBalance = await connection.getBalance(zynkOpWallet.publicKey);
+  const partnerBalance = await connection.getBalance(
+    partnerDepositWallet.publicKey
+  );
+  console.log(
+    `Zynk operator wallet balance: ${opBalance / LAMPORTS_PER_SOL} SOL`
+  );
+  console.log(
+    `Partner deposit wallet balance: ${partnerBalance / LAMPORTS_PER_SOL} SOL`
+  );
 
   // Create program interface
   const program = new Program(IDL as any, PROGRAM_ID, provider);
 
   try {
-    // Example: Initialize token manager
-    const tokenManager = Keypair.generate();
+    // Create a new token mint
+    console.log("\nCreating token mint...");
+    const tokenMint = await createMint(
+      connection,
+      zynkOpWallet,
+      zynkOpWallet.publicKey,
+      zynkOpWallet.publicKey,
+      9 // 9 decimals
+    );
+    console.log("Token mint created:", tokenMint.toString());
 
-    console.log("Initializing token manager...");
+    // Create token accounts
+    console.log("\nCreating token accounts...");
+
+    // Create and fund source token account (owned by zynk operator)
+    const sourceTokenAccount = await getOrCreateAssociatedTokenAccount(
+      connection,
+      zynkOpWallet,
+      tokenMint,
+      zynkOpWallet.publicKey
+    );
+    console.log("Source token account:", sourceTokenAccount.toString());
+
+    // Create partner operational token account
+    const partnerOperationalWallet = await getOrCreateAssociatedTokenAccount(
+      connection,
+      zynkOpWallet,
+      tokenMint,
+      partnerDepositWallet.publicKey
+    );
+    console.log(
+      "Partner operational wallet:",
+      partnerOperationalWallet.toString()
+    );
+
+    // Mint some tokens to the source account
+    console.log("\nMinting tokens to source account...");
+    await mintTo(
+      connection,
+      zynkOpWallet,
+      tokenMint,
+      sourceTokenAccount,
+      zynkOpWallet,
+      2000000 // Mint 2 tokens (assuming 9 decimals)
+    );
+
+    // Get the protocol's config address (you should have this from initialization)
+    const configAddress = new PublicKey("YOUR_CONFIG_ADDRESS"); // Replace this with your actual config address
+
+    console.log("\nSending tokens...");
+    const amount = new anchor.BN(1000000); // 1 token (assuming 9 decimals)
     await program.methods
-      .initialize()
+      .send(tokenMint, amount, partnerDepositWallet.publicKey)
       .accounts({
-        tokenManager: tokenManager.publicKey,
-        admin: wallet.publicKey,
-        systemProgram: anchor.web3.SystemProgram.programId,
+        config: configAddress,
+        zynkOpWallet: zynkOpWallet.publicKey,
+        sourceTokenAccount: sourceTokenAccount,
+        partnerOperationalWallet: partnerOperationalWallet,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        orderTracker: orderTracker.publicKey,
+        systemProgram: SystemProgram.programId,
       })
-      .signers([tokenManager])
+      .signers([orderTracker, zynkOpWallet])
       .rpc();
 
-    console.log("Token manager initialized!");
-    console.log("Token Manager address:", tokenManager.publicKey.toString());
+    console.log("Tokens sent!");
+    console.log("Order Tracker:", orderTracker.publicKey.toString());
 
-    // Example: Add a token to whitelist
-    const tokenToAdd = new PublicKey("11111111111111111111111111111111");
+    // Create payback token account
+    const paybackTokenAccount = await getOrCreateAssociatedTokenAccount(
+      connection,
+      zynkOpWallet,
+      tokenMint,
+      zynkOpWallet.publicKey // zynk operator is the payback wallet for this example
+    );
+    console.log("\nPayback token account:", paybackTokenAccount.toString());
 
-    console.log("Adding token to whitelist...");
+    // Create deposit token account
+    const depositTokenAccount = await getOrCreateAssociatedTokenAccount(
+      connection,
+      zynkOpWallet,
+      tokenMint,
+      partnerDepositWallet.publicKey
+    );
+
+    // Mint some tokens to the deposit account for replenishment
+    await mintTo(
+      connection,
+      zynkOpWallet,
+      tokenMint,
+      depositTokenAccount,
+      zynkOpWallet,
+      1000000 // Same amount for replenishment
+    );
+
+    console.log("\nReplenishing tokens...");
+    const orderId = new anchor.BN(1); // The order ID from the send operation
+    const validity = new anchor.BN(Math.floor(Date.now() / 1000) + 3600); // 1 hour from now
+    const paybackAmount = new anchor.BN(1000000);
+
     await program.methods
-      .addToken(tokenToAdd)
+      .replenish(orderId, validity, paybackAmount)
       .accounts({
-        tokenManager: tokenManager.publicKey,
-        admin: wallet.publicKey,
+        config: configAddress,
+        depositTokenAccount: depositTokenAccount,
+        paybackTokenAccount: paybackTokenAccount,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        depositWallet: partnerDepositWallet.publicKey,
+        orderTracker: orderTracker.publicKey,
       })
+      .signers([partnerDepositWallet])
       .rpc();
 
-    console.log("Token added to whitelist!");
+    console.log("Tokens replenished!");
 
-    // Example: Remove a token from whitelist
-    console.log("Removing token from whitelist...");
-    await program.methods
-      .removeToken(tokenToAdd)
-      .accounts({
-        tokenManager: tokenManager.publicKey,
-        admin: wallet.publicKey,
-      })
-      .rpc();
-
-    console.log("Token removed from whitelist!");
-
-    // Example: Update admin
-    const newAdmin = Keypair.generate();
-    console.log("Updating admin...");
-    await program.methods
-      .updateAdmin(newAdmin.publicKey)
-      .accounts({
-        tokenManager: tokenManager.publicKey,
-        admin: wallet.publicKey,
-      })
-      .rpc();
-
-    console.log("Admin updated to:", newAdmin.publicKey.toString());
+    // Save wallet info to file for future reference
+    console.log("\nWallet Information Summary:");
+    console.log("----------------------------");
+    console.log("Zynk Operator Wallet:", zynkOpWallet.publicKey.toString());
+    console.log(
+      "Partner Deposit Wallet:",
+      partnerDepositWallet.publicKey.toString()
+    );
+    console.log("Token Mint:", tokenMint.toString());
+    console.log("Source Token Account:", sourceTokenAccount.toString());
+    console.log(
+      "Partner Operational Wallet:",
+      partnerOperationalWallet.toString()
+    );
+    console.log("Payback Token Account:", paybackTokenAccount.toString());
+    console.log("Deposit Token Account:", depositTokenAccount.toString());
+    console.log("Order Tracker:", orderTracker.publicKey.toString());
   } catch (error) {
     console.error("Error:", error);
   }
 }
+
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
 
 // IDL for the smart contract
 const IDL = {
@@ -529,5 +717,3 @@ const IDL = {
     },
   ],
 };
-
-main().catch(console.error);
