@@ -489,11 +489,7 @@ describe("zynk-protocol", () => {
 
   it("Should fail when deposit wallet has insufficient balance", async () => {
     // Create a new order since previous one is closed
-    const newOrderId = new anchor.BN(2);
-    const [newOrderTracker] = anchor.web3.PublicKey.findProgramAddressSync(
-      [Buffer.from("order"), newOrderId.toBuffer("le", 8)],
-      program.programId
-    );
+    const newOrderTracker = Keypair.generate();
 
     // Initialize new order
     await program.methods
@@ -508,11 +504,17 @@ describe("zynk-protocol", () => {
         sourceTokenAccount: zynkOpTokenAccount,
         partnerOperationalWallet: partnerOperationalTokenAccount,
         tokenProgram: TOKEN_PROGRAM_ID,
-        orderTracker: newOrderTracker,
+        orderTracker: newOrderTracker.publicKey,
         systemProgram: SystemProgram.programId,
       })
       .signers([newOrderTracker, zynkOpWallet])
       .rpc();
+
+    // Get the order ID from the new order tracker
+    const orderTrackerAccount = await program.account.orderTracker.fetch(
+      newOrderTracker.publicKey
+    );
+    const newOrderId = orderTrackerAccount.orderId;
 
     // First drain the deposit wallet by replenishing the maximum amount
     const currentBalance = await provider.connection.getTokenAccountBalance(
@@ -526,7 +528,7 @@ describe("zynk-protocol", () => {
       )
       .accounts({
         config: config.publicKey,
-        orderTracker: newOrderTracker,
+        orderTracker: newOrderTracker.publicKey,
         depositWallet: partnerDepositWallet.publicKey,
         depositTokenAccount: partnerDepositTokenAccount,
         paybackTokenAccount: paybackTokenAccount,
@@ -545,7 +547,7 @@ describe("zynk-protocol", () => {
         )
         .accounts({
           config: config.publicKey,
-          orderTracker: newOrderTracker,
+          orderTracker: newOrderTracker.publicKey,
           depositWallet: partnerDepositWallet.publicKey,
           depositTokenAccount: partnerDepositTokenAccount,
           paybackTokenAccount: paybackTokenAccount,
