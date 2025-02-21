@@ -78,6 +78,10 @@ pub enum CustomError {
     ValidityExpired,
     #[msg("Invalid token mint")]
     InvalidTokenMint,
+    #[msg("Validity must be in future")]
+    ValidityMustBeFuture,
+    #[msg("Amount must be positive")]
+    AmountMustBePositive,
 }
 
 #[program]
@@ -167,12 +171,12 @@ pub mod zynk_protocol {
             CustomError::InvalidOrderId
         );
 
-        // Check the validity period.
-        let clock = Clock::get()?;
-        require!(
-            clock.unix_timestamp < validity,
-            CustomError::ValidityExpired
-        );
+        // Validate that validity is in future
+        let now = Clock::get()?.unix_timestamp;
+        require!(validity > now, CustomError::ValidityMustBeFuture);
+
+        // Validate amount is positive
+        require!(payback_amount > 0, CustomError::AmountMustBePositive);
 
         // Verify that the deposit wallet is authorized by comparing it with the stored partner_deposit_wallet.
         require!(
