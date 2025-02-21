@@ -5,7 +5,7 @@ declare_id!("7UAhcDLNRpKa4HuCk5MkCLxRGLeRnbjqGxhjePdxPcqB");
 
 pub const CHAIN_ID: u64 = 1151111081099710;
 
-/// Stores the admin, the designated operator (ZYNK_OP_WALLET), a payback wallet,
+/// Stores the admin, the designated operator (zynk_op_wallet), the payback wallet,
 /// and current nonce for send operations.
 #[account]
 pub struct Config {
@@ -17,34 +17,32 @@ pub struct Config {
 }
 
 impl Config {
-    pub const LEN: usize = 8 + // discriminator
+    pub const LEN: usize = 8  + // discriminator
         32 + // admin
         32 + // zynk_op_wallet
         32 + // payback_wallet
-        1 + // paused
+        1  + // paused
         8; // current_nonce
 }
 
-/// Tracks order details including the designated replenishment wallet
+/// Tracks order details including the designated partner_deposit_wallet
 #[account]
 pub struct OrderTracker {
     pub order_id: u64,
-    pub replenishment_wallet: Pubkey,
+    pub partner_deposit_wallet: Pubkey,
 }
 
 impl OrderTracker {
-    pub const LEN: usize = 8 + // discriminator
-        8 + // order_id (u64)
-        32; // replenishment_wallet
+    pub const LEN: usize = 8  + // discriminator
+        8  + // order_id (u64)
+        32; // partner_deposit_wallet
 }
 
 #[event]
 pub struct Send {
     pub order_id: u64,
     pub token: Pubkey,
-    pub from: Pubkey,                 // ZYNK_OP_WALLET
-    pub to: Pubkey,                   // Destination token account owner
-    pub replenishment_wallet: Pubkey, // Wallet that must be used for replenishment
+    pub partner_deposit_wallet: Pubkey, // wallet that will be used later for replenish
     pub amount: u64,
     pub chain_id: u64,
 }
@@ -53,17 +51,9 @@ pub struct Send {
 pub struct Replenish {
     pub order_id: u64,
     pub token: Pubkey,
-    pub from: Pubkey, // Deposit wallet (sender)
-    pub to: Pubkey,   // Payback wallet (recipient)
     pub amount: u64,
     pub status: bool,
     pub chain_id: u64,
-}
-
-#[event]
-pub struct ReplenishStatus {
-    pub order_id: u64,
-    pub status: bool,
 }
 
 #[event]
@@ -109,17 +99,21 @@ pub mod zynk_protocol {
         Ok(())
     }
 
-    /// Sends tokens from the stored ZYNK_OP_WALLET to a destination.
-    /// It verifies that the source token account is owned by ZYNK_OP_WALLET,
-    /// performs the token transfer, computes a unique order id (using auto-incrementing nonce),
-    /// and emits a Send event.
+    /// Sends tokens from the zynk_op_wallet (operator) to the partner_operational_wallet.
+    /// The user provides the token mint, amount, and the partner_deposit_wallet (to be used later for replenish).
+    /// This function:
+    /// - Checks that the protocol isn’t paused.
+    /// - Increments the nonce (to derive a unique, nonzero order ID).
+    /// - Transfers tokens from the source token account (owned by zynk_op_wallet) to the partner_operational_wallet.
+    /// - Records the order details (order_id and partner_deposit_wallet) in a new OrderTracker account.
+    /// - Emits a Send event.
     pub fn send(
         ctx: Context<SendTokens>,
         token_mint: Pubkey,
         amount: u64,
-        replenishment_wallet: Pubkey,
+        partner_deposit_wallet: Pubkey,
     ) -> Result<()> {
-        // Check if contract is paused
+        // Check if contract is paused.
         let config = &mut ctx.accounts.config;
         require!(!config.paused, CustomError::ContractPaused);
 
@@ -130,26 +124,24 @@ pub mod zynk_protocol {
             .ok_or(CustomError::NonceOverflow)?;
         let nonce = config.current_nonce;
 
-        // Perform token transfer
+        // Perform token transfer from source_token_account to partner_operational_wallet.
         let cpi_accounts = Transfer {
             from: ctx.accounts.source_token_account.to_account_info(),
-            to: ctx.accounts.destination_token_account.to_account_info(),
+            to: ctx.accounts.partner_operational_wallet.to_account_info(),
             authority: ctx.accounts.zynk_op_wallet.to_account_info(),
         };
         let cpi_ctx = CpiContext::new(ctx.accounts.token_program.to_account_info(), cpi_accounts);
         token::transfer(cpi_ctx, amount)?;
 
-        // Store order details with the new (nonzero) order ID
+        // Store order details with the new (nonzero) order ID.
         let order_tracker = &mut ctx.accounts.order_tracker;
         order_tracker.order_id = nonce;
-        order_tracker.replenishment_wallet = replenishment_wallet;
+        order_tracker.partner_deposit_wallet = partner_deposit_wallet;
 
         emit!(Send {
             order_id: nonce,
             token: token_mint,
-            from: ctx.accounts.zynk_op_wallet.key(),
-            to: ctx.accounts.destination_token_account.owner,
-            replenishment_wallet,
+            partner_deposit_wallet,
             amount,
             chain_id: CHAIN_ID,
         });
@@ -157,38 +149,38 @@ pub mod zynk_protocol {
         Ok(())
     }
 
-    /// Replenishes tokens by transferring them from a deposit wallet to the payback wallet.
-    /// The deposit_wallet is the actual wallet sending the tokens, while the replenishment_wallet
-    /// stored in the OrderTracker is used for verification only.
+    /// Replenishes tokens by transferring them from the partner_deposit_wallet (deposit_wallet)
+    /// to the payback_wallet.
+    /// The deposit wallet must match the partner_deposit_wallet recorded in the OrderTracker.
     pub fn replenish(
         ctx: Context<ReplenishTokens>,
         order_id: u64,
         validity: i64,
         payback_amount: u64,
     ) -> Result<()> {
-        // Check if contract is paused
+        // Check if contract is paused.
         require!(!ctx.accounts.config.paused, CustomError::ContractPaused);
 
-        // Verify order_id matches
+        // Verify the order_id matches.
         require!(
             ctx.accounts.order_tracker.order_id == order_id,
             CustomError::InvalidOrderId
         );
 
-        // Check validity period
+        // Check the validity period.
         let clock = Clock::get()?;
         require!(
             clock.unix_timestamp < validity,
             CustomError::ValidityExpired
         );
 
-        // Verify that the deposit wallet is authorized by checking against stored replenishment_wallet
+        // Verify that the deposit wallet is authorized by comparing it with the stored partner_deposit_wallet.
         require!(
-            ctx.accounts.deposit_wallet.key() == ctx.accounts.order_tracker.replenishment_wallet,
+            ctx.accounts.deposit_wallet.key() == ctx.accounts.order_tracker.partner_deposit_wallet,
             CustomError::UnauthorizedSender
         );
 
-        // Perform token transfer from deposit wallet to payback wallet
+        // Perform token transfer from deposit token account to payback token account.
         let cpi_accounts = Transfer {
             from: ctx.accounts.deposit_token_account.to_account_info(),
             to: ctx.accounts.payback_token_account.to_account_info(),
@@ -200,8 +192,6 @@ pub mod zynk_protocol {
         emit!(Replenish {
             order_id,
             token: ctx.accounts.deposit_token_account.mint,
-            from: ctx.accounts.deposit_wallet.key(),
-            to: ctx.accounts.payback_token_account.owner,
             amount: payback_amount,
             status: false, // Default status
             chain_id: CHAIN_ID,
@@ -213,16 +203,11 @@ pub mod zynk_protocol {
     /// Closes the order account and emits closure events.
     /// Only callable by admin.
     pub fn close_order(ctx: Context<CloseOrder>, order_id: u64) -> Result<()> {
-        // Verify order_id matches
+        // Verify that the order_id matches.
         require!(
             ctx.accounts.order_tracker.order_id == order_id,
             CustomError::InvalidOrderId
         );
-
-        emit!(ReplenishStatus {
-            order_id,
-            status: true
-        });
 
         emit!(ReplenishClosure {
             order_id,
@@ -232,18 +217,18 @@ pub mod zynk_protocol {
         let order_tracker_account = &ctx.accounts.order_tracker.to_account_info();
         let dest_account = &ctx.accounts.admin.to_account_info();
 
-        // Close the account and transfer lamports
+        // Close the order account by transferring its lamports to the admin.
         **dest_account.try_borrow_mut_lamports()? +=
             **order_tracker_account.try_borrow_lamports()?;
         **order_tracker_account.try_borrow_mut_lamports()? = 0;
 
-        // Clear the data
+        // Clear the account data.
         order_tracker_account.try_borrow_mut_data()?.fill(0);
 
         Ok(())
     }
 
-    /// Updates the ZYNK operator wallet address. Only callable by admin.
+    /// Updates the zynk_op_wallet (operator) address. Only callable by admin.
     pub fn update_zynk_op_wallet(
         ctx: Context<UpdateConfigAddress>,
         new_zynk_op_wallet: Pubkey,
@@ -252,7 +237,7 @@ pub mod zynk_protocol {
         Ok(())
     }
 
-    /// Updates the payback wallet address. Only callable by admin.
+    /// Updates the payback_wallet address. Only callable by admin.
     pub fn update_payback_wallet(
         ctx: Context<UpdateConfigAddress>,
         new_payback_wallet: Pubkey,
@@ -261,7 +246,7 @@ pub mod zynk_protocol {
         Ok(())
     }
 
-    /// Transfers admin rights to a new admin address. Only callable by current admin.
+    /// Transfers admin rights to a new admin address. Only callable by the current admin.
     pub fn transfer_admin(ctx: Context<UpdateConfigAddress>, new_admin: Pubkey) -> Result<()> {
         ctx.accounts.config.admin = new_admin;
         Ok(())
@@ -299,11 +284,15 @@ pub struct SendTokens<'info> {
     pub zynk_op_wallet: Signer<'info>,
     #[account(
         mut,
-        constraint = source_token_account.mint == destination_token_account.mint @ CustomError::InvalidTokenMint
+        constraint = source_token_account.mint == partner_operational_wallet.mint @ CustomError::InvalidTokenMint
     )]
     pub source_token_account: Box<Account<'info, TokenAccount>>,
-    #[account(mut)]
-    pub destination_token_account: Box<Account<'info, TokenAccount>>,
+    #[account(
+        mut,
+        // We assume partner_operational_wallet is the token account associated with the partner's wallet.
+        // Its mint should match the source's mint.
+    )]
+    pub partner_operational_wallet: Box<Account<'info, TokenAccount>>,
     pub token_program: Program<'info, Token>,
     #[account(
         init,
@@ -330,13 +319,16 @@ pub struct ReplenishTokens<'info> {
     )]
     pub payback_token_account: Box<Account<'info, TokenAccount>>,
     pub token_program: Program<'info, Token>,
+    /// CHECK: This account must be mutable since it receives lamports from the closed order_tracker
+    #[account(mut)]
     pub deposit_wallet: Signer<'info>,
     #[account(
         mut,
         close = deposit_wallet,
-        constraint = order_tracker.replenishment_wallet == deposit_wallet.key() @ CustomError::UnauthorizedSender
+        constraint = order_tracker.partner_deposit_wallet == deposit_wallet.key() @ CustomError::UnauthorizedSender
     )]
     pub order_tracker: Account<'info, OrderTracker>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]

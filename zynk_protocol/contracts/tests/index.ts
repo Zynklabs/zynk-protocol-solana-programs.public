@@ -17,11 +17,12 @@ describe("zynk-protocol", () => {
 
   const program = anchor.workspace.ZynkProtocol as Program<ZynkProtocol>;
 
-  // Test accounts
+  // Test wallets (keypairs)
   const admin = Keypair.generate();
   const zynkOpWallet = Keypair.generate();
   const paybackWallet = Keypair.generate();
-  const destinationWallet = Keypair.generate();
+  const partnerOperationalWallet = Keypair.generate();
+  const partnerDepositWallet = Keypair.generate();
 
   // Config account (to be initialized)
   const config = Keypair.generate();
@@ -29,11 +30,23 @@ describe("zynk-protocol", () => {
   // Token accounts
   let mint: PublicKey;
   let zynkOpTokenAccount: PublicKey;
-  let destinationTokenAccount: PublicKey;
+  let partnerOperationalTokenAccount: PublicKey;
+  let partnerDepositTokenAccount: PublicKey;
+  let paybackTokenAccount: PublicKey;
+
+  // Track order details between tests
+  let orderTracker: Keypair;
+  let orderId: anchor.BN;
 
   before(async () => {
-    // Airdrop SOL to admin, zynkOpWallet, and destinationWallet for transactions
-    for (const kp of [admin, zynkOpWallet, destinationWallet]) {
+    // Airdrop SOL to test wallets for transactions
+    for (const kp of [
+      admin,
+      zynkOpWallet,
+      partnerOperationalWallet,
+      partnerDepositWallet,
+      paybackWallet,
+    ]) {
       const tx = await provider.connection.requestAirdrop(
         kp.publicKey,
         2 * anchor.web3.LAMPORTS_PER_SOL
@@ -50,35 +63,56 @@ describe("zynk-protocol", () => {
       9 // 9 decimals like SOL
     );
 
-    // Create token account for zynkOpWallet
+    // Create token accounts for all wallets
     zynkOpTokenAccount = await createAccount(
       provider.connection,
       zynkOpWallet,
       mint,
-      zynkOpWallet.publicKey // This is the owner
+      zynkOpWallet.publicKey
     );
 
-    // Create token account for destination wallet
-    destinationTokenAccount = await createAccount(
+    partnerOperationalTokenAccount = await createAccount(
       provider.connection,
-      destinationWallet,
+      partnerOperationalWallet,
       mint,
-      destinationWallet.publicKey // This is the owner
+      partnerOperationalWallet.publicKey
     );
 
-    // Mint some tokens to zynkOpWallet (1 token = 1e9 units)
+    partnerDepositTokenAccount = await createAccount(
+      provider.connection,
+      partnerDepositWallet,
+      mint,
+      partnerDepositWallet.publicKey
+    );
+
+    paybackTokenAccount = await createAccount(
+      provider.connection,
+      paybackWallet,
+      mint,
+      paybackWallet.publicKey
+    );
+
+    // Mint tokens to zynkOpWallet and partnerDepositWallet
     await mintTo(
       provider.connection,
       admin,
       mint,
       zynkOpTokenAccount,
       admin.publicKey,
-      1000000000
+      10000000000000 // Initial supply for zynk operator
+    );
+
+    await mintTo(
+      provider.connection,
+      admin,
+      mint,
+      partnerDepositTokenAccount,
+      admin.publicKey,
+      10000000000000 // Initial supply for partner deposit
     );
   });
 
   it("Initializes the protocol", async () => {
-    // Call the initialize instruction to create the config account
     await program.methods
       .initialize(zynkOpWallet.publicKey, paybackWallet.publicKey)
       .accounts({
@@ -89,7 +123,7 @@ describe("zynk-protocol", () => {
       .signers([config, admin])
       .rpc();
 
-    // Fetch the config account and verify its fields
+    // Verify config account fields
     const configAccount = await program.account.config.fetch(config.publicKey);
     assert.ok(configAccount.admin.equals(admin.publicKey));
     assert.ok(configAccount.zynkOpWallet.equals(zynkOpWallet.publicKey));
@@ -98,22 +132,21 @@ describe("zynk-protocol", () => {
     assert.equal(configAccount.currentNonce.toNumber(), 0);
   });
 
-  it("Sends tokens from zynkOpWallet to destination", async () => {
-    const amount = new anchor.BN(100000000); // 0.1 token (in units of 1e-9)
-    const orderTracker = Keypair.generate();
+  it("Sends tokens from zynkOpWallet to partner_operational_wallet", async () => {
+    const amount = new anchor.BN(100000000000); // 100 token
+    orderTracker = Keypair.generate();
 
-    // No need for an explicit approval if zynkOpWallet is signing the transfer.
     await program.methods
       .send(
         mint,
         amount,
-        paybackWallet.publicKey // using paybackWallet as the designated replenishment wallet
+        partnerDepositWallet.publicKey // wallet that will be used later for replenish
       )
       .accounts({
         config: config.publicKey,
         zynkOpWallet: zynkOpWallet.publicKey,
         sourceTokenAccount: zynkOpTokenAccount,
-        destinationTokenAccount: destinationTokenAccount,
+        partnerOperationalWallet: partnerOperationalTokenAccount,
         tokenProgram: TOKEN_PROGRAM_ID,
         orderTracker: orderTracker.publicKey,
         systemProgram: SystemProgram.programId,
@@ -121,20 +154,57 @@ describe("zynk-protocol", () => {
       .signers([orderTracker, zynkOpWallet])
       .rpc();
 
-    // Verify that the destination account received the tokens
+    // Verify token transfer
     const destBalance = await provider.connection.getTokenAccountBalance(
-      destinationTokenAccount
+      partnerOperationalTokenAccount
     );
-    assert.equal(destBalance.value.amount, "100000000");
+    assert.equal(destBalance.value.amount, "100000000000");
 
-    // Verify that the OrderTracker account was created and stores the correct replenishment wallet
+    // Verify OrderTracker stores correct partner deposit wallet
     const orderTrackerAccount = await program.account.orderTracker.fetch(
       orderTracker.publicKey
     );
     assert.ok(
-      orderTrackerAccount.replenishmentWallet.equals(paybackWallet.publicKey)
+      orderTrackerAccount.partnerDepositWallet.equals(
+        partnerDepositWallet.publicKey
+      )
     );
-    // order_id should be nonzero (since it was derived from the config nonce)
-    assert.ok(orderTrackerAccount.orderId.toNumber() > 0);
+    orderId = orderTrackerAccount.orderId;
+    assert.ok(orderId.toNumber() > 0);
+  });
+
+  it("Replenishes tokens from partner_deposit_wallet to payback_wallet", async () => {
+    const paybackAmount = new anchor.BN(100000000000); // 100 token
+    const now = Math.floor(Date.now() / 1000);
+    const validity = now + 3600; // Valid for 1 hour
+
+    await program.methods
+      .replenish(orderId, new anchor.BN(validity), paybackAmount)
+      .accounts({
+        config: config.publicKey,
+        orderTracker: orderTracker.publicKey,
+        depositWallet: partnerDepositWallet.publicKey,
+        depositTokenAccount: partnerDepositTokenAccount,
+        paybackTokenAccount: paybackTokenAccount,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([partnerDepositWallet])
+      .rpc();
+
+    // Verify token transfer to payback wallet
+    const paybackBalance =
+      await provider.connection.getTokenAccountBalance(paybackTokenAccount);
+    assert.equal(paybackBalance.value.amount, "100000000000");
+
+    // Verify partner deposit wallet's balance was reduced
+    const depositBalance = await provider.connection.getTokenAccountBalance(
+      partnerDepositTokenAccount
+    );
+    assert.equal(depositBalance.value.amount, "9900000000000"); // Initial 10000 - 100 tokens
+
+    // Verify that orderTracker was closed
+    const orderTrackerInfo = await provider.connection.getAccountInfo(orderTracker.publicKey);
+    assert.isNull(orderTrackerInfo, "OrderTracker should be closed");
   });
 });
