@@ -212,6 +212,62 @@ describe("zynk-protocol", () => {
     );
   });
 
+  it("Can replenish tokens multiple times before order is closed", async () => {
+    const paybackAmount = new anchor.BN(50000000000); // 50 token
+    const now = Math.floor(Date.now() / 1000);
+    const validity = now + 3600; // Valid for 1 hour
+
+    // Get initial balances
+    const initialPaybackBalance =
+      await provider.connection.getTokenAccountBalance(paybackTokenAccount);
+    const initialDepositBalance =
+      await provider.connection.getTokenAccountBalance(
+        partnerDepositTokenAccount
+      );
+
+    // Second replenish operation
+    await program.methods
+      .replenish(orderId, new anchor.BN(validity), paybackAmount)
+      .accounts({
+        config: config.publicKey,
+        orderTracker: orderTracker.publicKey,
+        depositWallet: partnerDepositWallet.publicKey,
+        depositTokenAccount: partnerDepositTokenAccount,
+        paybackTokenAccount: paybackTokenAccount,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([partnerDepositWallet])
+      .rpc();
+
+    // Verify token transfer to payback wallet (increased by 50 tokens)
+    const paybackBalance =
+      await provider.connection.getTokenAccountBalance(paybackTokenAccount);
+    assert.equal(
+      paybackBalance.value.amount,
+      "150000000000",
+      "Payback balance should increase by 50 tokens"
+    );
+
+    // Verify partner deposit wallet's balance was reduced by 50 tokens
+    const depositBalance = await provider.connection.getTokenAccountBalance(
+      partnerDepositTokenAccount
+    );
+    assert.equal(
+      depositBalance.value.amount,
+      "9850000000000",
+      "Deposit balance should decrease by 50 tokens"
+    );
+
+    // Verify that orderTracker is still active
+    const orderTrackerInfo = await provider.connection.getAccountInfo(
+      orderTracker.publicKey
+    );
+    assert.isNotNull(
+      orderTrackerInfo,
+      "OrderTracker should still be active after second replenish"
+    );
+  });
+
   it("Closes the replenish order by admin", async () => {
     // Admin closes the order
     await program.methods
@@ -232,6 +288,82 @@ describe("zynk-protocol", () => {
     assert.isNull(
       orderTrackerInfo,
       "OrderTracker should be closed after admin calls close_order"
+    );
+  });
+
+  it("Fails when trying to close an already closed order", async () => {
+    // Attempt to close the already closed order
+    try {
+      await program.methods
+        .closeOrder(orderId)
+        .accounts({
+          config: config.publicKey,
+          orderTracker: orderTracker.publicKey,
+          admin: admin.publicKey,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([admin])
+        .rpc();
+      assert.fail("Expected close_order to fail on already closed order");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "AccountNotInitialized",
+        "Expected AccountNotInitialized error when closing an already closed order"
+      );
+    }
+
+    // Double verify that orderTracker is still closed
+    const orderTrackerInfo = await provider.connection.getAccountInfo(
+      orderTracker.publicKey
+    );
+    assert.isNull(orderTrackerInfo, "OrderTracker should remain closed");
+  });
+
+  it("Fails when trying to replenish a closed order", async () => {
+    const paybackAmount = new anchor.BN(100000000000); // 100 token
+    const now = Math.floor(Date.now() / 1000);
+    const validity = now + 3600; // Valid for 1 hour
+
+    // Attempt to replenish after order is closed
+    try {
+      await program.methods
+        .replenish(orderId, new anchor.BN(validity), paybackAmount)
+        .accounts({
+          config: config.publicKey,
+          orderTracker: orderTracker.publicKey,
+          depositWallet: partnerDepositWallet.publicKey,
+          depositTokenAccount: partnerDepositTokenAccount,
+          paybackTokenAccount: paybackTokenAccount,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([partnerDepositWallet])
+        .rpc();
+      assert.fail("Expected replenish to fail on closed order");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "AccountNotInitialized",
+        "Expected AccountNotInitialized error when replenishing a closed order"
+      );
+    }
+
+    // Verify balances haven't changed
+    const paybackBalance =
+      await provider.connection.getTokenAccountBalance(paybackTokenAccount);
+    assert.equal(
+      paybackBalance.value.amount,
+      "150000000000",
+      "Payback balance should be unchanged"
+    );
+
+    const depositBalance = await provider.connection.getTokenAccountBalance(
+      partnerDepositTokenAccount
+    );
+    assert.equal(
+      depositBalance.value.amount,
+      "9850000000000",
+      "Deposit balance should be unchanged"
     );
   });
 });
