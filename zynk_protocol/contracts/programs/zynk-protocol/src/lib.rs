@@ -319,16 +319,12 @@ pub struct ReplenishTokens<'info> {
     )]
     pub payback_token_account: Box<Account<'info, TokenAccount>>,
     pub token_program: Program<'info, Token>,
-    /// CHECK: This account must be mutable since it receives lamports from the closed order_tracker
-    #[account(mut)]
     pub deposit_wallet: Signer<'info>,
     #[account(
         mut,
-        close = deposit_wallet,
         constraint = order_tracker.partner_deposit_wallet == deposit_wallet.key() @ CustomError::UnauthorizedSender
     )]
     pub order_tracker: Account<'info, OrderTracker>,
-    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
@@ -348,8 +344,13 @@ pub struct CloseOrder<'info> {
         has_one = admin @ CustomError::UnauthorizedAdmin
     )]
     pub config: Account<'info, Config>,
-    pub admin: Signer<'info>,
+    /// CHECK: This account must be mutable since it receives lamports from the closed order_tracker
     #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(
+        mut,
+        close = admin
+    )]
     pub order_tracker: Account<'info, OrderTracker>,
     pub system_program: Program<'info, System>,
 }

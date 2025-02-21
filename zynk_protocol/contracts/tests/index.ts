@@ -187,7 +187,6 @@ describe("zynk-protocol", () => {
         depositTokenAccount: partnerDepositTokenAccount,
         paybackTokenAccount: paybackTokenAccount,
         tokenProgram: TOKEN_PROGRAM_ID,
-        systemProgram: SystemProgram.programId,
       })
       .signers([partnerDepositWallet])
       .rpc();
@@ -203,8 +202,36 @@ describe("zynk-protocol", () => {
     );
     assert.equal(depositBalance.value.amount, "9900000000000"); // Initial 10000 - 100 tokens
 
+    // Verify that orderTracker is still active
+    const orderTrackerInfo = await provider.connection.getAccountInfo(
+      orderTracker.publicKey
+    );
+    assert.isNotNull(
+      orderTrackerInfo,
+      "OrderTracker should still be active after replenish"
+    );
+  });
+
+  it("Closes the replenish order by admin", async () => {
+    // Admin closes the order
+    await program.methods
+      .closeOrder(orderId)
+      .accounts({
+        config: config.publicKey,
+        orderTracker: orderTracker.publicKey,
+        admin: admin.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([admin])
+      .rpc();
+
     // Verify that orderTracker was closed
-    const orderTrackerInfo = await provider.connection.getAccountInfo(orderTracker.publicKey);
-    assert.isNull(orderTrackerInfo, "OrderTracker should be closed");
+    const orderTrackerInfo = await provider.connection.getAccountInfo(
+      orderTracker.publicKey
+    );
+    assert.isNull(
+      orderTrackerInfo,
+      "OrderTracker should be closed after admin calls close_order"
+    );
   });
 });
