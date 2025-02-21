@@ -348,7 +348,6 @@ pub struct CloseOrder<'info> {
         has_one = admin @ CustomError::UnauthorizedAdmin
     )]
     pub config: Account<'info, Config>,
-    /// CHECK: This account must be mutable since it receives lamports from the closed order_tracker
     #[account(mut)]
     pub admin: Signer<'info>,
     #[account(

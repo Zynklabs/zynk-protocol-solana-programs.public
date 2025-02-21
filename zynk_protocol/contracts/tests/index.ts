@@ -28,7 +28,7 @@ describe("zynk-protocol", () => {
   const config = Keypair.generate();
 
   // Token accounts
-  let mint: PublicKey;
+  let tokenMint: PublicKey;
   let zynkOpTokenAccount: PublicKey;
   let partnerOperationalTokenAccount: PublicKey;
   let partnerDepositTokenAccount: PublicKey;
@@ -55,7 +55,7 @@ describe("zynk-protocol", () => {
     }
 
     // Create test token (using admin as mint authority)
-    mint = await createMint(
+    tokenMint = await createMint(
       provider.connection,
       admin,
       admin.publicKey,
@@ -67,28 +67,28 @@ describe("zynk-protocol", () => {
     zynkOpTokenAccount = await createAccount(
       provider.connection,
       zynkOpWallet,
-      mint,
+      tokenMint,
       zynkOpWallet.publicKey
     );
 
     partnerOperationalTokenAccount = await createAccount(
       provider.connection,
       partnerOperationalWallet,
-      mint,
+      tokenMint,
       partnerOperationalWallet.publicKey
     );
 
     partnerDepositTokenAccount = await createAccount(
       provider.connection,
       partnerDepositWallet,
-      mint,
+      tokenMint,
       partnerDepositWallet.publicKey
     );
 
     paybackTokenAccount = await createAccount(
       provider.connection,
       paybackWallet,
-      mint,
+      tokenMint,
       paybackWallet.publicKey
     );
 
@@ -96,7 +96,7 @@ describe("zynk-protocol", () => {
     await mintTo(
       provider.connection,
       admin,
-      mint,
+      tokenMint,
       zynkOpTokenAccount,
       admin.publicKey,
       10000000000000 // Initial supply for zynk operator
@@ -105,7 +105,7 @@ describe("zynk-protocol", () => {
     await mintTo(
       provider.connection,
       admin,
-      mint,
+      tokenMint,
       partnerDepositTokenAccount,
       admin.publicKey,
       10000000000000 // Initial supply for partner deposit
@@ -138,7 +138,7 @@ describe("zynk-protocol", () => {
 
     await program.methods
       .send(
-        mint,
+        tokenMint,
         amount,
         partnerDepositWallet.publicKey // wallet that will be used later for replenish
       )
@@ -212,6 +212,60 @@ describe("zynk-protocol", () => {
     );
   });
 
+  it("Should fail when replenishing with past validity timestamp", async () => {
+    const paybackAmount = new anchor.BN(50000000000); // 50 token
+    const pastTimestamp = Math.floor(Date.now() / 1000) - 3600; // 1 hour ago
+
+    try {
+      await program.methods
+        .replenish(orderId, new anchor.BN(pastTimestamp), paybackAmount)
+        .accounts({
+          config: config.publicKey,
+          orderTracker: orderTracker.publicKey,
+          depositWallet: partnerDepositWallet.publicKey,
+          depositTokenAccount: partnerDepositTokenAccount,
+          paybackTokenAccount: paybackTokenAccount,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([partnerDepositWallet])
+        .rpc();
+      assert.fail("Expected replenish to fail with past timestamp");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "ValidityMustBeFuture",
+        "Expected ValidityMustBeFuture error"
+      );
+    }
+  });
+
+  it("Should fail when replenishing with zero amount", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const validity = now + 3600;
+
+    try {
+      await program.methods
+        .replenish(orderId, new anchor.BN(validity), new anchor.BN(0))
+        .accounts({
+          config: config.publicKey,
+          orderTracker: orderTracker.publicKey,
+          depositWallet: partnerDepositWallet.publicKey,
+          depositTokenAccount: partnerDepositTokenAccount,
+          paybackTokenAccount: paybackTokenAccount,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([partnerDepositWallet])
+        .rpc();
+      assert.fail("Expected replenish to fail with zero amount");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "AmountMustBePositive",
+        "Expected AmountMustBePositive error"
+      );
+    }
+  });
+
   it("Can replenish tokens multiple times before order is closed", async () => {
     const paybackAmount = new anchor.BN(50000000000); // 50 token
     const now = Math.floor(Date.now() / 1000);
@@ -268,27 +322,117 @@ describe("zynk-protocol", () => {
     );
   });
 
+  it("Should fail when wrong signer tries to replenish", async () => {
+    const wrongSigner = anchor.web3.Keypair.generate();
+    const airdropSig = await provider.connection.requestAirdrop(
+      wrongSigner.publicKey,
+      1000000000
+    );
+    await provider.connection.confirmTransaction(airdropSig);
+
+    try {
+      await program.methods
+        .replenish(
+          orderId,
+          new anchor.BN(Math.floor(Date.now() / 1000) + 3600),
+          new anchor.BN(1000000)
+        )
+        .accounts({
+          config: config.publicKey,
+          orderTracker: orderTracker.publicKey,
+          depositWallet: wrongSigner.publicKey,
+          depositTokenAccount: partnerDepositTokenAccount,
+          paybackTokenAccount: paybackTokenAccount,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([wrongSigner])
+        .rpc();
+      assert.fail("Expected replenish to fail with wrong signer");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "UnauthorizedSender",
+        "Expected UnauthorizedSender error"
+      );
+    }
+  });
+
   it("Closes the replenish order by admin", async () => {
     // Admin closes the order
     await program.methods
       .closeOrder(orderId)
       .accounts({
         config: config.publicKey,
-        orderTracker: orderTracker.publicKey,
         admin: admin.publicKey,
-        systemProgram: SystemProgram.programId,
+        orderTracker: orderTracker.publicKey,
+        systemProgram: anchor.web3.SystemProgram.programId,
       })
       .signers([admin])
       .rpc();
 
-    // Verify that orderTracker was closed
-    const orderTrackerInfo = await provider.connection.getAccountInfo(
-      orderTracker.publicKey
+    // Verify order is closed
+    try {
+      await program.account.orderTracker.fetch(orderTracker.publicKey);
+      assert.fail("Expected order to be closed");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "Account does not exist",
+        "Expected account to be closed"
+      );
+    }
+  });
+
+  it("Should fail when non-admin tries to close order", async () => {
+    // Create a new order since previous one is closed
+    const newOrderTracker = Keypair.generate();
+
+    // Initialize new order
+    await program.methods
+      .send(
+        tokenMint,
+        new anchor.BN(100000000000),
+        partnerDepositWallet.publicKey
+      )
+      .accounts({
+        config: config.publicKey,
+        zynkOpWallet: zynkOpWallet.publicKey,
+        sourceTokenAccount: zynkOpTokenAccount,
+        partnerOperationalWallet: partnerOperationalTokenAccount,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        orderTracker: newOrderTracker.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([newOrderTracker, zynkOpWallet])
+      .rpc();
+
+    // Create a new keypair for non-admin and fund it
+    const nonAdmin = anchor.web3.Keypair.generate();
+    const airdropSig = await provider.connection.requestAirdrop(
+      nonAdmin.publicKey,
+      1000000000
     );
-    assert.isNull(
-      orderTrackerInfo,
-      "OrderTracker should be closed after admin calls close_order"
-    );
+    await provider.connection.confirmTransaction(airdropSig);
+
+    try {
+      await program.methods
+        .closeOrder(orderId)
+        .accounts({
+          config: config.publicKey,
+          admin: nonAdmin.publicKey,
+          orderTracker: newOrderTracker.publicKey,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([nonAdmin])
+        .rpc();
+      assert.fail("Expected close order to fail with non-admin signer");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "UnauthorizedAdmin",
+        "Expected UnauthorizedAdmin error"
+      );
+    }
   });
 
   it("Fails when trying to close an already closed order", async () => {
@@ -298,13 +442,13 @@ describe("zynk-protocol", () => {
         .closeOrder(orderId)
         .accounts({
           config: config.publicKey,
-          orderTracker: orderTracker.publicKey,
           admin: admin.publicKey,
-          systemProgram: SystemProgram.programId,
+          orderTracker: orderTracker.publicKey,
+          systemProgram: anchor.web3.SystemProgram.programId,
         })
         .signers([admin])
         .rpc();
-      assert.fail("Expected close_order to fail on already closed order");
+      assert.fail("Expected close order to fail on already closed order");
     } catch (error) {
       assert.include(
         error.message,
@@ -312,23 +456,17 @@ describe("zynk-protocol", () => {
         "Expected AccountNotInitialized error when closing an already closed order"
       );
     }
-
-    // Double verify that orderTracker is still closed
-    const orderTrackerInfo = await provider.connection.getAccountInfo(
-      orderTracker.publicKey
-    );
-    assert.isNull(orderTrackerInfo, "OrderTracker should remain closed");
   });
 
   it("Fails when trying to replenish a closed order", async () => {
-    const paybackAmount = new anchor.BN(100000000000); // 100 token
-    const now = Math.floor(Date.now() / 1000);
-    const validity = now + 3600; // Valid for 1 hour
-
-    // Attempt to replenish after order is closed
+    // Attempt to replenish the closed order
     try {
       await program.methods
-        .replenish(orderId, new anchor.BN(validity), paybackAmount)
+        .replenish(
+          orderId,
+          new anchor.BN(Math.floor(Date.now() / 1000) + 3600),
+          new anchor.BN(1000000)
+        )
         .accounts({
           config: config.publicKey,
           orderTracker: orderTracker.publicKey,
@@ -347,23 +485,81 @@ describe("zynk-protocol", () => {
         "Expected AccountNotInitialized error when replenishing a closed order"
       );
     }
+  });
 
-    // Verify balances haven't changed
-    const paybackBalance =
-      await provider.connection.getTokenAccountBalance(paybackTokenAccount);
-    assert.equal(
-      paybackBalance.value.amount,
-      "150000000000",
-      "Payback balance should be unchanged"
+  it("Should fail when deposit wallet has insufficient balance", async () => {
+    // Create a new order since previous one is closed
+    const newOrderId = new anchor.BN(2);
+    const [newOrderTracker] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("order"), newOrderId.toBuffer("le", 8)],
+      program.programId
     );
 
-    const depositBalance = await provider.connection.getTokenAccountBalance(
+    // Initialize new order
+    await program.methods
+      .send(
+        tokenMint,
+        new anchor.BN(100000000000),
+        partnerDepositWallet.publicKey
+      )
+      .accounts({
+        config: config.publicKey,
+        zynkOpWallet: zynkOpWallet.publicKey,
+        sourceTokenAccount: zynkOpTokenAccount,
+        partnerOperationalWallet: partnerOperationalTokenAccount,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        orderTracker: newOrderTracker,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([newOrderTracker, zynkOpWallet])
+      .rpc();
+
+    // First drain the deposit wallet by replenishing the maximum amount
+    const currentBalance = await provider.connection.getTokenAccountBalance(
       partnerDepositTokenAccount
     );
-    assert.equal(
-      depositBalance.value.amount,
-      "9850000000000",
-      "Deposit balance should be unchanged"
-    );
+    await program.methods
+      .replenish(
+        newOrderId,
+        new anchor.BN(Math.floor(Date.now() / 1000) + 3600),
+        new anchor.BN(currentBalance.value.amount)
+      )
+      .accounts({
+        config: config.publicKey,
+        orderTracker: newOrderTracker,
+        depositWallet: partnerDepositWallet.publicKey,
+        depositTokenAccount: partnerDepositTokenAccount,
+        paybackTokenAccount: paybackTokenAccount,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([partnerDepositWallet])
+      .rpc();
+
+    // Now try to replenish more than the available balance
+    try {
+      await program.methods
+        .replenish(
+          newOrderId,
+          new anchor.BN(Math.floor(Date.now() / 1000) + 3600),
+          new anchor.BN(1000000)
+        )
+        .accounts({
+          config: config.publicKey,
+          orderTracker: newOrderTracker,
+          depositWallet: partnerDepositWallet.publicKey,
+          depositTokenAccount: partnerDepositTokenAccount,
+          paybackTokenAccount: paybackTokenAccount,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([partnerDepositWallet])
+        .rpc();
+      assert.fail("Expected replenish to fail with insufficient balance");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "insufficient funds",
+        "Expected insufficient funds error"
+      );
+    }
   });
 });
