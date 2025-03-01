@@ -113,69 +113,6 @@ async function ensureAccountHasSOL(
   }
 }
 
-// Function to create and initialize an SPL token
-async function createSPLToken(
-  connection: Connection,
-  payer: Keypair,
-  mintAuthority: PublicKey,
-  freezeAuthority: PublicKey | null,
-  decimals: number,
-  initialSupply?: number
-): Promise<{
-  mint: PublicKey;
-  tokenAccount?: PublicKey;
-}> {
-  try {
-    console.log("Creating SPL Token...");
-
-    // Create the token mint
-    const mint = await createMint(
-      connection,
-      payer,
-      mintAuthority,
-      freezeAuthority,
-      decimals
-    );
-    console.log("Token Mint created:", mint.toString());
-
-    // If initial supply is specified, create a token account and mint tokens
-    if (initialSupply) {
-      // Create token account for mint authority
-      const tokenAccount = await getOrCreateAssociatedTokenAccount(
-        connection,
-        payer,
-        mint,
-        mintAuthority
-      );
-      console.log("Token Account created:", tokenAccount.address.toString());
-
-      // Mint initial supply
-      const initialSupplyWithDecimals = new BigNumber(initialSupply)
-        .multipliedBy(new BigNumber(10).pow(decimals))
-        .toString();
-
-      await mintTo(
-        connection,
-        payer,
-        mint,
-        tokenAccount.address,
-        payer, // mint authority
-        BigInt(initialSupplyWithDecimals)
-      );
-      console.log(
-        `Minted ${initialSupply} tokens to ${tokenAccount.address.toString()}`
-      );
-
-      return { mint, tokenAccount: tokenAccount.address };
-    }
-
-    return { mint };
-  } catch (error) {
-    console.error("Error creating SPL token:", error);
-    throw error;
-  }
-}
-
 // Function to send tokens using the Zynk protocol
 async function sendTokens(
   program: Program,
