@@ -16,6 +16,7 @@ import {
   getAssociatedTokenAddress,
   getOrCreateAssociatedTokenAccount,
   mintTo,
+  transfer,
 } from "@solana/spl-token";
 import { readFileSync } from "fs";
 import BN from "bn.js";
@@ -60,7 +61,11 @@ async function airdropSol(
     );
     await connection.confirmTransaction(signature, "confirmed");
     console.log(`Airdropped ${amount} SOL to ${address.toString()}`);
-    console.log(`New balance: ${(await connection.getBalance(address) / LAMPORTS_PER_SOL).toFixed(6)} SOL`);
+    console.log(
+      `New balance: ${(
+        (await connection.getBalance(address)) / LAMPORTS_PER_SOL
+      ).toFixed(6)} SOL`
+    );
   } catch (error) {
     console.error("Error airdropping SOL:", error);
     throw error;
@@ -101,7 +106,9 @@ async function ensureAccountHasSOL(
       throw new Error(`Failed to airdrop SOL to ${address.toString()}`);
     }
 
-    console.log(`New balance: ${(newBalance / LAMPORTS_PER_SOL).toFixed(6)} SOL`);
+    console.log(
+      `New balance: ${(newBalance / LAMPORTS_PER_SOL).toFixed(6)} SOL`
+    );
   }
 }
 
@@ -175,12 +182,12 @@ async function sendTokens(
   config: PublicKey,
   zynkOpWallet: Keypair,
   tokenMint: PublicKey,
-  amount: number | string,
+  amount: number,
   partnerOperationalWallet: PublicKey,
   partnerDepositWallet: PublicKey
 ): Promise<{
   txid: string;
-  orderTracker: { publicKey: PublicKey; account?: any };
+  orderTracker: { publicKey: PublicKey };
 }> {
   try {
     console.log("\nSending tokens...");
@@ -270,6 +277,10 @@ async function sendTokens(
 
     console.log("Send transaction successful!");
     console.log("Transaction signature:", tx);
+
+    // Parse and display events
+    await parseAndDisplayEvents(connection, tx, program.programId);
+
     console.log("Order tracker account:", orderTracker.publicKey.toString());
 
     return {
@@ -280,6 +291,187 @@ async function sendTokens(
     };
   } catch (error) {
     console.error("Error sending tokens:", error);
+    throw error;
+  }
+}
+
+// Function to replenish tokens
+async function replenishTokens(
+  program: Program,
+  connection: Connection,
+  config: PublicKey,
+  orderTracker: PublicKey,
+  depositWallet: Keypair,
+  depositTokenAccount: PublicKey,
+  paybackWallet: PublicKey,
+  orderId: number,
+  paybackAmount: number,
+  validityDuration: number = 3600 // Default 1 hour validity
+): Promise<{ txid: string }> {
+  try {
+    console.log("\nReplenishing tokens...");
+    console.log("Order ID:", orderId);
+    console.log("Deposit Wallet:", depositWallet.publicKey.toString());
+    console.log("Payback Wallet:", paybackWallet.toString());
+    console.log("Deposit Token Account:", depositTokenAccount.toString());
+    console.log("Amount:", paybackAmount);
+
+    // Find the payback token account for the deposit token mint
+    const depositAccountInfo = await connection.getAccountInfo(
+      depositTokenAccount
+    );
+    if (!depositAccountInfo) {
+      throw new Error("Deposit token account not found");
+    }
+
+    // Parse the token account to get the mint
+    const accountInfo = await connection.getParsedAccountInfo(
+      depositTokenAccount
+    );
+    const parsedInfo = (accountInfo.value?.data as any)?.parsed;
+    const tokenMint = new PublicKey(parsedInfo?.info?.mint);
+    console.log("Token Mint:", tokenMint.toString());
+
+    // Get or create associated token account for the payback wallet
+    const paybackTokenAccount = await getOrCreateAssociatedTokenAccount(
+      connection,
+      depositWallet, // payer
+      tokenMint,
+      paybackWallet
+    );
+    console.log(
+      "Payback Token Account:",
+      paybackTokenAccount.address.toString()
+    );
+
+    // Create a new provider using the deposit wallet as signer
+    const provider = new anchor.AnchorProvider(
+      connection,
+      new anchor.Wallet(depositWallet),
+      { commitment: "confirmed" }
+    );
+    console.log("Created new provider with depositWallet as signer");
+
+    // Create a new program instance with the deposit wallet as provider
+    const programWithSigner = new Program(
+      program.idl,
+      program.programId,
+      provider
+    );
+
+    // Calculate validity timestamp (current time + validity duration in seconds)
+    const now = Math.floor(Date.now() / 1000); // Current Unix timestamp
+    const validity = now + validityDuration;
+    console.log("Validity timestamp:", validity);
+
+    // Convert amount to BN for the program
+    const paybackAmountBN = new BN(paybackAmount);
+    console.log("Payback Amount (BN):", paybackAmountBN.toString());
+
+    // Log the accounts being used
+    console.log("\nAccounts being sent:");
+    console.log("Config:", config.toString());
+    console.log("Deposit Token Account:", depositTokenAccount.toString());
+    console.log(
+      "Payback Token Account:",
+      paybackTokenAccount.address.toString()
+    );
+    console.log("Token Program:", TOKEN_PROGRAM_ID.toString());
+    console.log("Deposit Wallet:", depositWallet.publicKey.toString());
+    console.log("Order Tracker:", orderTracker.toString());
+
+    // Call the replenish function
+    const tx = await programWithSigner.methods
+      .replenish(
+        new BN(orderId), // order_id
+        new BN(validity), // validity timestamp
+        paybackAmountBN // payback_amount
+      )
+      .accounts({
+        config: config,
+        depositTokenAccount: depositTokenAccount,
+        paybackTokenAccount: paybackTokenAccount.address,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        depositWallet: depositWallet.publicKey,
+        orderTracker: orderTracker,
+      })
+      .signers([depositWallet])
+      .rpc();
+
+    console.log("Replenish transaction successful!");
+    console.log("Transaction signature:", tx);
+
+    // Parse and display events
+    await parseAndDisplayEvents(connection, tx, program.programId);
+
+    return { txid: tx };
+  } catch (error) {
+    console.error("Error replenishing tokens:", error);
+    throw error;
+  }
+}
+
+// Function to close an order
+async function closeOrder(
+  program: Program,
+  connection: Connection,
+  config: PublicKey,
+  orderTracker: PublicKey,
+  adminWallet: Keypair,
+  orderId: number
+): Promise<{ txid: string }> {
+  try {
+    console.log("\nClosing order...");
+    console.log("Order ID:", orderId);
+    console.log("Order Tracker:", orderTracker.toString());
+    console.log("Admin Wallet:", adminWallet.publicKey.toString());
+
+    // Create a new provider using the admin wallet as signer
+    const provider = new anchor.AnchorProvider(
+      connection,
+      new anchor.Wallet(adminWallet),
+      { commitment: "confirmed" }
+    );
+    console.log("Created new provider with adminWallet as signer");
+
+    // Create a new program instance with the admin wallet as provider
+    const programWithSigner = new Program(
+      program.idl,
+      program.programId,
+      provider
+    );
+
+    // Log the accounts being used
+    console.log("\nAccounts being sent:");
+    console.log("Config:", config.toString());
+    console.log("Admin:", adminWallet.publicKey.toString());
+    console.log("Order Tracker:", orderTracker.toString());
+    console.log(
+      "System Program:",
+      anchor.web3.SystemProgram.programId.toString()
+    );
+
+    // Call the close_order function
+    const tx = await programWithSigner.methods
+      .closeOrder(new BN(orderId))
+      .accounts({
+        config: config,
+        admin: adminWallet.publicKey,
+        orderTracker: orderTracker,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .signers([adminWallet])
+      .rpc();
+
+    console.log("Close order transaction successful!");
+    console.log("Transaction signature:", tx);
+
+    // Parse and display events
+    await parseAndDisplayEvents(connection, tx, program.programId);
+
+    return { txid: tx };
+  } catch (error) {
+    console.error("Error closing order:", error);
     throw error;
   }
 }
@@ -335,38 +527,115 @@ async function displayOrderTrackerDetails(
   orderTrackerPubkey: PublicKey
 ) {
   console.log("\n=== ORDER TRACKER DETAILS ===");
-  
+
   try {
     // Get account info directly from the connection (raw data)
     const accountInfo = await connection.getAccountInfo(orderTrackerPubkey);
-    
+
     if (!accountInfo) {
       console.log("Order tracker account not found");
       return null;
     }
-    
+
     // Get SOL balance (rent)
     const solBalance = accountInfo.lamports / LAMPORTS_PER_SOL;
-    
+
     // Display the raw details in a table
     console.table({
       "Account Address": orderTrackerPubkey.toString(),
       "SOL Balance": `${solBalance.toFixed(6)} SOL`,
       "Data Size": `${accountInfo.data.length} bytes`,
       "Owner Program": accountInfo.owner.toString(),
-      "Executable": accountInfo.executable
+      Executable: accountInfo.executable,
     });
-    
-    console.log("Raw data (base64):", accountInfo.data.slice(0, 40).toString('base64'));
-    
+
+    console.log(
+      "Raw data (base64):",
+      accountInfo.data.slice(0, 40).toString("base64")
+    );
+
     return accountInfo;
   } catch (error) {
     console.error("Error fetching order tracker details:", error);
     console.table({
       "Account Address": orderTrackerPubkey.toString(),
-      "Status": "Error fetching details"
+      Status: "Error fetching details",
     });
     return null;
+  }
+}
+
+// Improved event parser function for Anchor program events
+async function parseAndDisplayEvents(
+  connection: Connection,
+  txSignature: string,
+  programId: PublicKey
+): Promise<void> {
+  console.log("\n=== EVENT DATA ===");
+
+  try {
+    const tx = await connection.getTransaction(txSignature, {
+      commitment: "confirmed",
+      maxSupportedTransactionVersion: 0,
+    });
+
+    if (!tx) {
+      console.log("Transaction not found");
+      return;
+    }
+
+    const logMessages = tx.meta?.logMessages || [];
+
+    // Extract instruction name
+    let instructionName = "Unknown";
+    for (const log of logMessages) {
+      if (log.includes("Program log: Instruction:")) {
+        instructionName = log.split("Program log: Instruction:")[1].trim();
+        break;
+      }
+    }
+
+    // Create table data
+    const instructionData = {
+      Instruction: instructionName,
+      Signature: txSignature.substring(0, 16) + "...",
+      Status: "Success",
+      Timestamp: new Date().toISOString(),
+    };
+
+    // Display transaction details in a table
+    console.table([instructionData]);
+
+    // Extract relevant program data logs
+    const programDataLogs = logMessages.filter((log) =>
+      log.includes("Program data:")
+    );
+    if (programDataLogs.length > 0) {
+      console.log("\nProgram Data Logs:");
+      programDataLogs.forEach((log, i) => {
+        const data = log.replace("Program data:", "").trim();
+        console.log(`Data ${i + 1}: ${data}`);
+      });
+    }
+
+    // Extract and display any custom logs that might have been emitted by the program
+    const customLogs = logMessages.filter(
+      (log) =>
+        log.includes("Program log:") &&
+        !log.includes("Instruction:") &&
+        !log.includes("Program data:") &&
+        !log.includes("Program return:")
+    );
+
+    if (customLogs.length > 0) {
+      console.log("\nCustom Logs:");
+      customLogs.forEach((log, i) => {
+        const customLog = log.replace("Program log:", "").trim();
+        console.log(`Log ${i + 1}: ${customLog}`);
+      });
+    }
+  } catch (error) {
+    console.error("Error fetching transaction details:", error);
   }
 }
 
@@ -549,7 +818,7 @@ async function main() {
         partnerDepositWallet.publicKey
       );
 
-      console.log("\nFinal Wallet States:");
+      console.log("\nFinal Wallet States after Send:");
       await displayWalletBalances(connection, [
         { name: "Admin", pubkey: adminWallet.publicKey },
         {
@@ -567,10 +836,211 @@ async function main() {
         { name: "Order Tracker", pubkey: result.orderTracker.publicKey },
       ]);
 
-      // Display order tracker details using connection
-      await displayOrderTrackerDetails(connection, result.orderTracker.publicKey);
+      // Display order tracker details
+      await displayOrderTrackerDetails(
+        connection,
+        result.orderTracker.publicKey
+      );
+
+      // Create and fund Partner Deposit Token Account
+      console.log("\nCreating Partner Deposit Token Account...");
+      const partnerDepositTokenAccount =
+        await getOrCreateAssociatedTokenAccount(
+          connection,
+          zynkOpWallet, // payer for account creation
+          tokenMint,
+          partnerDepositWallet.publicKey
+        );
+      console.log(
+        "Partner Deposit Token Account:",
+        partnerDepositTokenAccount.address.toString()
+      );
+
+      // Transfer some tokens from Partner Operational to Partner Deposit for testing
+      console.log(
+        "\nTransferring tokens from Partner Operational to Partner Deposit..."
+      );
+      await transfer(
+        connection,
+        partnerOperationalWallet, // payer
+        partnerOperationalTokenAccount.address, // source
+        partnerDepositTokenAccount.address, // destination
+        partnerOperationalWallet, // authority
+        500 // amount (half of what was sent)
+      );
+
+      console.log("\nWallet States before Replenish:");
+      await displayWalletBalances(connection, [
+        { name: "Admin", pubkey: adminWallet.publicKey },
+        {
+          name: "Zynk Operator",
+          pubkey: zynkOpWallet.publicKey,
+          tokenAccount: zynkOpTokenAccount.address,
+        },
+        { name: "Payback", pubkey: paybackWallet.publicKey },
+        {
+          name: "Partner Operational",
+          pubkey: partnerOperationalWallet.publicKey,
+          tokenAccount: partnerOperationalTokenAccount.address,
+        },
+        {
+          name: "Partner Deposit",
+          pubkey: partnerDepositWallet.publicKey,
+          tokenAccount: partnerDepositTokenAccount.address,
+        },
+        { name: "Order Tracker", pubkey: result.orderTracker.publicKey },
+      ]);
+
+      // Create Payback Token Account
+      console.log("\nCreating Payback Token Account...");
+      const paybackTokenAccount = await getOrCreateAssociatedTokenAccount(
+        connection,
+        zynkOpWallet, // payer for account creation
+        tokenMint,
+        paybackWallet.publicKey
+      );
+      console.log(
+        "Payback Token Account:",
+        paybackTokenAccount.address.toString()
+      );
+
+      // Test replenish function - First replenish with 100 tokens
+      console.log("\nTesting Replenish function (First call - 100 tokens)...");
+      const replenishResult1 = await replenishTokens(
+        program,
+        connection,
+        configAccount.publicKey,
+        result.orderTracker.publicKey,
+        partnerDepositWallet,
+        partnerDepositTokenAccount.address,
+        paybackWallet.publicKey,
+        1, // orderId (should be 1 after initialization)
+        100, // first replenish of 100 tokens
+        7200 // 2 hour validity
+      );
+
+      console.log("\nWallet States after First Replenish:");
+      await displayWalletBalances(connection, [
+        { name: "Admin", pubkey: adminWallet.publicKey },
+        {
+          name: "Zynk Operator",
+          pubkey: zynkOpWallet.publicKey,
+          tokenAccount: zynkOpTokenAccount.address,
+        },
+        {
+          name: "Payback",
+          pubkey: paybackWallet.publicKey,
+          tokenAccount: paybackTokenAccount.address,
+        },
+        {
+          name: "Partner Operational",
+          pubkey: partnerOperationalWallet.publicKey,
+          tokenAccount: partnerOperationalTokenAccount.address,
+        },
+        {
+          name: "Partner Deposit",
+          pubkey: partnerDepositWallet.publicKey,
+          tokenAccount: partnerDepositTokenAccount.address,
+        },
+        { name: "Order Tracker", pubkey: result.orderTracker.publicKey },
+      ]);
+
+      // Second replenish with 100 more tokens
+      console.log(
+        "\nTesting Replenish function (Second call - 100 more tokens)..."
+      );
+      const replenishResult2 = await replenishTokens(
+        program,
+        connection,
+        configAccount.publicKey,
+        result.orderTracker.publicKey,
+        partnerDepositWallet,
+        partnerDepositTokenAccount.address,
+        paybackWallet.publicKey,
+        1, // orderId (should be 1 after initialization)
+        100, // second replenish of 100 tokens
+        7200 // 2 hour validity
+      );
+
+      console.log("\nWallet States after Second Replenish:");
+      await displayWalletBalances(connection, [
+        { name: "Admin", pubkey: adminWallet.publicKey },
+        {
+          name: "Zynk Operator",
+          pubkey: zynkOpWallet.publicKey,
+          tokenAccount: zynkOpTokenAccount.address,
+        },
+        {
+          name: "Payback",
+          pubkey: paybackWallet.publicKey,
+          tokenAccount: paybackTokenAccount.address,
+        },
+        {
+          name: "Partner Operational",
+          pubkey: partnerOperationalWallet.publicKey,
+          tokenAccount: partnerOperationalTokenAccount.address,
+        },
+        {
+          name: "Partner Deposit",
+          pubkey: partnerDepositWallet.publicKey,
+          tokenAccount: partnerDepositTokenAccount.address,
+        },
+        { name: "Order Tracker", pubkey: result.orderTracker.publicKey },
+      ]);
+
+      // Test closing the order
+      console.log("\nTesting Close Order function...");
+      const closeResult = await closeOrder(
+        program,
+        connection,
+        configAccount.publicKey,
+        result.orderTracker.publicKey,
+        adminWallet,
+        1 // orderId (should be 1 after initialization)
+      );
+
+      console.log("\nFinal Wallet States after Order Closure:");
+      await displayWalletBalances(connection, [
+        { name: "Admin", pubkey: adminWallet.publicKey },
+        {
+          name: "Zynk Operator",
+          pubkey: zynkOpWallet.publicKey,
+          tokenAccount: zynkOpTokenAccount.address,
+        },
+        {
+          name: "Payback",
+          pubkey: paybackWallet.publicKey,
+          tokenAccount: paybackTokenAccount.address,
+        },
+        {
+          name: "Partner Operational",
+          pubkey: partnerOperationalWallet.publicKey,
+          tokenAccount: partnerOperationalTokenAccount.address,
+        },
+        {
+          name: "Partner Deposit",
+          pubkey: partnerDepositWallet.publicKey,
+          tokenAccount: partnerDepositTokenAccount.address,
+        },
+      ]);
+
+      // Check if order tracker account still exists
+      try {
+        const orderTrackerInfo = await connection.getAccountInfo(
+          result.orderTracker.publicKey
+        );
+        if (orderTrackerInfo) {
+          console.log(
+            "\nWARNING: Order Tracker account still exists after closure"
+          );
+        } else {
+          console.log("\nSuccess: Order Tracker account has been closed");
+        }
+      } catch (error) {
+        console.log("\nSuccess: Order Tracker account has been closed");
+      }
     } catch (error) {
-      console.error("Error sending tokens:", error);
+      console.error("Error in token operations:", error);
     }
 
     console.log("\nConfiguration Summary:");
@@ -679,6 +1149,86 @@ const IDL = {
         {
           name: "partnerDepositWallet",
           type: "publicKey",
+        },
+      ],
+    },
+    {
+      name: "replenish",
+      accounts: [
+        {
+          name: "config",
+          isMut: true,
+          isSigner: false,
+        },
+        {
+          name: "depositTokenAccount",
+          isMut: true,
+          isSigner: false,
+        },
+        {
+          name: "paybackTokenAccount",
+          isMut: true,
+          isSigner: false,
+        },
+        {
+          name: "tokenProgram",
+          isMut: false,
+          isSigner: false,
+        },
+        {
+          name: "depositWallet",
+          isMut: false,
+          isSigner: true,
+        },
+        {
+          name: "orderTracker",
+          isMut: true,
+          isSigner: false,
+        },
+      ],
+      args: [
+        {
+          name: "orderId",
+          type: "u64",
+        },
+        {
+          name: "validity",
+          type: "i64",
+        },
+        {
+          name: "paybackAmount",
+          type: "u64",
+        },
+      ],
+    },
+    {
+      name: "closeOrder",
+      accounts: [
+        {
+          name: "config",
+          isMut: true,
+          isSigner: false,
+        },
+        {
+          name: "admin",
+          isMut: true,
+          isSigner: true,
+        },
+        {
+          name: "orderTracker",
+          isMut: true,
+          isSigner: false,
+        },
+        {
+          name: "systemProgram",
+          isMut: false,
+          isSigner: false,
+        },
+      ],
+      args: [
+        {
+          name: "orderId",
+          type: "u64",
         },
       ],
     },
