@@ -897,6 +897,16 @@ async function main() {
     // Get program ID
     const programId = getProgramId();
     console.log("\nProgram ID:", programId.toString());
+
+    // Define the program with proper types
+    type ConfigAccount = {
+      admin: PublicKey;
+      zynkOpWallet: PublicKey;
+      paybackWallet: PublicKey;
+      paused: boolean;
+      currentNonce: BN;
+    };
+
     const program = new Program(IDL as any, programId, provider);
 
     // Initialize protocol
@@ -961,9 +971,9 @@ async function main() {
     );
 
     // Fetch the config account to confirm it has the correct zynkOpWallet
-    const configData = await program.account.config.fetch(
+    const configData = (await program.account.config.fetch(
       configAccount.publicKey
-    );
+    )) as ConfigAccount;
     console.log("\nConfig Data:");
     console.log("Admin:", configData.admin.toString());
     console.log("Zynk Op Wallet:", configData.zynkOpWallet.toString());
