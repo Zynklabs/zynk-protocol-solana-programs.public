@@ -16,12 +16,13 @@ import {
   getAssociatedTokenAddress,
   getOrCreateAssociatedTokenAccount,
   mintTo,
-} from "@solana/spl-token"; // Fixed import path
+} from "@solana/spl-token";
 import { readFileSync } from "fs";
 import BN from "bn.js";
 import BigNumber from "bignumber.js";
 import { fileURLToPath } from "url";
 import { dirname, resolve } from "path";
+import { table } from "console";
 
 // Get current file path in ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -59,6 +60,7 @@ async function airdropSol(
     );
     await connection.confirmTransaction(signature, "confirmed");
     console.log(`Airdropped ${amount} SOL to ${address.toString()}`);
+    console.log(`New balance: ${(await connection.getBalance(address) / LAMPORTS_PER_SOL).toFixed(6)} SOL`);
   } catch (error) {
     console.error("Error airdropping SOL:", error);
     throw error;
@@ -99,7 +101,7 @@ async function ensureAccountHasSOL(
       throw new Error(`Failed to airdrop SOL to ${address.toString()}`);
     }
 
-    console.log(`New balance: ${newBalance / LAMPORTS_PER_SOL} SOL`);
+    console.log(`New balance: ${(newBalance / LAMPORTS_PER_SOL).toFixed(6)} SOL`);
   }
 }
 
@@ -176,7 +178,10 @@ async function sendTokens(
   amount: number | string,
   partnerOperationalWallet: PublicKey,
   partnerDepositWallet: PublicKey
-): Promise<string> {
+): Promise<{
+  txid: string;
+  orderTracker: { publicKey: PublicKey; account?: any };
+}> {
   try {
     console.log("\nSending tokens...");
     console.log("Token Mint:", tokenMint.toString());
@@ -267,10 +272,101 @@ async function sendTokens(
     console.log("Transaction signature:", tx);
     console.log("Order tracker account:", orderTracker.publicKey.toString());
 
-    return tx;
+    return {
+      txid: tx,
+      orderTracker: {
+        publicKey: orderTracker.publicKey,
+      },
+    };
   } catch (error) {
     console.error("Error sending tokens:", error);
     throw error;
+  }
+}
+
+// Function to display wallet balances
+async function displayWalletBalances(
+  connection: Connection,
+  wallets: Array<{ name: string; pubkey: PublicKey; tokenAccount?: PublicKey }>
+) {
+  console.log("\n=== WALLET BALANCES ===");
+
+  const balanceData = await Promise.all(
+    wallets.map(async (wallet) => {
+      const solBalance = await connection.getBalance(wallet.pubkey);
+
+      let tokenBalance = null;
+      if (wallet.tokenAccount) {
+        try {
+          const tokenInfo = await connection.getTokenAccountBalance(
+            wallet.tokenAccount
+          );
+          // Use raw amount for full precision
+          tokenBalance =
+            parseFloat(tokenInfo.value.amount) / 10 ** tokenInfo.value.decimals;
+        } catch (e) {
+          tokenBalance = "N/A";
+        }
+      }
+
+      return {
+        "Wallet Name": wallet.name,
+        Address: wallet.pubkey.toString(),
+        "SOL Balance": `${(solBalance / LAMPORTS_PER_SOL).toFixed(6)} SOL`,
+        "Token Balance":
+          tokenBalance !== null
+            ? tokenBalance.toLocaleString(undefined, {
+                maximumFractionDigits: 6,
+              })
+            : "N/A",
+        "Token Account": wallet.tokenAccount
+          ? wallet.tokenAccount.toString()
+          : "N/A",
+      };
+    })
+  );
+
+  console.table(balanceData);
+}
+
+// Function to display order tracker details
+async function displayOrderTrackerDetails(
+  connection: Connection,
+  orderTrackerPubkey: PublicKey
+) {
+  console.log("\n=== ORDER TRACKER DETAILS ===");
+  
+  try {
+    // Get account info directly from the connection (raw data)
+    const accountInfo = await connection.getAccountInfo(orderTrackerPubkey);
+    
+    if (!accountInfo) {
+      console.log("Order tracker account not found");
+      return null;
+    }
+    
+    // Get SOL balance (rent)
+    const solBalance = accountInfo.lamports / LAMPORTS_PER_SOL;
+    
+    // Display the raw details in a table
+    console.table({
+      "Account Address": orderTrackerPubkey.toString(),
+      "SOL Balance": `${solBalance.toFixed(6)} SOL`,
+      "Data Size": `${accountInfo.data.length} bytes`,
+      "Owner Program": accountInfo.owner.toString(),
+      "Executable": accountInfo.executable
+    });
+    
+    console.log("Raw data (base64):", accountInfo.data.slice(0, 40).toString('base64'));
+    
+    return accountInfo;
+  } catch (error) {
+    console.error("Error fetching order tracker details:", error);
+    console.table({
+      "Account Address": orderTrackerPubkey.toString(),
+      "Status": "Error fetching details"
+    });
+    return null;
   }
 }
 
@@ -422,17 +518,60 @@ async function main() {
       return;
     }
 
+    // Display initial wallet balances
+    console.log("\nInitial Wallet States:");
+    await displayWalletBalances(connection, [
+      { name: "Admin", pubkey: adminWallet.publicKey },
+      {
+        name: "Zynk Operator",
+        pubkey: zynkOpWallet.publicKey,
+        tokenAccount: zynkOpTokenAccount.address,
+      },
+      { name: "Payback", pubkey: paybackWallet.publicKey },
+      {
+        name: "Partner Operational",
+        pubkey: partnerOperationalWallet.publicKey,
+        tokenAccount: partnerOperationalTokenAccount.address,
+      },
+      { name: "Partner Deposit", pubkey: partnerDepositWallet.publicKey },
+    ]);
+
     // Test send function
-    await sendTokens(
-      program,
-      connection,
-      configAccount.publicKey,
-      zynkOpWallet,
-      tokenMint,
-      1_000_000,
-      partnerOperationalWallet.publicKey,
-      partnerDepositWallet.publicKey
-    );
+    try {
+      const result = await sendTokens(
+        program,
+        connection,
+        configAccount.publicKey,
+        zynkOpWallet,
+        tokenMint,
+        1_000_000,
+        partnerOperationalWallet.publicKey,
+        partnerDepositWallet.publicKey
+      );
+
+      console.log("\nFinal Wallet States:");
+      await displayWalletBalances(connection, [
+        { name: "Admin", pubkey: adminWallet.publicKey },
+        {
+          name: "Zynk Operator",
+          pubkey: zynkOpWallet.publicKey,
+          tokenAccount: zynkOpTokenAccount.address,
+        },
+        { name: "Payback", pubkey: paybackWallet.publicKey },
+        {
+          name: "Partner Operational",
+          pubkey: partnerOperationalWallet.publicKey,
+          tokenAccount: partnerOperationalTokenAccount.address,
+        },
+        { name: "Partner Deposit", pubkey: partnerDepositWallet.publicKey },
+        { name: "Order Tracker", pubkey: result.orderTracker.publicKey },
+      ]);
+
+      // Display order tracker details using connection
+      await displayOrderTrackerDetails(connection, result.orderTracker.publicKey);
+    } catch (error) {
+      console.error("Error sending tokens:", error);
+    }
 
     console.log("\nConfiguration Summary:");
     console.log("Admin:", adminWallet.publicKey.toString());
@@ -569,6 +708,26 @@ const IDL = {
           {
             name: "currentNonce",
             type: "u64",
+          },
+        ],
+      },
+    },
+    {
+      name: "OrderTracker",
+      type: {
+        kind: "struct",
+        fields: [
+          {
+            name: "orderId",
+            type: "u64",
+          },
+          {
+            name: "partnerDepositWallet",
+            type: "publicKey",
+          },
+          {
+            name: "bump",
+            type: "u8",
           },
         ],
       },
