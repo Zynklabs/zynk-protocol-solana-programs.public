@@ -9,6 +9,12 @@ import {
 } from "@solana/web3.js";
 import { fileURLToPath } from "url";
 import { dirname, resolve } from "path";
+import {
+  TOKEN_PROGRAM_ID,
+  createMint,
+  getOrCreateAssociatedTokenAccount,
+  mintTo,
+} from "@solana/spl-token";
 import { readFileSync } from "fs";
 
 // Get current file path in ES modules
@@ -61,6 +67,65 @@ async function ensureAccountHasSOL(
   }
 }
 
+// Function to create and initialize an SPL token
+async function createSPLToken(
+  connection: Connection,
+  payer: Keypair,
+  mintAuthority: PublicKey,
+  freezeAuthority: PublicKey | null,
+  decimals: number,
+  initialSupply?: number
+): Promise<{
+  mint: PublicKey;
+  tokenAccount?: PublicKey;
+}> {
+  try {
+    console.log("Creating SPL Token...");
+
+    // Create the token mint
+    const mint = await createMint(
+      connection,
+      payer,
+      mintAuthority,
+      freezeAuthority,
+      decimals
+    );
+    console.log("Token Mint created:", mint.toString());
+
+    // If initial supply is specified, create a token account and mint tokens
+    if (initialSupply) {
+      // Create token account for mint authority
+      const tokenAccount = await getOrCreateAssociatedTokenAccount(
+        connection,
+        payer,
+        mint,
+        mintAuthority
+      );
+      console.log("Token Account created:", tokenAccount.address.toString());
+
+      // Mint initial supply
+      await mintTo(
+        connection,
+        payer,
+        mint,
+        tokenAccount.address,
+        payer, // mint authority
+        initialSupply * 10 ** decimals // adjust for decimals
+      );
+      console.log(
+        `Minted ${initialSupply} tokens to ${tokenAccount.address.toString()}`
+      );
+
+      return { mint, tokenAccount: tokenAccount.address };
+    }
+
+    return { mint };
+  } catch (error) {
+    console.error("Error creating SPL token:", error);
+    throw error;
+  }
+}
+
 async function main() {
   // Initialize connection to localhost
   const connection = new Connection("http://127.0.0.1:8899", "confirmed");
@@ -110,6 +175,18 @@ async function main() {
       .rpc();
 
     console.log("Protocol initialized successfully!");
+
+    // Create an SPL token for testing
+    console.log("\nCreating test token...");
+    const { mint, tokenAccount } = await createSPLToken(
+      connection,
+      adminWallet,
+      adminWallet.publicKey,
+      null, // no freeze authority
+      9, // 9 decimals like most SPL tokens
+      1000000 // 1 million initial supply
+    );
+
     console.log("\nConfiguration Summary:");
     console.log("----------------------------");
     console.log("Admin Wallet:", adminWallet.publicKey.toString());
@@ -117,6 +194,10 @@ async function main() {
     console.log("Payback Wallet:", paybackWallet.publicKey.toString());
     console.log("Config Account:", configAccount.publicKey.toString());
     console.log("Program ID:", PROGRAM_ID.toString());
+    console.log("\nToken Information:");
+    console.log("----------------------------");
+    console.log("Token Mint:", mint.toString());
+    console.log("Admin Token Account:", tokenAccount?.toString());
   } catch (error) {
     console.error("Error:", error);
   }
