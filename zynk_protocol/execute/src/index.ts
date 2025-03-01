@@ -17,7 +17,7 @@ import {
   getOrCreateAssociatedTokenAccount,
   mintTo,
   transfer,
-} from "@solana/spl-token";
+} from "@solana/spl-token"; // spl-token is correct, don't change this
 import { readFileSync } from "fs";
 import BN from "bn.js";
 import BigNumber from "bignumber.js";
@@ -278,8 +278,8 @@ async function sendTokens(
     console.log("Send transaction successful!");
     console.log("Transaction signature:", tx);
 
-    // Parse and display events
-    await parseAndDisplayEvents(connection, tx, program.programId);
+    // Decode and display the Send event specifically
+    await decodeSendEvent(connection, tx);
 
     console.log("Order tracker account:", orderTracker.publicKey.toString());
 
@@ -636,6 +636,191 @@ async function parseAndDisplayEvents(
     }
   } catch (error) {
     console.error("Error fetching transaction details:", error);
+  }
+}
+
+/**
+ * Standalone function to decode and display Send events from a transaction
+ * @param connection Solana connection
+ * @param txSignature Transaction signature (hash)
+ * @param logToConsole Whether to log the event data to console (default: true)
+ * @returns Promise with the decoded Send event data if found
+ */
+async function decodeSendEvent(
+  connection: Connection,
+  txSignature: string,
+  logToConsole: boolean = true
+): Promise<{
+  order_id: string;
+  token: string;
+  partner_deposit_wallet: string;
+  amount: string;
+  chain_id: string;
+} | null> {
+  try {
+    // Fetch the transaction data
+    const tx = await connection.getTransaction(txSignature, {
+      commitment: "confirmed",
+      maxSupportedTransactionVersion: 0,
+    });
+
+    if (!tx) {
+      if (logToConsole) console.log("Transaction not found");
+      return null;
+    }
+
+    const logMessages = tx.meta?.logMessages || [];
+
+    // Debug: Print all log messages to see their format
+    if (logToConsole) {
+      console.log("\n=== ALL TRANSACTION LOGS ===");
+      logMessages.forEach((log, index) => {
+        console.log(`[${index}] ${log}`);
+      });
+    }
+
+    // Find the instruction that might have emitted the event
+    const sendInstructionIndex = logMessages.findIndex((log) =>
+      log.includes("Instruction: Send")
+    );
+
+    if (sendInstructionIndex === -1) {
+      if (logToConsole)
+        console.log("No Send instruction found in transaction logs");
+      return null;
+    }
+
+    if (logToConsole) {
+      console.log("\nFound Send instruction at index:", sendInstructionIndex);
+    }
+
+    // Look for Program data logs that follow the Send instruction
+    let programDataLog = null;
+    for (let i = sendInstructionIndex; i < logMessages.length; i++) {
+      if (logMessages[i].includes("Program data:")) {
+        programDataLog = logMessages[i];
+        break;
+      }
+    }
+
+    if (!programDataLog) {
+      if (logToConsole)
+        console.log("No Program data found for the Send instruction");
+      return null;
+    }
+
+    if (logToConsole) {
+      console.log("\n=== PROGRAM DATA LOG ===");
+      console.log(programDataLog);
+    }
+
+    // Extract the base64 data
+    const base64Data = programDataLog.split("Program data: ")[1].trim();
+
+    if (logToConsole) {
+      console.log("\n=== BASE64 DATA ===");
+      console.log(base64Data);
+    }
+
+    try {
+      // Decode base64 to a buffer
+      // NOTE: In browsers, use: atob(base64Data)
+      const buffer = Buffer.from(base64Data, "base64");
+
+      if (logToConsole) {
+        console.log("\n=== DECODED BUFFER (hex) ===");
+        console.log(buffer.toString("hex"));
+      }
+
+      // Unfortunately, we can't fully decode the binary event data without knowing
+      // the exact format Anchor uses to serialize events
+      // We can make some guesses based on known Anchor formats
+
+      // Let's extract some possible fields from the buffer
+      // This is speculative and may not work for all cases
+
+      // Try to extract a potential order_id (likely a 64-bit number = 8 bytes)
+      let offset = 8; // Skip the first 8 bytes which might be a discriminator
+
+      // Extract a potential nonce (u64)
+      const order_id = buffer.readBigUInt64LE(offset).toString();
+      offset += 8;
+
+      if (logToConsole) {
+        console.log("\n=== EXTRACTED FIELDS (EXPERIMENTAL) ===");
+        console.log("Order ID (possible):", order_id);
+      }
+
+      // The next 32 bytes could be the token pubkey
+      const tokenBytes = buffer.slice(offset, offset + 32);
+      offset += 32;
+      const token = new PublicKey(tokenBytes).toString();
+
+      if (logToConsole) {
+        console.log("Token (possible):", token);
+      }
+
+      // The next 32 bytes could be the partner_deposit_wallet pubkey
+      const partnerDepositWalletBytes = buffer.slice(offset, offset + 32);
+      offset += 32;
+      const partner_deposit_wallet = new PublicKey(
+        partnerDepositWalletBytes
+      ).toString();
+
+      if (logToConsole) {
+        console.log(
+          "Partner Deposit Wallet (possible):",
+          partner_deposit_wallet
+        );
+      }
+
+      // Extract a potential amount (u64)
+      const amount = buffer.readBigUInt64LE(offset).toString();
+      offset += 8;
+
+      if (logToConsole) {
+        console.log("Amount (possible):", amount);
+      }
+
+      // Extract a potential chain_id (u64)
+      const chain_id = buffer.readBigUInt64LE(offset).toString();
+
+      if (logToConsole) {
+        console.log("Chain ID (possible):", chain_id);
+      }
+
+      // Create event data object
+      const sendEventData = {
+        order_id,
+        token,
+        partner_deposit_wallet,
+        amount,
+        chain_id,
+      };
+
+      // Display the event data
+      if (logToConsole) {
+        console.log("\n=== SEND EVENT DATA (from Program data) ===");
+        console.table({
+          "Order ID": sendEventData.order_id,
+          Token: sendEventData.token,
+          "Partner Deposit Wallet": sendEventData.partner_deposit_wallet,
+          Amount: sendEventData.amount,
+          "Chain ID": sendEventData.chain_id,
+        });
+      }
+
+      return sendEventData;
+    } catch (decodeError) {
+      if (logToConsole) {
+        console.error("Error decoding Program data:", decodeError);
+      }
+      return null;
+    }
+  } catch (error) {
+    if (logToConsole)
+      console.error("Error fetching transaction details:", error);
+    return null;
   }
 }
 
