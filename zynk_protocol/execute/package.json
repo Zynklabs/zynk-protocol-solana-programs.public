@@ -5,18 +5,24 @@
   "main": "index.ts",
   "type": "module",
   "scripts": {
-    "start": "tsx src/index.ts"
+    "start": "tsx src/index.ts",
+    "setup-wallets": "tsx src/setup-wallets.ts",
+    "airdrop": "tsx src/airdrop.ts",
+    "airdrop:local": "tsx src/airdrop.ts --wallet ~/.config/solana/id.json --amount 0.1 --rpc http://localhost:8899",
+    "airdrop:devnet": "tsx src/airdrop.ts --wallet ~/.config/solana/id.json --amount 0.1 --rpc https://api.devnet.solana.com"
   },
   "dependencies": {
     "@project-serum/anchor": "^0.26.0",
     "@solana/spl-token": "^0.3.9",
     "@solana/web3.js": "^1.87.6",
+    "bignumber.js": "^9.1.2",
     "dotenv": "^16.3.1"
   },
   "devDependencies": {
-    "typescript": "^5.3.3",
-    "ts-node": "^10.9.2",
+    "@types/bn.js": "^5.1.6",
     "@types/node": "^20.10.5",
-    "tsx": "^4.7.1"
+    "ts-node": "^10.9.2",
+    "tsx": "^4.7.1",
+    "typescript": "^5.3.3"
   }
 }
