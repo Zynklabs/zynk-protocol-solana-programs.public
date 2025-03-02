@@ -6,11 +6,12 @@
  * npx tsx src/setup-wallets.ts
  */
 import * as fs from "fs";
-import { Keypair } from "@solana/web3.js";
-import * as crypto from "crypto";
 import * as path from "path";
 import * as dotenv from "dotenv";
 import { fileURLToPath } from "url";
+
+// Import utility functions
+import { generateDeterministicKeypair, getKeypairJson } from "./utils";
 
 // Get current file path in ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -18,18 +19,6 @@ const __dirname = path.dirname(__filename);
 
 // Path to .env file
 const envPath = path.resolve(__dirname, "../.env");
-
-// Helper function to generate deterministic keypair
-function generateDeterministicKeypair(seed: string): Keypair {
-  // Create a deterministic seed using HMAC
-  const hmac = crypto.createHmac("sha256", "zynk-protocol-seed");
-  hmac.update(seed);
-  const seedBytes = Buffer.from(hmac.digest("hex"), "hex");
-
-  // Use the first 32 bytes as the seed for the keypair
-  const keypairSeed = seedBytes.slice(0, 32);
-  return Keypair.fromSeed(keypairSeed);
-}
 
 // Function to read existing .env file or create a new one
 function readEnvFile(): Record<string, string> {
@@ -126,16 +115,13 @@ async function setupWallets(): Promise<void> {
     if (!envVars[wallet.env] || envVars[wallet.env] === "[]") {
       const keypair = generateDeterministicKeypair(wallet.seed);
 
-      // Convert secret key to array of integers
-      const secretKeyArray = Array.from(keypair.secretKey);
+      // Use utility function to get keypair JSON
+      envVars[wallet.env] = getKeypairJson(keypair);
 
-      // Update env variable
-      envVars[wallet.env] = JSON.stringify(secretKeyArray);
-
-      console.log(`Generated ${wallet.name} (${keypair.publicKey.toString()})`);
+      console.log(`Generated ${wallet.name}: ${keypair.publicKey.toString()}`);
       updated = true;
     } else {
-      console.log(`Skipping ${wallet.name} (already exists in .env)`);
+      console.log(`Using existing ${wallet.name}`);
     }
   });
 

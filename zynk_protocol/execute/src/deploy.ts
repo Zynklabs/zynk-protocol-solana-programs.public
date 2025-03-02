@@ -8,7 +8,6 @@ import {
   PublicKey,
 } from "@solana/web3.js";
 import {
-  TOKEN_PROGRAM_ID,
   createMint,
   getOrCreateAssociatedTokenAccount,
   mintTo,
@@ -19,7 +18,6 @@ import { fileURLToPath } from "url";
 import { dirname, resolve } from "path";
 import { config } from "dotenv";
 import path from "path";
-import * as crypto from "crypto";
 
 // Load environment variables
 config();
@@ -27,43 +25,15 @@ config();
 // Import the IDL
 import { IDL } from "./idl";
 
+// Import utility functions
+import { createKeypairFromEnv, getProgramId } from "./utils";
+
 // Import wallet and airdrop functions
-import { createKeypairFromEnv, ensureAccountHasSOL } from "./airdrop";
+import { ensureAccountHasSOL } from "./airdrop";
 
 // Get current file path in ES modules
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-
-// Helper function to generate a deterministic keypair from setup-wallets.ts
-function generateDeterministicKeypair(seed: string): Keypair {
-  // Create a deterministic seed using HMAC
-  const hmac = crypto.createHmac("sha256", "zynk-protocol-seed");
-  hmac.update(seed);
-  const seedBytes = Buffer.from(hmac.digest("hex"), "hex");
-
-  // Use the first 32 bytes as the seed for the keypair
-  const keypairSeed = seedBytes.slice(0, 32);
-  return Keypair.fromSeed(keypairSeed);
-}
-
-// Function to get program ID from keypair file
-function getProgramId(): PublicKey {
-  try {
-    const programKeypairPath = resolve(
-      __dirname,
-      "../../contracts/target/deploy/zynk_protocol-keypair.json"
-    );
-    const programKeypair = JSON.parse(
-      readFileSync(programKeypairPath, "utf-8")
-    );
-    return new PublicKey(
-      Keypair.fromSecretKey(new Uint8Array(programKeypair)).publicKey
-    );
-  } catch (error) {
-    console.error("Error reading program ID from keypair:", error);
-    throw error;
-  }
-}
 
 // Type definitions
 interface DeployResult {
@@ -86,31 +56,35 @@ export async function deploy(): Promise<DeployResult> {
     console.log("Loading wallets from environment variables...");
 
     // Create keypairs from .env or use deterministic generation from setup-wallets.ts
-    const adminWallet =
-      createKeypairFromEnv(process.env.ADMIN_WALLET_PRIVATE_KEY || "[]") ||
-      generateDeterministicKeypair("admin-wallet");
+    const adminWallet = createKeypairFromEnv(
+      "ADMIN_WALLET_PRIVATE_KEY",
+      "admin-wallet"
+    );
 
-    const zynkOpWallet =
-      createKeypairFromEnv(process.env.ZYNK_OP_WALLET_PRIVATE_KEY || "[]") ||
-      generateDeterministicKeypair("zynk-op-wallet");
+    const zynkOpWallet = createKeypairFromEnv(
+      "ZYNK_OP_WALLET_PRIVATE_KEY",
+      "zynk-op-wallet"
+    );
 
-    const paybackWallet =
-      createKeypairFromEnv(process.env.PAYBACK_WALLET_PRIVATE_KEY || "[]") ||
-      generateDeterministicKeypair("payback-wallet");
+    const paybackWallet = createKeypairFromEnv(
+      "PAYBACK_WALLET_PRIVATE_KEY",
+      "payback-wallet"
+    );
 
-    const configAccount =
-      createKeypairFromEnv(process.env.CONFIG_ACCOUNT_PRIVATE_KEY || "[]") ||
-      generateDeterministicKeypair("config-account");
+    const configAccount = createKeypairFromEnv(
+      "CONFIG_ACCOUNT_PRIVATE_KEY",
+      "config-account"
+    );
 
-    const partnerOperationalWallet =
-      createKeypairFromEnv(
-        process.env.PARTNER_OPERATIONAL_WALLET_PRIVATE_KEY || "[]"
-      ) || generateDeterministicKeypair("partner-op-wallet");
+    const partnerOperationalWallet = createKeypairFromEnv(
+      "PARTNER_OPERATIONAL_WALLET_PRIVATE_KEY",
+      "partner-op-wallet"
+    );
 
-    const partnerDepositWallet =
-      createKeypairFromEnv(
-        process.env.PARTNER_DEPOSIT_WALLET_PRIVATE_KEY || "[]"
-      ) || generateDeterministicKeypair("partner-deposit-wallet");
+    const partnerDepositWallet = createKeypairFromEnv(
+      "PARTNER_DEPOSIT_WALLET_PRIVATE_KEY",
+      "partner-deposit-wallet"
+    );
 
     // Log the generated wallet addresses
     console.log("Admin wallet:", adminWallet.publicKey.toString());
