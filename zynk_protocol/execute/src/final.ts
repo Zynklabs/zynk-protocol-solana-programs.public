@@ -154,6 +154,26 @@ async function sendTokens(params: {
       { Status: "Transaction Signature", Value: tx },
     ]);
 
+    // Log event information from the send transaction
+    try {
+      const eventData = await getEventDataFromTx(tx, connection);
+      console.log("\nSend Transaction Event Data:");
+      if (eventData && eventData.data) {
+        const flatEventData: Record<string, string> = {
+          Event: eventData.eventType,
+        };
+        // Add all data properties to the flat object
+        Object.entries(eventData.data).forEach(([key, value]) => {
+          flatEventData[key] = String(value);
+        });
+        console.table([flatEventData]);
+      } else {
+        console.log("No event data found for this transaction.");
+      }
+    } catch (eventError) {
+      console.error("Error extracting event data:", eventError);
+    }
+
     // Extract the order_id from the events
     let orderId: number | undefined = undefined;
     try {
@@ -312,6 +332,26 @@ async function replenish(params: {
       { Status: "Transaction Signature", Value: tx },
     ]);
 
+    // Log event information from the replenish transaction
+    try {
+      const eventData = await getEventDataFromTx(tx, connection);
+      console.log("\nReplenish Transaction Event Data:");
+      if (eventData && eventData.data) {
+        const flatEventData: Record<string, string> = {
+          Event: eventData.eventType,
+        };
+        // Add all data properties to the flat object
+        Object.entries(eventData.data).forEach(([key, value]) => {
+          flatEventData[key] = String(value);
+        });
+        console.table([flatEventData]);
+      } else {
+        console.log("No event data found for this transaction.");
+      }
+    } catch (eventError) {
+      console.error("Error extracting event data:", eventError);
+    }
+
     return { txid: tx };
   } catch (error) {
     console.error("Error in replenish:", error);
@@ -392,6 +432,26 @@ async function closeOrders(params: {
       { Status: "Transaction Status", Value: "Successful" },
       { Status: "Transaction Signature", Value: tx },
     ]);
+
+    // Log event information from the close order transaction
+    try {
+      const eventData = await getEventDataFromTx(tx, connection);
+      console.log("\nClose Order Transaction Event Data:");
+      if (eventData && eventData.data) {
+        const flatEventData: Record<string, string> = {
+          Event: eventData.eventType,
+        };
+        // Add all data properties to the flat object
+        Object.entries(eventData.data).forEach(([key, value]) => {
+          flatEventData[key] = String(value);
+        });
+        console.table([flatEventData]);
+      } else {
+        console.log("No event data found for this transaction.");
+      }
+    } catch (eventError) {
+      console.error("Error extracting event data:", eventError);
+    }
 
     return { txid: tx };
   } catch (error) {
