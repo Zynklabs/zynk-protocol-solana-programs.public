@@ -67,13 +67,24 @@ async function sendTokens(
 }> {
   try {
     console.log("\nSending tokens...");
-    console.log("Token Mint:", tokenMint.toString());
-    console.log("Amount:", amount);
-    console.log(
-      "Partner Operational Wallet:",
-      partnerOperationalWallet.toString()
-    );
-    console.log("Partner Deposit Wallet:", partnerDepositWallet.toString());
+    console.table([
+      {
+        Parameter: "Token Mint",
+        Value: tokenMint.toString(),
+      },
+      {
+        Parameter: "Amount",
+        Value: amount.toString(),
+      },
+      {
+        Parameter: "Partner Operational Wallet",
+        Value: partnerOperationalWallet.toString(),
+      },
+      {
+        Parameter: "Partner Deposit Wallet",
+        Value: partnerDepositWallet.toString(),
+      },
+    ]);
 
     // Create a new provider with the zynkOpWallet
     const zynkOpProvider = new anchor.AnchorProvider(
@@ -99,8 +110,6 @@ async function sendTokens(
       zynkOpWallet.publicKey
     );
 
-    console.log("Source Token Account:", sourceTokenAccount.address.toString());
-
     // Get or create the partner's operational token account for receiving tokens
     const partnerOperationalTokenAccount =
       await getOrCreateAssociatedTokenAccount(
@@ -110,31 +119,32 @@ async function sendTokens(
         partnerOperationalWallet
       );
 
-    console.log(
-      "Partner Operational Token Account:",
-      partnerOperationalTokenAccount.address.toString()
-    );
-
     // Create a new order tracker account
     const orderTracker = Keypair.generate();
-    console.log("Order Tracker:", orderTracker.publicKey.toString());
 
     // Convert amount to u64 with BN.js for proper handling
     const amountBN = new BN(amount.toString());
-    console.log("Amount (BN):", amountBN.toString());
 
     // Print all accounts being sent for debugging
     console.log("\nAccounts being sent:");
-    console.log("Config:", config.toString());
-    console.log("Zynk Op Wallet:", zynkOpWallet.publicKey.toString());
-    console.log("Source Token Account:", sourceTokenAccount.address.toString());
-    console.log(
-      "Partner Operational Token Account:",
-      partnerOperationalTokenAccount.address.toString()
-    );
-    console.log("Token Program:", TOKEN_PROGRAM_ID.toString());
-    console.log("Order Tracker:", orderTracker.publicKey.toString());
-    console.log("System Program:", SystemProgram.programId.toString());
+    console.table([
+      { Account: "Config", Address: config.toString() },
+      { Account: "Zynk Op Wallet", Address: zynkOpWallet.publicKey.toString() },
+      {
+        Account: "Source Token Account",
+        Address: sourceTokenAccount.address.toString(),
+      },
+      {
+        Account: "Partner Operational Token Account",
+        Address: partnerOperationalTokenAccount.address.toString(),
+      },
+      { Account: "Token Program", Address: TOKEN_PROGRAM_ID.toString() },
+      { Account: "Order Tracker", Address: orderTracker.publicKey.toString() },
+      {
+        Account: "System Program",
+        Address: SystemProgram.programId.toString(),
+      },
+    ]);
 
     // Build and send the transaction using the program with zynkOpWallet provider
     const tx = await programWithZynkOp.methods
@@ -151,8 +161,10 @@ async function sendTokens(
       .signers([orderTracker]) // zynkOpWallet is already a signer via provider
       .rpc();
 
-    console.log("Send transaction successful!");
-    console.log("Transaction signature:", tx);
+    console.table([
+      { Status: "Transaction Status", Value: "Successful" },
+      { Status: "Transaction Signature", Value: tx },
+    ]);
 
     // Decode and display the Send event
     const decodedEvent = await decodeEvents(connection, tx, true);
@@ -161,10 +173,8 @@ async function sendTokens(
       console.log("\n=== SEND EVENT DATA ===");
       console.table(decodedEvent.data);
       eventOrderId = parseInt(decodedEvent.data.order_id);
-      console.log(`Extracted Order ID from event: ${eventOrderId}`);
+      console.table([{ Parameter: "Extracted Order ID", Value: eventOrderId }]);
     }
-
-    console.log("Order tracker account:", orderTracker.publicKey.toString());
 
     return {
       txid: tx,
@@ -194,11 +204,19 @@ async function replenishTokens(
 ): Promise<{ txid: string }> {
   try {
     console.log("\nReplenishing tokens...");
-    console.log("Order ID:", orderId);
-    console.log("Deposit Wallet:", depositWallet.publicKey.toString());
-    console.log("Payback Wallet:", paybackWallet.toString());
-    console.log("Deposit Token Account:", depositTokenAccount.toString());
-    console.log("Amount:", paybackAmount);
+    console.table([
+      { Parameter: "Order ID", Value: orderId.toString() },
+      {
+        Parameter: "Deposit Wallet",
+        Value: depositWallet.publicKey.toString(),
+      },
+      { Parameter: "Payback Wallet", Value: paybackWallet.toString() },
+      {
+        Parameter: "Deposit Token Account",
+        Value: depositTokenAccount.toString(),
+      },
+      { Parameter: "Amount", Value: paybackAmount.toString() },
+    ]);
 
     // Find the payback token account for the deposit token mint
     const depositAccountInfo = await connection.getAccountInfo(
@@ -214,7 +232,8 @@ async function replenishTokens(
     );
     const parsedInfo = (accountInfo.value?.data as any)?.parsed;
     const tokenMint = new PublicKey(parsedInfo?.info?.mint);
-    console.log("Token Mint:", tokenMint.toString());
+
+    console.table([{ Parameter: "Token Mint", Value: tokenMint.toString() }]);
 
     // Get or create associated token account for the payback wallet
     const paybackTokenAccount = await getOrCreateAssociatedTokenAccount(
@@ -223,10 +242,13 @@ async function replenishTokens(
       tokenMint,
       paybackWallet
     );
-    console.log(
-      "Payback Token Account:",
-      paybackTokenAccount.address.toString()
-    );
+
+    console.table([
+      {
+        Parameter: "Payback Token Account",
+        Value: paybackTokenAccount.address.toString(),
+      },
+    ]);
 
     // Create a new provider using the deposit wallet as signer
     const provider = new anchor.AnchorProvider(
@@ -246,23 +268,34 @@ async function replenishTokens(
     // Calculate validity timestamp (current time + validity duration in seconds)
     const now = Math.floor(Date.now() / 1000); // Current Unix timestamp
     const validity = now + validityDuration;
-    console.log("Validity timestamp:", validity);
 
     // Convert amount to BN for the program
     const paybackAmountBN = new BN(paybackAmount);
-    console.log("Payback Amount (BN):", paybackAmountBN.toString());
+
+    console.table([
+      { Parameter: "Validity Timestamp", Value: validity.toString() },
+      { Parameter: "Payback Amount (BN)", Value: paybackAmountBN.toString() },
+    ]);
 
     // Log the accounts being used
     console.log("\nAccounts being sent:");
-    console.log("Config:", config.toString());
-    console.log("Deposit Token Account:", depositTokenAccount.toString());
-    console.log(
-      "Payback Token Account:",
-      paybackTokenAccount.address.toString()
-    );
-    console.log("Token Program:", TOKEN_PROGRAM_ID.toString());
-    console.log("Deposit Wallet:", depositWallet.publicKey.toString());
-    console.log("Order Tracker:", orderTracker.toString());
+    console.table([
+      { Account: "Config", Address: config.toString() },
+      {
+        Account: "Deposit Token Account",
+        Address: depositTokenAccount.toString(),
+      },
+      {
+        Account: "Payback Token Account",
+        Address: paybackTokenAccount.address.toString(),
+      },
+      { Account: "Token Program", Address: TOKEN_PROGRAM_ID.toString() },
+      {
+        Account: "Deposit Wallet",
+        Address: depositWallet.publicKey.toString(),
+      },
+      { Account: "Order Tracker", Address: orderTracker.toString() },
+    ]);
 
     // Call the replenish function
     const tx = await programWithSigner.methods
@@ -282,8 +315,10 @@ async function replenishTokens(
       .signers([depositWallet])
       .rpc();
 
-    console.log("Replenish transaction successful!");
-    console.log("Transaction signature:", tx);
+    console.table([
+      { Status: "Transaction Status", Value: "Successful" },
+      { Status: "Transaction Signature", Value: tx },
+    ]);
 
     // Parse and display events
     await parseAndDisplayEvents(connection, tx, program.programId);
@@ -327,13 +362,15 @@ async function closeOrder(
 
     // Log the accounts being used
     console.log("\nAccounts being sent:");
-    console.log("Config:", config.toString());
-    console.log("Admin:", adminWallet.publicKey.toString());
-    console.log("Order Tracker:", orderTracker.toString());
-    console.log(
-      "System Program:",
-      anchor.web3.SystemProgram.programId.toString()
-    );
+    console.table([
+      { Account: "Config", Address: config.toString() },
+      { Account: "Admin", Address: adminWallet.publicKey.toString() },
+      { Account: "Order Tracker", Address: orderTracker.toString() },
+      {
+        Account: "System Program",
+        Address: anchor.web3.SystemProgram.programId.toString(),
+      },
+    ]);
 
     // Call the close_order function
     const tx = await programWithSigner.methods
@@ -347,8 +384,10 @@ async function closeOrder(
       .signers([adminWallet])
       .rpc();
 
-    console.log("Close order transaction successful!");
-    console.log("Transaction signature:", tx);
+    console.table([
+      { Status: "Transaction Status", Value: "Close Order Successful" },
+      { Status: "Transaction Signature", Value: tx },
+    ]);
 
     // Parse and display events
     await parseAndDisplayEvents(connection, tx, program.programId);
@@ -825,19 +864,24 @@ async function main() {
       return;
     }
 
-    // Log the generated wallet addresses
-    console.log("Admin wallet:", adminWallet.publicKey.toString());
-    console.log("Zynk operator wallet:", zynkOpWallet.publicKey.toString());
-    console.log("Payback wallet:", paybackWallet.publicKey.toString());
-    console.log("Config account:", configAccount.publicKey.toString());
-    console.log(
-      "Partner Operational Wallet:",
-      partnerOperationalWallet.publicKey.toString()
-    );
-    console.log(
-      "Partner Deposit Wallet:",
-      partnerDepositWallet.publicKey.toString()
-    );
+    // Display all wallet information in a table
+    console.table([
+      { Name: "Admin wallet", Address: adminWallet.publicKey.toString() },
+      {
+        Name: "Zynk operator wallet",
+        Address: zynkOpWallet.publicKey.toString(),
+      },
+      { Name: "Payback wallet", Address: paybackWallet.publicKey.toString() },
+      { Name: "Config account", Address: configAccount.publicKey.toString() },
+      {
+        Name: "Partner Operational Wallet",
+        Address: partnerOperationalWallet.publicKey.toString(),
+      },
+      {
+        Name: "Partner Deposit Wallet",
+        Address: partnerDepositWallet.publicKey.toString(),
+      },
+    ]);
 
     // Initialize provider with admin wallet
     const wallet = new anchor.Wallet(adminWallet);
@@ -925,11 +969,13 @@ async function main() {
       new PublicKey(deploymentData.configAccount)
     )) as ConfigAccount;
     console.log("\nConfig Data:");
-    console.log("Admin:", configData.admin.toString());
-    console.log("Zynk Op Wallet:", configData.zynkOpWallet.toString());
-    console.log("Payback Wallet:", configData.paybackWallet.toString());
-    console.log("Paused:", configData.paused);
-    console.log("Current Nonce:", configData.currentNonce.toString());
+    console.table([
+      { Key: "Admin", Value: configData.admin.toString() },
+      { Key: "Zynk Op Wallet", Value: configData.zynkOpWallet.toString() },
+      { Key: "Payback Wallet", Value: configData.paybackWallet.toString() },
+      { Key: "Paused", Value: configData.paused },
+      { Key: "Current Nonce", Value: configData.currentNonce.toString() },
+    ]);
 
     // Check if the zynkOpWallet matches what's in the config
     if (

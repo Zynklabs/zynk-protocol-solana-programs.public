@@ -184,11 +184,17 @@ export async function ensureAccountHasSOL(
   const balance = await connection.getBalance(address);
 
   if (balance < minBalanceInLamports) {
-    console.log(
-      `Current balance too low. Airdropping ${
-        minBalanceInLamports / LAMPORTS_PER_SOL
-      } SOL to ${address.toString()}`
-    );
+    console.table([
+      {
+        Action: "Airdropping",
+        Amount: `${(minBalanceInLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL`,
+        Address: address.toString(),
+        CurrentBalance: `${(balance / LAMPORTS_PER_SOL).toFixed(6)} SOL`,
+        MinimumRequired: `${(minBalanceInLamports / LAMPORTS_PER_SOL).toFixed(
+          6
+        )} SOL`,
+      },
+    ]);
 
     try {
       // First try to use master wallet if available
@@ -200,9 +206,13 @@ export async function ensureAccountHasSOL(
           "id.json"
         );
         const masterWallet = loadWalletFromPath(defaultWalletPath);
-        console.log(
-          `Using master wallet ${masterWallet.publicKey.toString()} for funding`
-        );
+
+        console.table([
+          {
+            Action: "Using Master Wallet",
+            MasterWallet: masterWallet.publicKey.toString(),
+          },
+        ]);
 
         const signature = await airdropSol(
           connection,
@@ -211,12 +221,21 @@ export async function ensureAccountHasSOL(
           minBalanceInLamports / LAMPORTS_PER_SOL
         );
 
-        console.log(`Transfer successful! Signature: ${signature}`);
+        console.table([
+          {
+            Status: "Transfer Successful",
+            Signature: signature,
+          },
+        ]);
       } catch (masterWalletError) {
         // Fall back to RPC airdrop if master wallet not available
-        console.log(
-          "Master wallet not available. Falling back to RPC airdrop."
-        );
+        console.table([
+          {
+            Status: "Master Wallet Not Available",
+            Action: "Falling back to RPC airdrop",
+          },
+        ]);
+
         await requestAirdropSol(
           connection,
           address,
@@ -238,26 +257,38 @@ export async function ensureAccountHasSOL(
         throw new Error(`Failed to airdrop SOL to ${address.toString()}`);
       }
 
-      console.log(
-        `New balance: ${(newBalance / LAMPORTS_PER_SOL).toFixed(6)} SOL`
-      );
+      console.table([
+        {
+          Status: "Airdrop Complete",
+          Address: address.toString(),
+          NewBalance: `${(newBalance / LAMPORTS_PER_SOL).toFixed(6)} SOL`,
+        },
+      ]);
     } catch (error) {
       console.error("Error ensuring account has SOL:", error);
-      console.log(
-        `Continuing with current balance of ${(
-          balance / LAMPORTS_PER_SOL
-        ).toFixed(6)} SOL`
-      );
-      console.log(
-        "This may cause transactions to fail if the balance is too low"
-      );
+
+      console.table([
+        {
+          Status: "Error",
+          Action: "Continuing with current balance",
+          Address: address.toString(),
+          Balance: `${(balance / LAMPORTS_PER_SOL).toFixed(6)} SOL`,
+          Warning:
+            "This may cause transactions to fail if the balance is too low",
+        },
+      ]);
     }
   } else {
-    console.log(
-      `Balance for ${address.toString()} is sufficient: ${(
-        balance / LAMPORTS_PER_SOL
-      ).toFixed(6)} SOL`
-    );
+    console.table([
+      {
+        Status: "Balance Sufficient",
+        Address: address.toString(),
+        Balance: `${(balance / LAMPORTS_PER_SOL).toFixed(6)} SOL`,
+        MinimumRequired: `${(minBalanceInLamports / LAMPORTS_PER_SOL).toFixed(
+          6
+        )} SOL`,
+      },
+    ]);
   }
 }
 

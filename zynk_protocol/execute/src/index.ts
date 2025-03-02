@@ -896,19 +896,24 @@ async function main() {
       "Partner Deposit Wallet"
     );
 
-    // Log the generated wallet addresses
-    console.log("Admin wallet:", adminWallet.publicKey.toString());
-    console.log("Zynk operator wallet:", zynkOpWallet.publicKey.toString());
-    console.log("Payback wallet:", paybackWallet.publicKey.toString());
-    console.log("Config account:", configAccount.publicKey.toString());
-    console.log(
-      "Partner Operational Wallet:",
-      partnerOperationalWallet.publicKey.toString()
-    );
-    console.log(
-      "Partner Deposit Wallet:",
-      partnerDepositWallet.publicKey.toString()
-    );
+    // Display all wallet information in a table
+    console.table([
+      { Name: "Admin wallet", Address: adminWallet.publicKey.toString() },
+      {
+        Name: "Zynk operator wallet",
+        Address: zynkOpWallet.publicKey.toString(),
+      },
+      { Name: "Payback wallet", Address: paybackWallet.publicKey.toString() },
+      { Name: "Config account", Address: configAccount.publicKey.toString() },
+      {
+        Name: "Partner Operational Wallet",
+        Address: partnerOperationalWallet.publicKey.toString(),
+      },
+      {
+        Name: "Partner Deposit Wallet",
+        Address: partnerDepositWallet.publicKey.toString(),
+      },
+    ]);
 
     // Initialize provider with admin wallet
     const wallet = new anchor.Wallet(adminWallet);
