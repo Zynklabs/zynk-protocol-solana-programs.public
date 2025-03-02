@@ -25,6 +25,45 @@ import BigNumber from "bignumber.js";
 import { fileURLToPath } from "url";
 import { dirname, resolve } from "path";
 import { table } from "console";
+import { config } from "dotenv";
+
+// Load environment variables
+config();
+
+// Function to create a keypair from a private key array in .env
+const createKeypairFromEnv = (
+  envVar: string,
+  fallbackLabel?: string
+): Keypair => {
+  const privateKeyStr = process.env[envVar];
+
+  // If private key is provided, use it
+  if (privateKeyStr) {
+    try {
+      const privateKeyArray = JSON.parse(privateKeyStr);
+      return Keypair.fromSecretKey(Uint8Array.from(privateKeyArray));
+    } catch (error: unknown) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : "Unknown error parsing private key";
+
+      console.warn(`Error parsing private key from ${envVar}: ${errorMessage}`);
+      console.warn(
+        `Generating a random keypair for ${fallbackLabel || envVar} instead`
+      );
+    }
+  } else {
+    console.warn(
+      `No private key found for ${envVar}. Generating a random keypair for ${
+        fallbackLabel || envVar
+      } instead`
+    );
+  }
+
+  // Fallback to generating a new keypair
+  return Keypair.generate();
+};
 
 // Get current file path in ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -833,17 +872,36 @@ async function decodeEvents(
 
 async function main() {
   try {
-    // Create wallets
-    console.log("Creating wallets...");
-    const adminWallet = Keypair.generate();
-    const zynkOpWallet = Keypair.generate();
-    const paybackWallet = Keypair.generate();
-    const configAccount = Keypair.generate();
-    const partnerOperationalWallet = Keypair.generate();
-    const partnerDepositWallet = Keypair.generate();
+    // Create wallets from private keys in .env file
+    console.log("Loading wallets from environment variables...");
 
-    console.log("Admin wallet:", JSON.stringify(adminWallet));
+    // Create keypairs from .env or generate if not available
+    const adminWallet = createKeypairFromEnv(
+      "ADMIN_WALLET_PRIVATE_KEY",
+      "Admin wallet"
+    );
+    const zynkOpWallet = createKeypairFromEnv(
+      "ZYNK_OP_WALLET_PRIVATE_KEY",
+      "Zynk operator wallet"
+    );
+    const paybackWallet = createKeypairFromEnv(
+      "PAYBACK_WALLET_PRIVATE_KEY",
+      "Payback wallet"
+    );
+    const configAccount = createKeypairFromEnv(
+      "CONFIG_ACCOUNT_PRIVATE_KEY",
+      "Config account"
+    );
+    const partnerOperationalWallet = createKeypairFromEnv(
+      "PARTNER_OPERATIONAL_WALLET_PRIVATE_KEY",
+      "Partner Operational Wallet"
+    );
+    const partnerDepositWallet = createKeypairFromEnv(
+      "PARTNER_DEPOSIT_WALLET_PRIVATE_KEY",
+      "Partner Deposit Wallet"
+    );
 
+    // Log the generated wallet addresses
     console.log("Admin wallet:", adminWallet.publicKey.toString());
     console.log("Zynk operator wallet:", zynkOpWallet.publicKey.toString());
     console.log("Payback wallet:", paybackWallet.publicKey.toString());
@@ -859,7 +917,10 @@ async function main() {
 
     // Initialize provider with admin wallet
     const wallet = new anchor.Wallet(adminWallet);
-    const connection = new Connection("http://localhost:8899", "confirmed");
+    const connection = new Connection(
+      process.env.RPC_URL || "http://localhost:8899",
+      "confirmed"
+    );
     const provider = new anchor.AnchorProvider(connection, wallet, {
       commitment: "confirmed",
     });
