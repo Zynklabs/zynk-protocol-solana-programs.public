@@ -5,16 +5,11 @@ import {
   Connection,
   LAMPORTS_PER_SOL,
   SystemProgram,
-  Transaction,
-  TransactionSignature,
-  sendAndConfirmTransaction,
   PublicKey,
-  PublicKeyInitData,
 } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,
   createMint,
-  getAssociatedTokenAddress,
   getOrCreateAssociatedTokenAccount,
   mintTo,
   transfer,

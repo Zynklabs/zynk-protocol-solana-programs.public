@@ -3,6 +3,9 @@ import {
   PublicKey,
   Connection,
   LAMPORTS_PER_SOL,
+  SystemProgram,
+  Transaction,
+  sendAndConfirmTransaction,
 } from "@solana/web3.js";
 import * as crypto from "crypto";
 import { resolve } from "path";
@@ -86,68 +89,28 @@ export function getKeypairJson(keypair: Keypair): string {
   return JSON.stringify(Array.from(keypair.secretKey));
 }
 
-// Helper function to airdrop SOL
-export async function airdropSol(
+// Function to airdrop SOL from one wallet to another
+export async function transferSol(
   connection: Connection,
-  address: PublicKey,
-  amount: number
-): Promise<void> {
-  try {
-    const signature = await connection.requestAirdrop(
-      address,
-      amount * LAMPORTS_PER_SOL
-    );
-    await connection.confirmTransaction(signature, "confirmed");
-    console.log(`Airdropped ${amount} SOL to ${address.toString()}`);
-    console.log(
-      `New balance: ${(
-        (await connection.getBalance(address)) / LAMPORTS_PER_SOL
-      ).toFixed(6)} SOL`
-    );
-  } catch (error) {
-    console.error("Error airdropping SOL:", error);
-    throw error;
-  }
-}
+  from: Keypair,
+  to: PublicKey,
+  amountInSol: number
+): Promise<string> {
+  const amountInLamports = amountInSol * LAMPORTS_PER_SOL;
 
-// Helper function to ensure an account has enough SOL
-export async function ensureAccountHasSOL(
-  connection: Connection,
-  address: PublicKey,
-  minBalanceInLamports: number
-): Promise<void> {
-  const balance = await connection.getBalance(address);
+  const transaction = new Transaction().add(
+    SystemProgram.transfer({
+      fromPubkey: from.publicKey,
+      toPubkey: to,
+      lamports: amountInLamports,
+    })
+  );
 
-  if (balance < minBalanceInLamports) {
-    console.log(
-      `Current balance too low. Airdropping ${
-        minBalanceInLamports / LAMPORTS_PER_SOL
-      } SOL to ${address.toString()}`
-    );
-    await airdropSol(
-      connection,
-      address,
-      minBalanceInLamports / LAMPORTS_PER_SOL
-    );
+  const signature = await sendAndConfirmTransaction(connection, transaction, [
+    from,
+  ]);
 
-    // Wait for confirmation
-    let newBalance = await connection.getBalance(address);
-    let attempts = 0;
-    while (newBalance < minBalanceInLamports && attempts < 10) {
-      console.log("Waiting for airdrop confirmation...");
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      newBalance = await connection.getBalance(address);
-      attempts++;
-    }
-
-    if (newBalance < minBalanceInLamports) {
-      throw new Error(`Failed to airdrop SOL to ${address.toString()}`);
-    }
-
-    console.log(
-      `New balance: ${(newBalance / LAMPORTS_PER_SOL).toFixed(6)} SOL`
-    );
-  }
+  return signature;
 }
 
 // Function to get program ID from keypair file

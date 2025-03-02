@@ -36,35 +36,44 @@ const envPath = path.resolve(__dirname, "../.env");
 // Minimum balance threshold in SOL
 const MIN_BALANCE_THRESHOLD = 0.1;
 
-// Parse command line arguments
-const args = process.argv.slice(2);
+// Only parse command line arguments when this file is run directly
 let masterWalletPath = "";
 let amountToAirdrop = 0.2; // Default 0.2 SOL
 let rpcUrl = "";
 
-for (let i = 0; i < args.length; i++) {
-  const arg = args[i];
+// Check if this file is being run directly
+const isRunningDirectly = process.argv[1] === fileURLToPath(import.meta.url);
 
-  if (arg === "--wallet" && i + 1 < args.length) {
-    masterWalletPath = args[++i];
-    // Replace ~ with home directory if present
-    if (masterWalletPath.startsWith("~")) {
-      masterWalletPath = path.join(homedir(), masterWalletPath.slice(1));
+if (isRunningDirectly) {
+  // Parse command line arguments
+  const args = process.argv.slice(2);
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+
+    if (arg === "--wallet" && i + 1 < args.length) {
+      masterWalletPath = args[++i];
+      // Replace ~ with home directory if present
+      if (masterWalletPath.startsWith("~")) {
+        masterWalletPath = path.join(homedir(), masterWalletPath.slice(1));
+      }
+    } else if (arg === "--amount" && i + 1 < args.length) {
+      amountToAirdrop = parseFloat(args[++i]);
+      if (isNaN(amountToAirdrop)) {
+        console.error("Invalid amount specified");
+        process.exit(1);
+      }
+    } else if (arg === "--rpc" && i + 1 < args.length) {
+      rpcUrl = args[++i];
     }
-  } else if (arg === "--amount" && i + 1 < args.length) {
-    amountToAirdrop = parseFloat(args[++i]);
-    if (isNaN(amountToAirdrop)) {
-      console.error("Invalid amount specified");
-      process.exit(1);
-    }
-  } else if (arg === "--rpc" && i + 1 < args.length) {
-    rpcUrl = args[++i];
   }
 }
 
 // Load master wallet
-function loadMasterWallet(): Keypair {
-  if (!masterWalletPath) {
+function loadMasterWallet(walletPath?: string): Keypair {
+  const effectivePath = walletPath || masterWalletPath;
+
+  if (!effectivePath && isRunningDirectly) {
     console.error("No master wallet specified. Use --wallet flag.");
     console.error(
       "Example: npm run airdrop -- --wallet ~/.config/solana/id.json --amount 1"
@@ -72,17 +81,29 @@ function loadMasterWallet(): Keypair {
     process.exit(1);
   }
 
+  // If no path is provided and we're imported, try to use default
+  if (!effectivePath && !isRunningDirectly) {
+    const defaultPath = path.join(homedir(), ".config", "solana", "id.json");
+    if (fs.existsSync(defaultPath)) {
+      return loadWalletFromPath(defaultPath);
+    } else {
+      throw new Error("No master wallet path provided and default not found");
+    }
+  }
+
+  return loadWalletFromPath(effectivePath);
+}
+
+// Helper to load wallet from a file path
+function loadWalletFromPath(walletPath: string): Keypair {
   try {
     // Read the wallet file
-    const walletData = fs.readFileSync(masterWalletPath, { encoding: "utf-8" });
+    const walletData = fs.readFileSync(walletPath, { encoding: "utf-8" });
     const secretKey = Uint8Array.from(JSON.parse(walletData));
     return Keypair.fromSecretKey(secretKey);
   } catch (error) {
-    console.error(
-      `Error loading master wallet from ${masterWalletPath}:`,
-      error
-    );
-    process.exit(1);
+    console.error(`Error loading wallet from ${walletPath}:`, error);
+    throw error;
   }
 }
 
@@ -168,28 +189,74 @@ export async function ensureAccountHasSOL(
         minBalanceInLamports / LAMPORTS_PER_SOL
       } SOL to ${address.toString()}`
     );
-    await requestAirdropSol(
-      connection,
-      address,
-      minBalanceInLamports / LAMPORTS_PER_SOL
-    );
 
-    // Wait for confirmation
-    let newBalance = await connection.getBalance(address);
-    let attempts = 0;
-    while (newBalance < minBalanceInLamports && attempts < 10) {
-      console.log("Waiting for airdrop confirmation...");
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      newBalance = await connection.getBalance(address);
-      attempts++;
+    try {
+      // First try to use master wallet if available
+      try {
+        const defaultWalletPath = path.join(
+          homedir(),
+          ".config",
+          "solana",
+          "id.json"
+        );
+        const masterWallet = loadWalletFromPath(defaultWalletPath);
+        console.log(
+          `Using master wallet ${masterWallet.publicKey.toString()} for funding`
+        );
+
+        const signature = await airdropSol(
+          connection,
+          masterWallet,
+          address,
+          minBalanceInLamports / LAMPORTS_PER_SOL
+        );
+
+        console.log(`Transfer successful! Signature: ${signature}`);
+      } catch (masterWalletError) {
+        // Fall back to RPC airdrop if master wallet not available
+        console.log(
+          "Master wallet not available. Falling back to RPC airdrop."
+        );
+        await requestAirdropSol(
+          connection,
+          address,
+          minBalanceInLamports / LAMPORTS_PER_SOL
+        );
+      }
+
+      // Wait for confirmation
+      let newBalance = await connection.getBalance(address);
+      let attempts = 0;
+      while (newBalance < minBalanceInLamports && attempts < 10) {
+        console.log("Waiting for airdrop confirmation...");
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        newBalance = await connection.getBalance(address);
+        attempts++;
+      }
+
+      if (newBalance < minBalanceInLamports) {
+        throw new Error(`Failed to airdrop SOL to ${address.toString()}`);
+      }
+
+      console.log(
+        `New balance: ${(newBalance / LAMPORTS_PER_SOL).toFixed(6)} SOL`
+      );
+    } catch (error) {
+      console.error("Error ensuring account has SOL:", error);
+      console.log(
+        `Continuing with current balance of ${(
+          balance / LAMPORTS_PER_SOL
+        ).toFixed(6)} SOL`
+      );
+      console.log(
+        "This may cause transactions to fail if the balance is too low"
+      );
     }
-
-    if (newBalance < minBalanceInLamports) {
-      throw new Error(`Failed to airdrop SOL to ${address.toString()}`);
-    }
-
+  } else {
     console.log(
-      `New balance: ${(newBalance / LAMPORTS_PER_SOL).toFixed(6)} SOL`
+      `Balance for ${address.toString()} is sufficient: ${(
+        balance / LAMPORTS_PER_SOL
+      ).toFixed(6)} SOL`
     );
   }
 }
@@ -343,7 +410,9 @@ async function main() {
   );
 }
 
-main().catch((error) => {
-  console.error("Error in airdrop script:", error);
-  process.exit(1);
-});
+if (isRunningDirectly) {
+  main().catch((error) => {
+    console.error("Error in airdrop script:", error);
+    process.exit(1);
+  });
+}

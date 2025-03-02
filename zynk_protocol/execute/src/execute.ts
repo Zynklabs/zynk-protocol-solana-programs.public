@@ -9,29 +9,46 @@ import {
 } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,
-  createMint,
   getOrCreateAssociatedTokenAccount,
-  mintTo,
   transfer,
 } from "@solana/spl-token";
+import { readFileSync, existsSync } from "fs";
 import BN from "bn.js";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
 import { config } from "dotenv";
+import path from "path";
 import { IDL } from "./idl";
 
 // Load environment variables
 config();
 
 // Import utility functions
-import {
-  createKeypairFromEnv,
-  ensureAccountHasSOL,
-  getProgramId,
-} from "./utils";
+import { createKeypairFromEnv } from "./utils";
+
+// Import airdrop functionality
+import { ensureAccountHasSOL } from "./airdrop";
+
+// Import deployment function
+import { deploy } from "./deploy";
 
 // Get current file path in ES modules
 const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+// Define deployment data interface
+interface DeploymentData {
+  programId: string;
+  adminWallet: string;
+  zynkOpWallet: string;
+  paybackWallet: string;
+  configAccount: string;
+  partnerOperationalWallet: string;
+  partnerDepositWallet: string;
+  tokenMint: string;
+  zynkOpTokenAccount: string;
+  partnerOperationalTokenAccount: string;
+}
 
 // Function to send tokens using the Zynk protocol
 async function sendTokens(
@@ -46,6 +63,7 @@ async function sendTokens(
 ): Promise<{
   txid: string;
   orderTracker: { publicKey: PublicKey };
+  orderId: number | undefined;
 }> {
   try {
     console.log("\nSending tokens...");
@@ -138,9 +156,12 @@ async function sendTokens(
 
     // Decode and display the Send event
     const decodedEvent = await decodeEvents(connection, tx, true);
+    let eventOrderId: number | undefined;
     if (decodedEvent && decodedEvent.eventType === "Send") {
       console.log("\n=== SEND EVENT DATA ===");
       console.table(decodedEvent.data);
+      eventOrderId = parseInt(decodedEvent.data.order_id);
+      console.log(`Extracted Order ID from event: ${eventOrderId}`);
     }
 
     console.log("Order tracker account:", orderTracker.publicKey.toString());
@@ -150,6 +171,7 @@ async function sendTokens(
       orderTracker: {
         publicKey: orderTracker.publicKey,
       },
+      orderId: eventOrderId,
     };
   } catch (error) {
     console.error("Error sending tokens:", error);
@@ -753,6 +775,21 @@ async function decodeEvents(
 
 async function main() {
   try {
+    // Check if deployment.json exists
+    const deploymentPath = path.resolve(__dirname, "../deployment.json");
+    let deploymentData: DeploymentData;
+
+    if (!existsSync(deploymentPath)) {
+      console.log("Deployment data not found. Running deployment...");
+      // Run deployment
+      deploymentData = await deploy();
+      console.log("Deployment completed successfully!");
+    } else {
+      console.log("Loading existing deployment data...");
+      deploymentData = JSON.parse(readFileSync(deploymentPath, "utf-8"));
+      console.log("Loaded existing deployment data");
+    }
+
     // Create wallets from private keys in .env file
     console.log("Loading wallets from environment variables...");
 
@@ -781,6 +818,12 @@ async function main() {
       "PARTNER_DEPOSIT_WALLET_PRIVATE_KEY",
       "Partner Deposit Wallet"
     );
+
+    // Verify keypairs match deployment data
+    if (adminWallet.publicKey.toString() !== deploymentData.adminWallet) {
+      console.error("Admin wallet mismatch!");
+      return;
+    }
 
     // Log the generated wallet addresses
     console.log("Admin wallet:", adminWallet.publicKey.toString());
@@ -846,8 +889,8 @@ async function main() {
       `Airdropped ${amount} SOL to ${partnerDepositWallet.publicKey.toString()}`
     );
 
-    // Get program ID
-    const programId = getProgramId();
+    // Get program ID from deployment data
+    const programId = new PublicKey(deploymentData.programId);
     console.log("\nProgram ID:", programId.toString());
 
     // Define the program with proper types
@@ -861,70 +904,25 @@ async function main() {
 
     const program = new Program(IDL as any, programId, provider);
 
-    // Initialize protocol
-    console.log("\nInitializing protocol...");
-    await program.methods
-      .initialize(zynkOpWallet.publicKey, paybackWallet.publicKey)
-      .accounts({
-        config: configAccount.publicKey,
-        admin: adminWallet.publicKey,
-        systemProgram: SystemProgram.programId,
-      })
-      .signers([configAccount, adminWallet])
-      .rpc();
+    // Create token mint from deployment data
+    const tokenMint = new PublicKey(deploymentData.tokenMint);
+    console.log("Token Mint:", tokenMint.toString());
 
-    console.log("Protocol initialized successfully!");
+    // Use token accounts from deployment data
+    const zynkOpTokenAccount = new PublicKey(deploymentData.zynkOpTokenAccount);
+    console.log("Zynk Operator Token Account:", zynkOpTokenAccount.toString());
 
-    // Create test token
-    console.log("\nCreating test token...");
-    const tokenMint = await createMint(
-      connection,
-      zynkOpWallet,
-      zynkOpWallet.publicKey,
-      zynkOpWallet.publicKey,
-      9
+    const partnerOperationalTokenAccount = new PublicKey(
+      deploymentData.partnerOperationalTokenAccount
     );
-    console.log("Token Mint created:", tokenMint.toString());
-
-    // Create token accounts and mint tokens to the zynkOpWallet
-    const zynkOpTokenAccount = await getOrCreateAssociatedTokenAccount(
-      connection,
-      zynkOpWallet,
-      tokenMint,
-      zynkOpWallet.publicKey
-    );
-    console.log(
-      "Zynk Operator Token Account:",
-      zynkOpTokenAccount.address.toString()
-    );
-
-    // Mint tokens to the zynkOpWallet
-    await mintTo(
-      connection,
-      zynkOpWallet,
-      tokenMint,
-      zynkOpTokenAccount.address,
-      zynkOpWallet.publicKey,
-      1_000_000_000_000
-    );
-    console.log("Minted 1,000,000,000,000 tokens to Zynk Operator");
-
-    // Create partner's operational token account
-    const partnerOperationalTokenAccount =
-      await getOrCreateAssociatedTokenAccount(
-        connection,
-        zynkOpWallet,
-        tokenMint,
-        partnerOperationalWallet.publicKey
-      );
     console.log(
       "Partner Operational Token Account:",
-      partnerOperationalTokenAccount.address.toString()
+      partnerOperationalTokenAccount.toString()
     );
 
     // Fetch the config account to confirm it has the correct zynkOpWallet
     const configData = (await program.account.config.fetch(
-      configAccount.publicKey
+      new PublicKey(deploymentData.configAccount)
     )) as ConfigAccount;
     console.log("\nConfig Data:");
     console.log("Admin:", configData.admin.toString());
@@ -948,13 +946,13 @@ async function main() {
       {
         name: "Zynk Operator",
         pubkey: zynkOpWallet.publicKey,
-        tokenAccount: zynkOpTokenAccount.address,
+        tokenAccount: zynkOpTokenAccount,
       },
       { name: "Payback", pubkey: paybackWallet.publicKey },
       {
         name: "Partner Operational",
         pubkey: partnerOperationalWallet.publicKey,
-        tokenAccount: partnerOperationalTokenAccount.address,
+        tokenAccount: partnerOperationalTokenAccount,
       },
       { name: "Partner Deposit", pubkey: partnerDepositWallet.publicKey },
     ]);
@@ -964,7 +962,7 @@ async function main() {
       const result = await sendTokens(
         program,
         connection,
-        configAccount.publicKey,
+        new PublicKey(deploymentData.configAccount),
         zynkOpWallet,
         tokenMint,
         1_000_000,
@@ -978,13 +976,13 @@ async function main() {
         {
           name: "Zynk Operator",
           pubkey: zynkOpWallet.publicKey,
-          tokenAccount: zynkOpTokenAccount.address,
+          tokenAccount: zynkOpTokenAccount,
         },
         { name: "Payback", pubkey: paybackWallet.publicKey },
         {
           name: "Partner Operational",
           pubkey: partnerOperationalWallet.publicKey,
-          tokenAccount: partnerOperationalTokenAccount.address,
+          tokenAccount: partnerOperationalTokenAccount,
         },
         { name: "Partner Deposit", pubkey: partnerDepositWallet.publicKey },
         { name: "Order Tracker", pubkey: result.orderTracker.publicKey },
@@ -1017,7 +1015,7 @@ async function main() {
       await transfer(
         connection,
         partnerOperationalWallet, // payer
-        partnerOperationalTokenAccount.address, // source
+        partnerOperationalTokenAccount, // source
         partnerDepositTokenAccount.address, // destination
         partnerOperationalWallet, // authority
         500 // amount (half of what was sent)
@@ -1029,13 +1027,13 @@ async function main() {
         {
           name: "Zynk Operator",
           pubkey: zynkOpWallet.publicKey,
-          tokenAccount: zynkOpTokenAccount.address,
+          tokenAccount: zynkOpTokenAccount,
         },
         { name: "Payback", pubkey: paybackWallet.publicKey },
         {
           name: "Partner Operational",
           pubkey: partnerOperationalWallet.publicKey,
-          tokenAccount: partnerOperationalTokenAccount.address,
+          tokenAccount: partnerOperationalTokenAccount,
         },
         {
           name: "Partner Deposit",
@@ -1063,12 +1061,12 @@ async function main() {
       const replenishResult1 = await replenishTokens(
         program,
         connection,
-        configAccount.publicKey,
+        new PublicKey(deploymentData.configAccount),
         result.orderTracker.publicKey,
         partnerDepositWallet,
         partnerDepositTokenAccount.address,
         paybackWallet.publicKey,
-        1, // orderId (should be 1 after initialization)
+        result.orderId || configData.currentNonce.toNumber(), // Use orderId from Send event or fallback to currentNonce
         100, // first replenish of 100 tokens
         7200 // 2 hour validity
       );
@@ -1079,7 +1077,7 @@ async function main() {
         {
           name: "Zynk Operator",
           pubkey: zynkOpWallet.publicKey,
-          tokenAccount: zynkOpTokenAccount.address,
+          tokenAccount: zynkOpTokenAccount,
         },
         {
           name: "Payback",
@@ -1089,7 +1087,7 @@ async function main() {
         {
           name: "Partner Operational",
           pubkey: partnerOperationalWallet.publicKey,
-          tokenAccount: partnerOperationalTokenAccount.address,
+          tokenAccount: partnerOperationalTokenAccount,
         },
         {
           name: "Partner Deposit",
@@ -1106,12 +1104,12 @@ async function main() {
       const replenishResult2 = await replenishTokens(
         program,
         connection,
-        configAccount.publicKey,
+        new PublicKey(deploymentData.configAccount),
         result.orderTracker.publicKey,
         partnerDepositWallet,
         partnerDepositTokenAccount.address,
         paybackWallet.publicKey,
-        1, // orderId (should be 1 after initialization)
+        result.orderId || configData.currentNonce.toNumber(), // Use orderId from Send event or fallback to currentNonce
         100, // second replenish of 100 tokens
         7200 // 2 hour validity
       );
@@ -1122,7 +1120,7 @@ async function main() {
         {
           name: "Zynk Operator",
           pubkey: zynkOpWallet.publicKey,
-          tokenAccount: zynkOpTokenAccount.address,
+          tokenAccount: zynkOpTokenAccount,
         },
         {
           name: "Payback",
@@ -1132,7 +1130,7 @@ async function main() {
         {
           name: "Partner Operational",
           pubkey: partnerOperationalWallet.publicKey,
-          tokenAccount: partnerOperationalTokenAccount.address,
+          tokenAccount: partnerOperationalTokenAccount,
         },
         {
           name: "Partner Deposit",
@@ -1147,10 +1145,10 @@ async function main() {
       const closeResult = await closeOrder(
         program,
         connection,
-        configAccount.publicKey,
+        new PublicKey(deploymentData.configAccount),
         result.orderTracker.publicKey,
         adminWallet,
-        1 // orderId (should be 1 after initialization)
+        result.orderId || configData.currentNonce.toNumber() // Use orderId from Send event or fallback to currentNonce
       );
 
       console.log("\nFinal Wallet States after Order Closure:");
@@ -1159,7 +1157,7 @@ async function main() {
         {
           name: "Zynk Operator",
           pubkey: zynkOpWallet.publicKey,
-          tokenAccount: zynkOpTokenAccount.address,
+          tokenAccount: zynkOpTokenAccount,
         },
         {
           name: "Payback",
@@ -1169,7 +1167,7 @@ async function main() {
         {
           name: "Partner Operational",
           pubkey: partnerOperationalWallet.publicKey,
-          tokenAccount: partnerOperationalTokenAccount.address,
+          tokenAccount: partnerOperationalTokenAccount,
         },
         {
           name: "Partner Deposit",
@@ -1204,7 +1202,7 @@ async function main() {
     console.log("Token Mint:", tokenMint.toString());
     console.log(
       "Partner Operational Token Account:",
-      partnerOperationalTokenAccount.address.toString()
+      partnerOperationalTokenAccount.toString()
     );
   } catch (error) {
     console.error("Error:", error);

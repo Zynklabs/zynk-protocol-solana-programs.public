@@ -1,7 +1,6 @@
 import * as anchor from "@project-serum/anchor";
 import { Program } from "@project-serum/anchor";
 import {
-  Keypair,
   Connection,
   LAMPORTS_PER_SOL,
   SystemProgram,
@@ -12,10 +11,10 @@ import {
   getOrCreateAssociatedTokenAccount,
   mintTo,
 } from "@solana/spl-token";
-import { readFileSync, writeFileSync } from "fs";
+import { writeFileSync } from "fs";
 import BN from "bn.js";
 import { fileURLToPath } from "url";
-import { dirname, resolve } from "path";
+import { dirname } from "path";
 import { config } from "dotenv";
 import path from "path";
 
@@ -27,8 +26,6 @@ import { IDL } from "./idl";
 
 // Import utility functions
 import { createKeypairFromEnv, getProgramId } from "./utils";
-
-// Import wallet and airdrop functions
 import { ensureAccountHasSOL } from "./airdrop";
 
 // Get current file path in ES modules
@@ -261,14 +258,19 @@ export async function deploy(): Promise<DeployResult> {
 }
 
 // Run deployment if this file is executed directly
-if (import.meta.url === fileURLToPath(process.argv[1])) {
-  deploy()
-    .then(() => {
-      console.log("Deployment completed successfully!");
-      process.exit(0);
-    })
-    .catch((error) => {
-      console.error("Deployment failed:", error);
-      process.exit(1);
-    });
+if (import.meta && import.meta.url && process.argv && process.argv[1]) {
+  const url = new URL(import.meta.url);
+  const filePath = fileURLToPath(url);
+
+  if (filePath === process.argv[1]) {
+    deploy()
+      .then(() => {
+        console.log("Deployment completed successfully!");
+        process.exit(0);
+      })
+      .catch((error) => {
+        console.error("Deployment failed:", error);
+        process.exit(1);
+      });
+  }
 }
