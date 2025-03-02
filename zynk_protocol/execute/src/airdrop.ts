@@ -6,7 +6,7 @@
  * npm run airdrop -- --amount 1 --wallet ~/.config/solana/id.json
  *
  * Options:
- *   --amount <number>   Amount of SOL to airdrop to each wallet (default: 0.1)
+ *   --amount <number>   Amount of SOL to airdrop to each wallet (default: 0.2)
  *   --wallet <path>     Path to your master wallet keypair JSON file
  *   --rpc <url>         Solana RPC URL (defaults to value in .env or localhost)
  */
@@ -33,10 +33,13 @@ const __dirname = path.dirname(__filename);
 // Path to .env file
 const envPath = path.resolve(__dirname, "../.env");
 
+// Minimum balance threshold in SOL
+const MIN_BALANCE_THRESHOLD = 0.1;
+
 // Parse command line arguments
 const args = process.argv.slice(2);
 let masterWalletPath = "";
-let amountToAirdrop = 0.1; // Default 0.1 SOL
+let amountToAirdrop = 0.2; // Default 0.2 SOL
 let rpcUrl = "";
 
 for (let i = 0; i < args.length; i++) {
@@ -127,6 +130,15 @@ async function airdropSol(
   return signature;
 }
 
+// Function to check wallet balance
+async function getWalletBalance(
+  connection: Connection,
+  publicKey: PublicKey
+): Promise<number> {
+  const balance = await connection.getBalance(publicKey);
+  return balance / LAMPORTS_PER_SOL;
+}
+
 // Main function
 async function main() {
   // Load .env file
@@ -164,19 +176,12 @@ async function main() {
     },
   ];
 
-  // Total SOL needed
-  const totalNeeded = wallets.length * amountToAirdrop;
+  let walletsNeedingFunds = 0;
+  let totalSolNeeded = 0;
 
-  if (balanceInSol < totalNeeded) {
-    console.error(
-      `Insufficient balance in master wallet. Needed: ${totalNeeded} SOL, Available: ${balanceInSol} SOL`
-    );
-    process.exit(1);
-  }
+  // First check how many wallets need funds
+  console.log(`\nChecking wallet balances...`);
 
-  console.log(`\nAirdropping ${amountToAirdrop} SOL to each wallet...`);
-
-  // Airdrop to each wallet
   for (const wallet of wallets) {
     const walletPrivateKey = process.env[wallet.env];
     if (!walletPrivateKey) {
@@ -190,22 +195,79 @@ async function main() {
       continue;
     }
 
-    try {
-      const signature = await airdropSol(
-        connection,
-        masterWallet,
-        keypair.publicKey,
-        amountToAirdrop
-      );
+    // Check current wallet balance
+    const walletBalance = await getWalletBalance(connection, keypair.publicKey);
+    console.log(`${wallet.name}: ${walletBalance.toFixed(6)} SOL`);
 
+    if (walletBalance < MIN_BALANCE_THRESHOLD) {
+      walletsNeedingFunds++;
+      totalSolNeeded += amountToAirdrop;
+    }
+  }
+
+  if (walletsNeedingFunds === 0) {
+    console.log(
+      `\nAll wallets have at least ${MIN_BALANCE_THRESHOLD} SOL. No airdrops needed.`
+    );
+    return;
+  }
+
+  console.log(
+    `\n${walletsNeedingFunds} wallets need funds. Total SOL required: ${totalSolNeeded}`
+  );
+
+  // Check if master wallet has enough funds
+  if (balanceInSol < totalSolNeeded) {
+    console.error(
+      `Insufficient balance in master wallet. Needed: ${totalSolNeeded} SOL, Available: ${balanceInSol} SOL`
+    );
+    process.exit(1);
+  }
+
+  console.log(
+    `\nAirdropping ${amountToAirdrop} SOL to each wallet with balance below ${MIN_BALANCE_THRESHOLD} SOL...`
+  );
+
+  // Airdrop to each wallet
+  for (const wallet of wallets) {
+    const walletPrivateKey = process.env[wallet.env];
+    if (!walletPrivateKey) {
+      continue; // Already logged warnings during balance check
+    }
+
+    const keypair = createKeypairFromEnv(walletPrivateKey);
+    if (!keypair) {
+      continue; // Already logged warnings during balance check
+    }
+
+    // Check current wallet balance again
+    const walletBalance = await getWalletBalance(connection, keypair.publicKey);
+
+    // Only airdrop if balance is below threshold
+    if (walletBalance < MIN_BALANCE_THRESHOLD) {
+      try {
+        const signature = await airdropSol(
+          connection,
+          masterWallet,
+          keypair.publicKey,
+          amountToAirdrop
+        );
+
+        console.log(
+          `✅ Sent ${amountToAirdrop} SOL to ${
+            wallet.name
+          }: ${keypair.publicKey.toString()}`
+        );
+        console.log(`   Transaction: ${signature}`);
+      } catch (error) {
+        console.error(`❌ Failed to send SOL to ${wallet.name}:`, error);
+      }
+    } else {
       console.log(
-        `✅ Sent ${amountToAirdrop} SOL to ${
-          wallet.name
-        }: ${keypair.publicKey.toString()}`
+        `ℹ️ Skipped ${wallet.name}: already has ${walletBalance.toFixed(
+          6
+        )} SOL (above ${MIN_BALANCE_THRESHOLD} threshold)`
       );
-      console.log(`   Transaction: ${signature}`);
-    } catch (error) {
-      console.error(`❌ Failed to send SOL to ${wallet.name}:`, error);
     }
   }
 

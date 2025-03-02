@@ -67,7 +67,7 @@ This is particularly useful for development and testing where you need consisten
 
 ## The Airdrop Script
 
-The `airdrop.ts` script allows you to fund all wallets defined in your `.env` file using a master wallet from your local system:
+The `airdrop.ts` script allows you to fund all wallets defined in your `.env` file using a master wallet from your local system. The script now includes a smart balance check - it will only airdrop SOL to wallets with balances below 0.1 SOL:
 
 ```bash
 # Generic command with custom options
@@ -75,21 +75,22 @@ npm run airdrop -- --wallet ~/.config/solana/id.json --amount 1
 
 # Predefined commands
 npm run airdrop:local  # Use local Solana node with 0.1 SOL per wallet
-npm run airdrop:devnet # Use Solana Devnet with 1 SOL per wallet
+npm run airdrop:devnet # Use Solana Devnet with 0.1 SOL per wallet
 ```
 
 Options:
 - `--wallet <path>` - Path to your master wallet keypair JSON file (required)
-- `--amount <number>` - Amount of SOL to airdrop to each wallet (default: 0.1)
+- `--amount <number>` - Amount of SOL to airdrop to each wallet (default: 0.2)
 - `--rpc <url>` - Solana RPC URL (defaults to value in .env or localhost)
 
 The script will:
 1. Load your master wallet from the specified path
 2. Connect to the Solana network (local or specified RPC)
-3. Check if your master wallet has enough SOL for all transfers
-4. Transfer the specified amount of SOL to each wallet defined in the `.env` file
+3. Check each wallet's current balance
+4. Only airdrop to wallets with balances below 0.1 SOL
+5. Skip wallets that already have sufficient funds
 
-This is useful when you need to quickly fund multiple wallets for testing purposes.
+This is useful when you need to quickly fund multiple wallets for testing purposes while avoiding unnecessary transactions for already-funded wallets.
 
 ## Fallback Behavior
 
