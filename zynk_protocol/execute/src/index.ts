@@ -842,6 +842,8 @@ async function main() {
     const partnerOperationalWallet = Keypair.generate();
     const partnerDepositWallet = Keypair.generate();
 
+    console.log("Admin wallet:", JSON.stringify(adminWallet));
+
     console.log("Admin wallet:", adminWallet.publicKey.toString());
     console.log("Zynk operator wallet:", zynkOpWallet.publicKey.toString());
     console.log("Payback wallet:", paybackWallet.publicKey.toString());
@@ -863,35 +865,43 @@ async function main() {
     });
     anchor.setProvider(provider);
 
+    const amount = 0.1;
+
+    const formattedAmountToAirdrop = amount * LAMPORTS_PER_SOL;
+
     // Airdrop SOL to wallets
     console.log("\nAirdropping SOL to wallets...");
     await ensureAccountHasSOL(
       connection,
       adminWallet.publicKey,
-      2 * LAMPORTS_PER_SOL
+      formattedAmountToAirdrop
     );
-    console.log(`Airdropped 2 SOL to ${adminWallet.publicKey.toString()}`);
+    console.log(
+      `Airdropped ${amount} SOL to ${adminWallet.publicKey.toString()}`
+    );
     await ensureAccountHasSOL(
       connection,
       zynkOpWallet.publicKey,
-      2 * LAMPORTS_PER_SOL
+      formattedAmountToAirdrop
     );
-    console.log(`Airdropped 2 SOL to ${zynkOpWallet.publicKey.toString()}`);
+    console.log(
+      `Airdropped ${amount} SOL to ${zynkOpWallet.publicKey.toString()}`
+    );
     await ensureAccountHasSOL(
       connection,
       partnerOperationalWallet.publicKey,
-      2 * LAMPORTS_PER_SOL
+      formattedAmountToAirdrop
     );
     console.log(
-      `Airdropped 2 SOL to ${partnerOperationalWallet.publicKey.toString()}`
+      `Airdropped ${amount} SOL to ${partnerOperationalWallet.publicKey.toString()}`
     );
     await ensureAccountHasSOL(
       connection,
       partnerDepositWallet.publicKey,
-      2 * LAMPORTS_PER_SOL
+      formattedAmountToAirdrop
     );
     console.log(
-      `Airdropped 2 SOL to ${partnerDepositWallet.publicKey.toString()}`
+      `Airdropped ${amount} SOL to ${partnerDepositWallet.publicKey.toString()}`
     );
 
     // Get program ID
