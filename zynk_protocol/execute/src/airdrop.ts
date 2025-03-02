@@ -87,7 +87,7 @@ function loadMasterWallet(): Keypair {
 }
 
 // Function to create a keypair from a private key array in .env
-function createKeypairFromEnv(privateKeyStr: string): Keypair | null {
+export function createKeypairFromEnv(privateKeyStr: string): Keypair | null {
   if (!privateKeyStr || privateKeyStr === "[]") {
     return null;
   }
@@ -107,7 +107,7 @@ function createKeypairFromEnv(privateKeyStr: string): Keypair | null {
 }
 
 // Function to airdrops SOL
-async function airdropSol(
+export async function airdropSol(
   connection: Connection,
   from: Keypair,
   to: PublicKey,
@@ -128,6 +128,70 @@ async function airdropSol(
   ]);
 
   return signature;
+}
+
+// Helper function to airdrop SOL from RPC node
+export async function requestAirdropSol(
+  connection: Connection,
+  address: PublicKey,
+  amount: number
+): Promise<void> {
+  try {
+    const signature = await connection.requestAirdrop(
+      address,
+      amount * LAMPORTS_PER_SOL
+    );
+    await connection.confirmTransaction(signature, "confirmed");
+    console.log(`Airdropped ${amount} SOL to ${address.toString()}`);
+    console.log(
+      `New balance: ${(
+        (await connection.getBalance(address)) / LAMPORTS_PER_SOL
+      ).toFixed(6)} SOL`
+    );
+  } catch (error) {
+    console.error("Error airdropping SOL:", error);
+    throw error;
+  }
+}
+
+// Helper function to ensure an account has enough SOL
+export async function ensureAccountHasSOL(
+  connection: Connection,
+  address: PublicKey,
+  minBalanceInLamports: number
+): Promise<void> {
+  const balance = await connection.getBalance(address);
+
+  if (balance < minBalanceInLamports) {
+    console.log(
+      `Current balance too low. Airdropping ${
+        minBalanceInLamports / LAMPORTS_PER_SOL
+      } SOL to ${address.toString()}`
+    );
+    await requestAirdropSol(
+      connection,
+      address,
+      minBalanceInLamports / LAMPORTS_PER_SOL
+    );
+
+    // Wait for confirmation
+    let newBalance = await connection.getBalance(address);
+    let attempts = 0;
+    while (newBalance < minBalanceInLamports && attempts < 10) {
+      console.log("Waiting for airdrop confirmation...");
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      newBalance = await connection.getBalance(address);
+      attempts++;
+    }
+
+    if (newBalance < minBalanceInLamports) {
+      throw new Error(`Failed to airdrop SOL to ${address.toString()}`);
+    }
+
+    console.log(
+      `New balance: ${(newBalance / LAMPORTS_PER_SOL).toFixed(6)} SOL`
+    );
+  }
 }
 
 // Function to check wallet balance
