@@ -76,8 +76,6 @@ pub enum CustomError {
     UnauthorizedAdmin,
     #[msg("Invalid order ID")]
     InvalidOrderId,
-    #[msg("Validity period expired")]
-    ValidityExpired,
     #[msg("Invalid token mint")]
     InvalidTokenMint,
     #[msg("Validity must be in future")]
