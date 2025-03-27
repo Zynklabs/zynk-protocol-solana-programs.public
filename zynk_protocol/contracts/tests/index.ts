@@ -24,8 +24,11 @@ describe("zynk-protocol", () => {
   const partnerOperationalWallet = Keypair.generate();
   const partnerDepositWallet = Keypair.generate();
 
-  // Config account (to be initialized)
-  const config = Keypair.generate();
+  // Config account PDA (to be initialized)
+  const [configPDA, _] = PublicKey.findProgramAddressSync(
+    [Buffer.from("config")],
+    program.programId
+  );
 
   // Token accounts
   let tokenMint: PublicKey;
@@ -116,15 +119,15 @@ describe("zynk-protocol", () => {
     await program.methods
       .initialize(zynkOpWallet.publicKey, paybackWallet.publicKey)
       .accounts({
-        config: config.publicKey,
+        config: configPDA,
         admin: admin.publicKey,
         systemProgram: SystemProgram.programId,
       })
-      .signers([config, admin])
+      .signers([admin])
       .rpc();
 
     // Verify config account fields
-    const configAccount = await program.account.config.fetch(config.publicKey);
+    const configAccount = await program.account.config.fetch(configPDA);
     assert.ok(configAccount.admin.equals(admin.publicKey));
     assert.ok(configAccount.zynkOpWallet.equals(zynkOpWallet.publicKey));
     assert.ok(configAccount.paybackWallet.equals(paybackWallet.publicKey));
@@ -143,7 +146,7 @@ describe("zynk-protocol", () => {
         partnerDepositWallet.publicKey // wallet that will be used later for replenish
       )
       .accounts({
-        config: config.publicKey,
+        config: configPDA,
         zynkOpWallet: zynkOpWallet.publicKey,
         sourceTokenAccount: zynkOpTokenAccount,
         partnerOperationalWallet: partnerOperationalTokenAccount,
@@ -181,7 +184,7 @@ describe("zynk-protocol", () => {
     await program.methods
       .replenish(orderId, new anchor.BN(validity), paybackAmount)
       .accounts({
-        config: config.publicKey,
+        config: configPDA,
         orderTracker: orderTracker.publicKey,
         depositWallet: partnerDepositWallet.publicKey,
         depositTokenAccount: partnerDepositTokenAccount,
@@ -192,8 +195,9 @@ describe("zynk-protocol", () => {
       .rpc();
 
     // Verify token transfer to payback wallet
-    const paybackBalance =
-      await provider.connection.getTokenAccountBalance(paybackTokenAccount);
+    const paybackBalance = await provider.connection.getTokenAccountBalance(
+      paybackTokenAccount
+    );
     assert.equal(paybackBalance.value.amount, "100000000000");
 
     // Verify partner deposit wallet's balance was reduced
@@ -220,7 +224,7 @@ describe("zynk-protocol", () => {
       await program.methods
         .replenish(orderId, new anchor.BN(pastTimestamp), paybackAmount)
         .accounts({
-          config: config.publicKey,
+          config: configPDA,
           orderTracker: orderTracker.publicKey,
           depositWallet: partnerDepositWallet.publicKey,
           depositTokenAccount: partnerDepositTokenAccount,
@@ -231,10 +235,12 @@ describe("zynk-protocol", () => {
         .rpc();
       assert.fail("Expected replenish to fail with past timestamp");
     } catch (error) {
+      // Anchor error codes are returned in a specific format
+      // Either match on the error number or a more generic portion of the message
       assert.include(
         error.message,
-        "ValidityMustBeFuture",
-        "Expected ValidityMustBeFuture error"
+        "Validity must be in future",
+        "Expected 'Validity must be in future' error"
       );
     }
   });
@@ -247,7 +253,7 @@ describe("zynk-protocol", () => {
       await program.methods
         .replenish(orderId, new anchor.BN(validity), new anchor.BN(0))
         .accounts({
-          config: config.publicKey,
+          config: configPDA,
           orderTracker: orderTracker.publicKey,
           depositWallet: partnerDepositWallet.publicKey,
           depositTokenAccount: partnerDepositTokenAccount,
@@ -283,7 +289,7 @@ describe("zynk-protocol", () => {
     await program.methods
       .replenish(orderId, new anchor.BN(validity), paybackAmount)
       .accounts({
-        config: config.publicKey,
+        config: configPDA,
         orderTracker: orderTracker.publicKey,
         depositWallet: partnerDepositWallet.publicKey,
         depositTokenAccount: partnerDepositTokenAccount,
@@ -294,8 +300,9 @@ describe("zynk-protocol", () => {
       .rpc();
 
     // Verify token transfer to payback wallet (increased by 50 tokens)
-    const paybackBalance =
-      await provider.connection.getTokenAccountBalance(paybackTokenAccount);
+    const paybackBalance = await provider.connection.getTokenAccountBalance(
+      paybackTokenAccount
+    );
     assert.equal(
       paybackBalance.value.amount,
       "150000000000",
@@ -338,7 +345,7 @@ describe("zynk-protocol", () => {
           new anchor.BN(1000000)
         )
         .accounts({
-          config: config.publicKey,
+          config: configPDA,
           orderTracker: orderTracker.publicKey,
           depositWallet: wrongSigner.publicKey,
           depositTokenAccount: partnerDepositTokenAccount,
@@ -362,7 +369,7 @@ describe("zynk-protocol", () => {
     await program.methods
       .closeOrder(orderId)
       .accounts({
-        config: config.publicKey,
+        config: configPDA,
         admin: admin.publicKey,
         orderTracker: orderTracker.publicKey,
         systemProgram: anchor.web3.SystemProgram.programId,
@@ -395,7 +402,7 @@ describe("zynk-protocol", () => {
         partnerDepositWallet.publicKey
       )
       .accounts({
-        config: config.publicKey,
+        config: configPDA,
         zynkOpWallet: zynkOpWallet.publicKey,
         sourceTokenAccount: zynkOpTokenAccount,
         partnerOperationalWallet: partnerOperationalTokenAccount,
@@ -418,7 +425,7 @@ describe("zynk-protocol", () => {
       await program.methods
         .closeOrder(orderId)
         .accounts({
-          config: config.publicKey,
+          config: configPDA,
           admin: nonAdmin.publicKey,
           orderTracker: newOrderTracker.publicKey,
           systemProgram: SystemProgram.programId,
@@ -441,7 +448,7 @@ describe("zynk-protocol", () => {
       await program.methods
         .closeOrder(orderId)
         .accounts({
-          config: config.publicKey,
+          config: configPDA,
           admin: admin.publicKey,
           orderTracker: orderTracker.publicKey,
           systemProgram: anchor.web3.SystemProgram.programId,
@@ -468,7 +475,7 @@ describe("zynk-protocol", () => {
           new anchor.BN(1000000)
         )
         .accounts({
-          config: config.publicKey,
+          config: configPDA,
           orderTracker: orderTracker.publicKey,
           depositWallet: partnerDepositWallet.publicKey,
           depositTokenAccount: partnerDepositTokenAccount,
@@ -499,7 +506,7 @@ describe("zynk-protocol", () => {
         partnerDepositWallet.publicKey
       )
       .accounts({
-        config: config.publicKey,
+        config: configPDA,
         zynkOpWallet: zynkOpWallet.publicKey,
         sourceTokenAccount: zynkOpTokenAccount,
         partnerOperationalWallet: partnerOperationalTokenAccount,
@@ -527,7 +534,7 @@ describe("zynk-protocol", () => {
         new anchor.BN(currentBalance.value.amount)
       )
       .accounts({
-        config: config.publicKey,
+        config: configPDA,
         orderTracker: newOrderTracker.publicKey,
         depositWallet: partnerDepositWallet.publicKey,
         depositTokenAccount: partnerDepositTokenAccount,
@@ -546,7 +553,7 @@ describe("zynk-protocol", () => {
           new anchor.BN(1000000)
         )
         .accounts({
-          config: config.publicKey,
+          config: configPDA,
           orderTracker: newOrderTracker.publicKey,
           depositWallet: partnerDepositWallet.publicKey,
           depositTokenAccount: partnerDepositTokenAccount,
