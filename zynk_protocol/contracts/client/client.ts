@@ -8,6 +8,16 @@ anchor.setProvider(anchor.AnchorProvider.env());
 const program = anchor.workspace.ZynkProtocol as anchor.Program<ZynkProtocol>;
 
 // Client
-console.log("My address:", program.provider.publicKey.toString());
-const balance = await program.provider.connection.getBalance(program.provider.publicKey);
-console.log(`My balance: ${balance / web3.LAMPORTS_PER_SOL} SOL`);
+async function main() {
+  console.log("My address:", program.provider.publicKey.toString());
+  const balance = await program.provider.connection.getBalance(program.provider.publicKey);
+  console.log(`My balance: ${balance / web3.LAMPORTS_PER_SOL} SOL`);
+}
+
+main().then(
+  () => process.exit(0),
+  (error) => {
+    console.error(error);
+    process.exit(1);
+  }
+);
