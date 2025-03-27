@@ -66,6 +66,8 @@ pub struct ReplenishClosure {
 pub enum CustomError {
     #[msg("Unauthorized sender")]
     UnauthorizedSender,
+    #[msg("Invalid address: cannot use null address")]
+    InvalidAddress,
     #[msg("Contract is paused")]
     ContractPaused,
     #[msg("Nonce overflow")]
@@ -232,11 +234,20 @@ pub mod zynk_protocol {
         Ok(())
     }
 
+    /// Helper function to validate an address is not the null address
+    fn validate_address(address: &Pubkey) -> Result<()> {
+        if address == &Pubkey::default() {
+            return Err(error!(CustomError::InvalidAddress));
+        }
+        Ok(())
+    }
+
     /// Updates the zynk_op_wallet (operator) address. Only callable by admin.
     pub fn update_zynk_op_wallet(
         ctx: Context<UpdateConfigAddress>,
         new_zynk_op_wallet: Pubkey,
     ) -> Result<()> {
+        Self::validate_address(&new_zynk_op_wallet)?;
         ctx.accounts.config.zynk_op_wallet = new_zynk_op_wallet;
         Ok(())
     }
@@ -246,12 +257,14 @@ pub mod zynk_protocol {
         ctx: Context<UpdateConfigAddress>,
         new_payback_wallet: Pubkey,
     ) -> Result<()> {
+        Self::validate_address(&new_payback_wallet)?;
         ctx.accounts.config.payback_wallet = new_payback_wallet;
         Ok(())
     }
 
     /// Transfers admin rights to a new admin address. Only callable by the current admin.
     pub fn transfer_admin(ctx: Context<UpdateConfigAddress>, new_admin: Pubkey) -> Result<()> {
+        Self::validate_address(&new_admin)?;
         ctx.accounts.config.admin = new_admin;
         Ok(())
     }
