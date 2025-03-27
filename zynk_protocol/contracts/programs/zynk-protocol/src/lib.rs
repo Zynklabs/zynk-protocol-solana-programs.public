@@ -278,11 +278,16 @@ pub mod zynk_protocol {
 }
 
 #[derive(Accounts)]
+/// Seed for the global config PDA
+pub const CONFIG_SEED: &[u8] = b"config";
+
 pub struct Initialize<'info> {
     #[account(
         init,
         payer = admin,
-        space = Config::LEN
+        space = Config::LEN,
+        seeds = [CONFIG_SEED],
+        bump
     )]
     pub config: Account<'info, Config>,
     #[account(mut)]
@@ -292,7 +297,11 @@ pub struct Initialize<'info> {
 
 #[derive(Accounts)]
 pub struct SendTokens<'info> {
-    #[account(mut)]
+    #[account(
+        mut,
+        seeds = [CONFIG_SEED],
+        bump
+    )]
     pub config: Account<'info, Config>,
     #[account(
         mut,
@@ -322,7 +331,11 @@ pub struct SendTokens<'info> {
 
 #[derive(Accounts)]
 pub struct ReplenishTokens<'info> {
-    #[account(mut)]
+    #[account(
+        mut,
+        seeds = [CONFIG_SEED],
+        bump
+    )]
     pub config: Account<'info, Config>,
     #[account(
         mut,
@@ -348,6 +361,8 @@ pub struct ReplenishTokens<'info> {
 pub struct UpdateConfigAddress<'info> {
     #[account(
         mut,
+        seeds = [CONFIG_SEED],
+        bump,
         has_one = admin @ CustomError::UnauthorizedAdmin
     )]
     pub config: Account<'info, Config>,
@@ -358,6 +373,8 @@ pub struct UpdateConfigAddress<'info> {
 pub struct CloseOrder<'info> {
     #[account(
         mut,
+        seeds = [CONFIG_SEED],
+        bump,
         has_one = admin @ CustomError::UnauthorizedAdmin
     )]
     pub config: Account<'info, Config>,
