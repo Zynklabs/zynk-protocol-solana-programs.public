@@ -5,6 +5,7 @@ import {
   LAMPORTS_PER_SOL,
   SystemProgram,
   PublicKey,
+  Transaction,
 } from "@solana/web3.js";
 import {
   createMint,
@@ -22,7 +23,7 @@ import path from "path";
 config();
 
 // Import the IDL
-import { IDL } from "./idl";
+import { IDL } from "./idl.js";
 
 // Import utility functions
 import { createKeypairFromEnv, getProgramId } from "./utils";
@@ -68,11 +69,6 @@ export async function deploy(): Promise<DeployResult> {
       "payback-wallet"
     );
 
-    const configAccount = createKeypairFromEnv(
-      "CONFIG_ACCOUNT_PRIVATE_KEY",
-      "config-account"
-    );
-
     const partnerOperationalWallet = createKeypairFromEnv(
       "PARTNER_OPERATIONAL_WALLET_PRIVATE_KEY",
       "partner-op-wallet"
@@ -86,11 +82,19 @@ export async function deploy(): Promise<DeployResult> {
     // Display all wallet information in a table
     console.table([
       { Name: "Admin wallet", Address: adminWallet.publicKey.toString() },
-      { Name: "Zynk operator wallet", Address: zynkOpWallet.publicKey.toString() },
+      {
+        Name: "Zynk operator wallet",
+        Address: zynkOpWallet.publicKey.toString(),
+      },
       { Name: "Payback wallet", Address: paybackWallet.publicKey.toString() },
-      { Name: "Config account", Address: configAccount.publicKey.toString() },
-      { Name: "Partner Operational Wallet", Address: partnerOperationalWallet.publicKey.toString() },
-      { Name: "Partner Deposit Wallet", Address: partnerDepositWallet.publicKey.toString() }
+      {
+        Name: "Partner Operational Wallet",
+        Address: partnerOperationalWallet.publicKey.toString(),
+      },
+      {
+        Name: "Partner Deposit Wallet",
+        Address: partnerDepositWallet.publicKey.toString(),
+      },
     ]);
 
     // Initialize provider with admin wallet
@@ -145,19 +149,43 @@ export async function deploy(): Promise<DeployResult> {
 
     const program = new Program(IDL as any, programId, provider);
 
+    // Find PDA for config account
+    const [configPda, configBump] = PublicKey.findProgramAddressSync(
+      [Buffer.from("config")],
+      programId
+    );
+    console.log("Config PDA:", configPda.toString());
+    console.log("Config Bump:", configBump);
+
     // Initialize protocol
     console.log("\nInitializing protocol...");
-    await program.methods
-      .initialize(zynkOpWallet.publicKey, paybackWallet.publicKey)
-      .accounts({
-        config: configAccount.publicKey,
-        admin: adminWallet.publicKey,
-        systemProgram: SystemProgram.programId,
-      })
-      .signers([configAccount, adminWallet])
-      .rpc();
+    try {
+      await program.methods
+        .initialize(zynkOpWallet.publicKey, paybackWallet.publicKey)
+        .accounts({
+          config: configPda,
+          admin: adminWallet.publicKey,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([adminWallet])
+        .instruction()
+        .then((instruction) => {
+          // To properly initialize a PDA, we need to tell Anchor about the seeds and bump
+          // so it can sign on behalf of the program
+          instruction.keys.find((key) =>
+            key.pubkey.equals(configPda)
+          )!.isSigner = false;
 
-    console.log("Protocol initialized successfully!");
+          // Create and send transaction
+          const transaction = new Transaction().add(instruction);
+          return provider.sendAndConfirm(transaction, [adminWallet]);
+        });
+
+      console.log("Protocol initialized successfully!");
+    } catch (error: any) {
+      console.error("Error in initialization:", error);
+      throw new Error(`Error in initialization: ${error.message}`);
+    }
 
     // Create test token
     console.log("\nCreating test token...");
@@ -208,7 +236,7 @@ export async function deploy(): Promise<DeployResult> {
 
     // Fetch the config account to confirm it has the correct zynkOpWallet
     const configData = (await program.account.config.fetch(
-      configAccount.publicKey
+      configPda
     )) as ConfigAccount;
     console.log("\nConfig Data:");
     console.log("Admin:", configData.admin.toString());
@@ -232,7 +260,7 @@ export async function deploy(): Promise<DeployResult> {
       adminWallet: adminWallet.publicKey.toString(),
       zynkOpWallet: zynkOpWallet.publicKey.toString(),
       paybackWallet: paybackWallet.publicKey.toString(),
-      configAccount: configAccount.publicKey.toString(),
+      configAccount: configPda.toString(),
       partnerOperationalWallet: partnerOperationalWallet.publicKey.toString(),
       partnerDepositWallet: partnerDepositWallet.publicKey.toString(),
       tokenMint: tokenMint.toString(),

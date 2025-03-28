@@ -7,7 +7,7 @@ import {
   TOKEN_PROGRAM_ID,
   getOrCreateAssociatedTokenAccount,
   createMintToInstruction,
-} from "@solana/spl-token";
+} from "@solana/spl-token"; 
 import BN from "bn.js";
 import { IDL } from "./idl.js";
 import path from "path";
@@ -79,9 +79,6 @@ async function sendTokens(params: {
   const programId = new PublicKey(deploymentData.programId);
   const program = new Program(IDL as any, programId, provider);
 
-  // Config account
-  const configAccount = new PublicKey(deploymentData.configAccount);
-
   console.table([
     { Parameter: "Token Mint", Value: tokenMint.toString() },
     { Parameter: "Amount", Value: amount.toString() },
@@ -115,11 +112,18 @@ async function sendTokens(params: {
   // Create a new order tracker account
   const orderTracker = Keypair.generate();
 
+  // Find the PDA for the config account
+  const [configPda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("config")],
+    program.programId
+  );
+  console.log("Using config PDA:", configPda.toString());
+
   // Convert amount to BN for the program
   const amountBN = new BN(amount.toString());
 
   console.table([
-    { Account: "Config", Address: configAccount.toString() },
+    { Account: "Config", Address: configPda.toString() },
     { Account: "Zynk Op Wallet", Address: zynkOpWallet.publicKey.toString() },
     {
       Account: "Source Token Account",
@@ -138,7 +142,7 @@ async function sendTokens(params: {
     const tx = await program.methods
       .send(tokenMint, amountBN, partnerDepositWallet)
       .accounts({
-        config: configAccount,
+        config: configPda,
         zynkOpWallet: zynkOpWallet.publicKey,
         sourceTokenAccount: sourceTokenAccount.address,
         partnerOperationalWallet: partnerOperationalTokenAccount.address,
@@ -259,8 +263,12 @@ async function replenish(params: {
   const programId = new PublicKey(deploymentData.programId);
   const program = new Program(IDL as any, programId, provider);
 
-  // Config account
-  const configAccount = new PublicKey(deploymentData.configAccount);
+  // Find the PDA for the config account
+  const [configPda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("config")],
+    programId
+  );
+  console.log("Using config PDA:", configPda.toString());
 
   // Token mint
   const tokenMint = new PublicKey(deploymentData.tokenMint);
@@ -295,7 +303,7 @@ async function replenish(params: {
   ]);
 
   console.table([
-    { Account: "Config", Address: configAccount.toString() },
+    { Account: "Config", Address: configPda.toString() },
     {
       Account: "Deposit Token Account",
       Address: depositTokenAccount.address.toString(),
@@ -318,7 +326,7 @@ async function replenish(params: {
         paybackAmountBN // payback_amount: u64
       )
       .accounts({
-        config: configAccount,
+        config: configPda,
         depositTokenAccount: depositTokenAccount.address,
         paybackTokenAccount: paybackTokenAccount.address,
         tokenProgram: TOKEN_PROGRAM_ID,
@@ -407,13 +415,18 @@ async function closeOrders(params: {
   const programId = new PublicKey(deploymentData.programId);
   const program = new Program(IDL as any, programId, provider);
 
-  // Config account
-  const configAccount = new PublicKey(deploymentData.configAccount);
+  // Find the PDA for the config account
+  const [configPda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("config")],
+    programId
+  );
+  console.log("Using config PDA:", configPda.toString());
 
   console.table([
     { Parameter: "Order ID", Value: orderId.toString() },
-    { Parameter: "Admin Wallet", Value: adminWallet.publicKey.toString() },
+    { Parameter: "Config", Value: configPda.toString() },
     { Parameter: "Order Tracker", Value: orderTracker.toString() },
+    { Parameter: "Admin Wallet", Value: adminWallet.publicKey.toString() },
   ]);
 
   try {
@@ -421,7 +434,7 @@ async function closeOrders(params: {
     const tx = await program.methods
       .closeOrder(new BN(orderId))
       .accounts({
-        config: configAccount,
+        config: configPda,
         admin: adminWallet.publicKey,
         orderTracker: orderTracker,
         systemProgram: anchor.web3.SystemProgram.programId,
