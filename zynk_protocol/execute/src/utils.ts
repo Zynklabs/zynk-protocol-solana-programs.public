@@ -12,6 +12,7 @@ import { resolve } from "path";
 import { readFileSync } from "fs";
 import { dirname } from "path";
 import { fileURLToPath } from "url";
+import bs58 from "bs58";
 
 // Get current file path in ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -19,6 +20,7 @@ const __dirname = dirname(__filename);
 
 /**
  * Creates a keypair from a private key stored in environment variables.
+ * Supports both base58 encoded strings and JSON array formats.
  * Falls back to deterministic keypair generation if the private key is not found or invalid.
  *
  * @param envVar - The name of the environment variable containing the private key
@@ -34,8 +36,21 @@ export function createKeypairFromEnv(
   // If private key is provided, use it
   if (privateKeyStr) {
     try {
-      const privateKeyArray = JSON.parse(privateKeyStr);
-      return Keypair.fromSecretKey(Uint8Array.from(privateKeyArray));
+      // First try to parse as JSON array
+      try {
+        const privateKeyArray = JSON.parse(privateKeyStr);
+        return Keypair.fromSecretKey(Uint8Array.from(privateKeyArray));
+      } catch (jsonError) {
+        // If JSON parsing fails, try as base58 encoded string
+        try {
+          const privateKeyBytes = bs58.decode(privateKeyStr);
+          return Keypair.fromSecretKey(privateKeyBytes);
+        } catch (bs58Error) {
+          throw new Error(
+            "Failed to parse private key in both JSON and base58 formats"
+          );
+        }
+      }
     } catch (error: unknown) {
       const errorMessage =
         error instanceof Error

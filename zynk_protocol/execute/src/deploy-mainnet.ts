@@ -12,6 +12,7 @@ import { fileURLToPath } from "url";
 import { dirname } from "path";
 import { config } from "dotenv";
 import path from "path";
+import bs58 from "bs58";
 
 // Load environment variables
 config();
@@ -48,11 +49,32 @@ export async function deployMainnet(): Promise<DeployResult> {
 
     // Get zynkOpWallet and paybackWallet public keys from environment variables
     // For these wallets, we only need the public keys, not the private keys
+    if (!process.env.ZYNK_OP_WALLET_PUBLIC_KEY) {
+      throw new Error(
+        "ZYNK_OP_WALLET_PUBLIC_KEY is not defined in environment variables"
+      );
+    }
+
+    if (!process.env.PAYBACK_WALLET_PUBLIC_KEY) {
+      throw new Error(
+        "PAYBACK_WALLET_PUBLIC_KEY is not defined in environment variables"
+      );
+    }
+
+    console.log(
+      "Attempting to create PublicKey from ZYNK_OP_WALLET_PUBLIC_KEY:",
+      process.env.ZYNK_OP_WALLET_PUBLIC_KEY
+    );
     const zynkOpWalletPubkey = new PublicKey(
-      process.env.ZYNK_OP_WALLET_PUBLIC_KEY || ""
+      process.env.ZYNK_OP_WALLET_PUBLIC_KEY
+    );
+
+    console.log(
+      "Attempting to create PublicKey from PAYBACK_WALLET_PUBLIC_KEY:",
+      process.env.PAYBACK_WALLET_PUBLIC_KEY
     );
     const paybackWalletPubkey = new PublicKey(
-      process.env.PAYBACK_WALLET_PUBLIC_KEY || ""
+      process.env.PAYBACK_WALLET_PUBLIC_KEY
     );
 
     console.log("Zynk operator wallet:", zynkOpWalletPubkey.toString());
