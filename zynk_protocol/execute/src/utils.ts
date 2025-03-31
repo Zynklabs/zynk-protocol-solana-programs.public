@@ -128,8 +128,18 @@ export async function transferSol(
   return signature;
 }
 
-// Function to get program ID from keypair file
+// Function to get program ID from keypair file or environment variable
 export function getProgramId(): PublicKey {
+  // First try to get program ID from environment variable
+  if (process.env.PROGRAM_ID) {
+    try {
+      return new PublicKey(process.env.PROGRAM_ID);
+    } catch (error) {
+      console.warn("Invalid PROGRAM_ID in environment variables, falling back to keypair file.");
+    }
+  }
+
+  // Fall back to reading from keypair file
   try {
     const programKeypairPath = resolve(
       __dirname,
