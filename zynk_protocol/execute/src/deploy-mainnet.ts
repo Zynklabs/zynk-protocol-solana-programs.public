@@ -5,14 +5,19 @@ import {
   SystemProgram,
   PublicKey,
   Transaction,
+  Keypair,
+  sendAndConfirmTransaction,
+  BpfLoader,
+  BPF_LOADER_PROGRAM_ID,
 } from "@solana/web3.js";
-import { writeFileSync } from "fs";
+import { writeFileSync, readFileSync, existsSync } from "fs";
 import BN from "bn.js";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
 import { config } from "dotenv";
 import path from "path";
 import bs58 from "bs58";
+import { execSync } from "child_process";
 
 // Load environment variables
 config();
@@ -21,7 +26,7 @@ config();
 import { IDL } from "./idl.js";
 
 // Import utility functions
-import { createKeypairFromEnv, getProgramId } from "./utils.js";
+import { createKeypairFromEnv } from "./utils.js";
 
 // Get current file path in ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -93,8 +98,89 @@ export async function deployMainnet(): Promise<DeployResult> {
     });
     anchor.setProvider(provider);
 
-    // Get program ID
-    const programId = getProgramId();
+    // Deploy the program
+    let programId: PublicKey;
+    console.log("\nDeploying program to blockchain...");
+
+    // Check if the program binary exists
+    const programPath = path.resolve(
+      __dirname,
+      "../../contracts/target/deploy/zynk_protocol.so"
+    );
+
+    if (!existsSync(programPath)) {
+      console.log("Program binary not found. Building program...");
+      try {
+        // Build the program using Solana CLI
+        const buildOutput = execSync("cd ../../contracts && cargo build-bpf", {
+          encoding: "utf8",
+        });
+        console.log(buildOutput);
+      } catch (error) {
+        console.error("Error building program:", error);
+        throw new Error(
+          "Failed to build program. Make sure Solana CLI tools are installed."
+        );
+      }
+    }
+
+    // Load the program binary
+    const programData = readFileSync(programPath);
+    console.log(`Program size: ${programData.length} bytes`);
+
+    // Create a new keypair for the program or use existing one
+    let programKeypair: Keypair;
+    const programKeypairPath = path.resolve(
+      __dirname,
+      "../../contracts/target/deploy/zynk_protocol-keypair.json"
+    );
+
+    if (existsSync(programKeypairPath)) {
+      console.log("Using existing program keypair");
+      const programKeypairData = JSON.parse(
+        readFileSync(programKeypairPath, "utf-8")
+      );
+      programKeypair = Keypair.fromSecretKey(
+        new Uint8Array(programKeypairData)
+      );
+    } else {
+      console.log("Creating new program keypair");
+      programKeypair = Keypair.generate();
+      writeFileSync(
+        programKeypairPath,
+        JSON.stringify(Array.from(programKeypair.secretKey))
+      );
+    }
+
+    programId = programKeypair.publicKey;
+    console.log("Program ID:", programId.toString());
+
+    // Check if program already exists
+    try {
+      const programInfo = await connection.getAccountInfo(programId);
+      if (programInfo) {
+        console.log("Program already deployed. Skipping deployment.");
+      } else {
+        console.log("Deploying program...");
+
+        // For simplicity, we'll use Solana CLI to deploy
+        // This is more reliable than using BpfLoader in code
+        try {
+          const deployCommand = `cd ../../contracts && solana program deploy --keypair ${programKeypairPath} --program-id ${programKeypairPath} target/deploy/zynk_protocol.so --url ${rpcUrl}`;
+          console.log(`Running: ${deployCommand}`);
+
+          const deployOutput = execSync(deployCommand, { encoding: "utf8" });
+          console.log(deployOutput);
+        } catch (error) {
+          console.error("Error deploying program:", error);
+          throw new Error("Failed to deploy program using Solana CLI.");
+        }
+      }
+    } catch (error) {
+      console.error("Error checking program account:", error);
+      throw error;
+    }
+
     console.log("\nProgram ID:", programId.toString());
 
     // Define the program with proper types
