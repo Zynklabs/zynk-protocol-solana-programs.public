@@ -135,7 +135,9 @@ export function getProgramId(): PublicKey {
     try {
       return new PublicKey(process.env.PROGRAM_ID);
     } catch (error) {
-      console.warn("Invalid PROGRAM_ID in environment variables, falling back to keypair file.");
+      console.warn(
+        "Invalid PROGRAM_ID in environment variables, falling back to keypair file."
+      );
     }
   }
 

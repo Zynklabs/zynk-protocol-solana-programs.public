@@ -1,0 +1,1 @@
+/Users/rajesh/Documents/playarea/zynk/solana/zynk_protocol/contracts/target/sbf-solana-solana/release/zynk_protocol.so: /Users/rajesh/Documents/playarea/zynk/solana/zynk_protocol/contracts/programs/zynk-protocol/src/lib.rs
