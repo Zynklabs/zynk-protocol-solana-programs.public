@@ -11,7 +11,8 @@
     "airdrop:local": "tsx src/airdrop.ts --wallet ~/.config/solana/id.json --amount 0.1 --rpc http://localhost:8899",
     "airdrop:devnet": "tsx src/airdrop.ts --wallet ~/.config/solana/id.json --amount 0.1 --rpc https://api.devnet.solana.com",
     "deploy": "node --loader ts-node/esm src/deploy.ts",
-    "deploy:mainnet": "node --loader ts-node/esm src/deploy-mainnet.ts"
+    "deploy:mainnet": "node --loader ts-node/esm src/deploy-mainnet.ts",
+    "initialize": "node --loader ts-node/esm src/initialize-protocol.ts"
   },
   "dependencies": {
     "@project-serum/anchor": "^0.26.0",

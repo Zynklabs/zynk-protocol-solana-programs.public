@@ -5,15 +5,13 @@ import {
   SystemProgram,
   PublicKey,
   Transaction,
-  Keypair,
 } from "@solana/web3.js";
-import { writeFileSync, readFileSync, existsSync } from "fs";
+import { writeFileSync } from "fs";
 import BN from "bn.js";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
 import { config } from "dotenv";
 import path from "path";
-import { execSync } from "child_process";
 
 // Load environment variables
 config();
@@ -29,7 +27,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // Type definitions
-interface DeployResult {
+interface InitializeResult {
   programId: string;
   adminWallet: string;
   zynkOpWallet: string;
@@ -37,9 +35,14 @@ interface DeployResult {
   configAccount: string;
 }
 
-// Main deployment function for mainnet
-export async function deployMainnet(): Promise<DeployResult> {
+// Main initialization function
+export async function initializeProtocol(): Promise<InitializeResult> {
   try {
+    // Check if PROGRAM_ID is provided
+    if (!process.env.PROGRAM_ID) {
+      throw new Error("PROGRAM_ID environment variable is required");
+    }
+
     // Create admin wallet from private key in .env file
     console.log("Loading admin wallet from environment variables...");
     const adminWallet = createKeypairFromEnv(
@@ -49,7 +52,6 @@ export async function deployMainnet(): Promise<DeployResult> {
     console.log("Admin wallet:", adminWallet.publicKey.toString());
 
     // Get zynkOpWallet and paybackWallet public keys from environment variables
-    // For these wallets, we only need the public keys, not the private keys
     if (!process.env.ZYNK_OP_WALLET_PUBLIC_KEY) {
       throw new Error(
         "ZYNK_OP_WALLET_PUBLIC_KEY is not defined in environment variables"
@@ -63,23 +65,17 @@ export async function deployMainnet(): Promise<DeployResult> {
     }
 
     console.log(
-      "Attempting to create PublicKey from ZYNK_OP_WALLET_PUBLIC_KEY:",
+      "Using Zynk operator wallet:",
       process.env.ZYNK_OP_WALLET_PUBLIC_KEY
     );
     const zynkOpWalletPubkey = new PublicKey(
       process.env.ZYNK_OP_WALLET_PUBLIC_KEY
     );
 
-    console.log(
-      "Attempting to create PublicKey from PAYBACK_WALLET_PUBLIC_KEY:",
-      process.env.PAYBACK_WALLET_PUBLIC_KEY
-    );
+    console.log("Using Payback wallet:", process.env.PAYBACK_WALLET_PUBLIC_KEY);
     const paybackWalletPubkey = new PublicKey(
       process.env.PAYBACK_WALLET_PUBLIC_KEY
     );
-
-    console.log("Zynk operator wallet:", zynkOpWalletPubkey.toString());
-    console.log("Payback wallet:", paybackWalletPubkey.toString());
 
     // Initialize provider with admin wallet
     const wallet = new anchor.Wallet(adminWallet);
@@ -94,89 +90,8 @@ export async function deployMainnet(): Promise<DeployResult> {
     });
     anchor.setProvider(provider);
 
-    // Deploy the program
-    let programId: PublicKey;
-    console.log("\nDeploying program to blockchain...");
-
-    // Check if the program binary exists
-    const programPath = path.resolve(
-      __dirname,
-      "../../contracts/target/deploy/zynk_protocol.so"
-    );
-
-    if (!existsSync(programPath)) {
-      console.log("Program binary not found. Building program...");
-      try {
-        // Build the program using Solana CLI
-        const buildOutput = execSync("cd ../../contracts && cargo build-bpf", {
-          encoding: "utf8",
-        });
-        console.log(buildOutput);
-      } catch (error) {
-        console.error("Error building program:", error);
-        throw new Error(
-          "Failed to build program. Make sure Solana CLI tools are installed."
-        );
-      }
-    }
-
-    // Load the program binary
-    const programData = readFileSync(programPath);
-    console.log(`Program size: ${programData.length} bytes`);
-
-    // Create a new keypair for the program or use existing one
-    let programKeypair: Keypair;
-    const programKeypairPath = path.resolve(
-      __dirname,
-      "../../contracts/target/deploy/zynk_protocol-keypair.json"
-    );
-
-    if (existsSync(programKeypairPath)) {
-      console.log("Using existing program keypair");
-      const programKeypairData = JSON.parse(
-        readFileSync(programKeypairPath, "utf-8")
-      );
-      programKeypair = Keypair.fromSecretKey(
-        new Uint8Array(programKeypairData)
-      );
-    } else {
-      console.log("Creating new program keypair");
-      programKeypair = Keypair.generate();
-      writeFileSync(
-        programKeypairPath,
-        JSON.stringify(Array.from(programKeypair.secretKey))
-      );
-    }
-
-    programId = programKeypair.publicKey;
-    console.log("Program ID:", programId.toString());
-
-    // Check if program already exists
-    try {
-      const programInfo = await connection.getAccountInfo(programId);
-      if (programInfo) {
-        console.log("Program already deployed. Skipping deployment.");
-      } else {
-        console.log("Deploying program...");
-
-        // For simplicity, we'll use Solana CLI to deploy
-        // This is more reliable than using BpfLoader in code
-        try {
-          const deployCommand = `cd ../../contracts && solana program deploy --keypair ${programKeypairPath} --program-id ${programKeypairPath} target/deploy/zynk_protocol.so --url ${rpcUrl}`;
-          console.log(`Running: ${deployCommand}`);
-
-          const deployOutput = execSync(deployCommand, { encoding: "utf8" });
-          console.log(deployOutput);
-        } catch (error) {
-          console.error("Error deploying program:", error);
-          throw new Error("Failed to deploy program using Solana CLI.");
-        }
-      }
-    } catch (error) {
-      console.error("Error checking program account:", error);
-      throw error;
-    }
-
+    // Get program ID from environment
+    const programId = new PublicKey(process.env.PROGRAM_ID);
     console.log("\nProgram ID:", programId.toString());
 
     // Define the program with proper types
@@ -249,7 +164,7 @@ export async function deployMainnet(): Promise<DeployResult> {
     }
 
     // Create result object
-    const deployResult: DeployResult = {
+    const initializeResult: InitializeResult = {
       programId: programId.toString(),
       adminWallet: adminWallet.publicKey.toString(),
       zynkOpWallet: zynkOpWalletPubkey.toString(),
@@ -257,35 +172,35 @@ export async function deployMainnet(): Promise<DeployResult> {
       configAccount: configPda.toString(),
     };
 
-    // Save deployment result to JSON file
+    // Save initialization result to JSON file
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const deploymentPath = path.resolve(
+    const resultPath = path.resolve(
       __dirname,
-      `../deployment-mainnet-test-${timestamp}.json`
+      `../initialization-result-${timestamp}.json`
     );
-    writeFileSync(deploymentPath, JSON.stringify(deployResult, null, 2));
-    console.log(`\nDeployment data saved to ${deploymentPath}`);
+    writeFileSync(resultPath, JSON.stringify(initializeResult, null, 2));
+    console.log(`\nInitialization data saved to ${resultPath}`);
 
-    return deployResult;
+    return initializeResult;
   } catch (error) {
-    console.error("Error in mainnet deployment:", error);
+    console.error("Error in protocol initialization:", error);
     throw error;
   }
 }
 
-// Run deployment if this file is executed directly
+// Run initialization if this file is executed directly
 if (import.meta && import.meta.url && process.argv && process.argv[1]) {
   const url = new URL(import.meta.url);
   const filePath = fileURLToPath(url);
 
   if (filePath === process.argv[1]) {
-    deployMainnet()
+    initializeProtocol()
       .then(() => {
-        console.log("Mainnet deployment completed successfully!");
+        console.log("Protocol initialization completed successfully!");
         process.exit(0);
       })
       .catch((error) => {
-        console.error("Mainnet deployment failed:", error);
+        console.error("Protocol initialization failed:", error);
         process.exit(1);
       });
   }

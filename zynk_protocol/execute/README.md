@@ -136,3 +136,10 @@ If a private key is not provided in the `.env` file or cannot be parsed, the app
 ## Security Note
 
 Never commit your private keys or sensitive information to version control. Always use environment variables for sensitive data.
+
+## Deploy via IDE:
+
+1. Launch https://beta.solpg.io and copy the smart contract code to it.
+2. Build and Deploy Contract
+3. In Build & Deploy Tab, Select IDL and Initialize it
+4. Copy client.ts script to it and update the details and run it
