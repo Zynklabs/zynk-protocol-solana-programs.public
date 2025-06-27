@@ -195,8 +195,17 @@ describe("zynk-protocol", () => {
   });
 
   it("Sends tokens from zynkOpWallet to partner_operational_wallet", async () => {
-    const amount = new anchor.BN(100000000000); // 100 token
+    const amount = new anchor.BN(100000000000);
     orderTracker = Keypair.generate();
+
+    const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
+      zynkOpTokenAccount
+    );
+    expect(+sourceBalance_preTx.value.amount).to.be.gte(+amount);
+
+    const destBalance_preTx = await provider.connection.getTokenAccountBalance(
+      partnerOperationalTokenAccount
+    );
 
     await program.methods
       .send(
@@ -216,11 +225,17 @@ describe("zynk-protocol", () => {
       .signers([orderTracker, zynkOpWallet])
       .rpc();
 
+    // Verify token pull
+    const sourceBalance_postTx = await provider.connection.getTokenAccountBalance(
+      zynkOpTokenAccount
+    );
+    assert.equal(+sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount, +amount)
+    
     // Verify token transfer
-    const destBalance = await provider.connection.getTokenAccountBalance(
+    const destBalance_postTx = await provider.connection.getTokenAccountBalance(
       partnerOperationalTokenAccount
     );
-    assert.equal(destBalance.value.amount, "100000000000");
+    assert.equal(+destBalance_postTx.value.amount - +destBalance_preTx.value.amount, +amount)
 
     // Verify OrderTracker stores correct partner deposit wallet
     const orderTrackerAccount = await program.account.orderTracker.fetch(
@@ -236,9 +251,18 @@ describe("zynk-protocol", () => {
   });
 
   it("Replenishes tokens from partner_deposit_wallet to payback_wallet", async () => {
-    const paybackAmount = new anchor.BN(100000000000); // 100 token
+    const paybackAmount = new anchor.BN(100000000000);
     const now = Math.floor(Date.now() / 1000);
     const validity = now + 3600; // Valid for 1 hour
+
+    const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
+      partnerDepositTokenAccount
+    );
+    expect(+sourceBalance_preTx.value.amount).to.be.gte(+paybackAmount);
+
+    const destBalance_preTx = await provider.connection.getTokenAccountBalance(
+      paybackTokenAccount
+    );
 
     await program.methods
       .replenish(orderId, new anchor.BN(validity), paybackAmount)
@@ -253,17 +277,17 @@ describe("zynk-protocol", () => {
       .signers([partnerDepositWallet])
       .rpc();
 
-    // Verify token transfer to payback wallet
-    const paybackBalance = await provider.connection.getTokenAccountBalance(
-      paybackTokenAccount
+    // Verify token pull
+    const sourceBalance_postTx = await provider.connection.getTokenAccountBalance(
+      zynkOpTokenAccount
     );
-    assert.equal(paybackBalance.value.amount, "100000000000");
-
-    // Verify partner deposit wallet's balance was reduced
-    const depositBalance = await provider.connection.getTokenAccountBalance(
-      partnerDepositTokenAccount
+    assert.equal(+sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount, +paybackAmount)
+    
+    // Verify token transfer
+    const destBalance_postTx = await provider.connection.getTokenAccountBalance(
+      partnerOperationalTokenAccount
     );
-    assert.equal(depositBalance.value.amount, "9900000000000"); // Initial 10000 - 100 tokens
+    assert.equal(+destBalance_postTx.value.amount - +destBalance_preTx.value.amount, +paybackAmount)
 
     // Verify that orderTracker is still active
     const orderTrackerInfo = await provider.connection.getAccountInfo(
@@ -332,17 +356,18 @@ describe("zynk-protocol", () => {
   });
 
   it("Can replenish tokens multiple times before order is closed", async () => {
-    const paybackAmount = new anchor.BN(50000000000); // 50 token
+    const paybackAmount = new anchor.BN(50000000000);
     const now = Math.floor(Date.now() / 1000);
     const validity = now + 3600; // Valid for 1 hour
 
-    // Get initial balances
-    const initialPaybackBalance =
-      await provider.connection.getTokenAccountBalance(paybackTokenAccount);
-    const initialDepositBalance =
-      await provider.connection.getTokenAccountBalance(
-        partnerDepositTokenAccount
-      );
+    const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
+      partnerDepositTokenAccount
+    );
+    expect(+sourceBalance_preTx.value.amount).to.be.gte(+paybackAmount);
+
+    const destBalance_preTx = await provider.connection.getTokenAccountBalance(
+      paybackTokenAccount
+    );
 
     // Second replenish operation
     await program.methods
@@ -358,25 +383,17 @@ describe("zynk-protocol", () => {
       .signers([partnerDepositWallet])
       .rpc();
 
-    // Verify token transfer to payback wallet (increased by 50 tokens)
-    const paybackBalance = await provider.connection.getTokenAccountBalance(
-      paybackTokenAccount
-    );
-    assert.equal(
-      paybackBalance.value.amount,
-      "150000000000",
-      "Payback balance should increase by 50 tokens"
-    );
-
-    // Verify partner deposit wallet's balance was reduced by 50 tokens
-    const depositBalance = await provider.connection.getTokenAccountBalance(
+    // Verify token pull
+    const sourceBalance_postTx = await provider.connection.getTokenAccountBalance(
       partnerDepositTokenAccount
     );
-    assert.equal(
-      depositBalance.value.amount,
-      "9850000000000",
-      "Deposit balance should decrease by 50 tokens"
+    assert.equal(+sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount, +paybackAmount)
+    
+    // Verify token transfer
+    const destBalance_postTx = await provider.connection.getTokenAccountBalance(
+      paybackTokenAccount
     );
+    assert.equal(+destBalance_postTx.value.amount - +destBalance_preTx.value.amount, +paybackAmount)
 
     // Verify that orderTracker is still active
     const orderTrackerInfo = await provider.connection.getAccountInfo(
