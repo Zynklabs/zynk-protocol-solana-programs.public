@@ -29,12 +29,16 @@ impl Config {
 #[account]
 pub struct OrderTracker {
     pub order_id: u64,
+    pub amount_out: u64,
+    pub amount_in: u64,
     pub partner_deposit_wallet: Pubkey,
 }
 
 impl OrderTracker {
     pub const LEN: usize = 8  + // discriminator
         8  + // order_id (u64)
+        8  + // amount_out (u64)
+        8  + // amount_in (u64)
         32; // partner_deposit_wallet
 }
 
@@ -92,6 +96,8 @@ pub enum CustomError {
     ValidityMustBeFuture,
     #[msg("Amount must be positive")]
     AmountMustBePositive,
+    #[msg("Deployed amount must be replenished")]
+    DeficientOrder,
 }
 
 /// Helper function to validate an address is not the null address
@@ -170,6 +176,8 @@ pub mod zynk_protocol {
         let order_tracker = &mut ctx.accounts.order_tracker;
         order_tracker.order_id = nonce;
         order_tracker.partner_deposit_wallet = partner_deposit_wallet;
+        order_tracker.amount_out = amount;
+        order_tracker.amount_in = amount;
 
         emit!(PullAndSend {
             order_id: nonce,
@@ -221,6 +229,7 @@ pub mod zynk_protocol {
         let order_tracker = &mut ctx.accounts.order_tracker;
         order_tracker.order_id = nonce;
         order_tracker.partner_deposit_wallet = partner_deposit_wallet;
+        order_tracker.amount_out = amount;
 
         emit!(Send {
             order_id: nonce,
@@ -245,9 +254,11 @@ pub mod zynk_protocol {
         // Check if contract is paused.
         require!(!ctx.accounts.config.paused, CustomError::ContractPaused);
 
+        let order_tracker = &mut ctx.accounts.order_tracker;
+
         // Verify the order_id matches.
         require!(
-            ctx.accounts.order_tracker.order_id == order_id,
+            order_tracker.order_id == order_id,
             CustomError::InvalidOrderId
         );
 
@@ -260,7 +271,7 @@ pub mod zynk_protocol {
 
         // Verify that the deposit wallet is authorized by comparing it with the stored partner_deposit_wallet.
         require!(
-            ctx.accounts.deposit_wallet.key() == ctx.accounts.order_tracker.partner_deposit_wallet,
+            ctx.accounts.deposit_wallet.key() == order_tracker.partner_deposit_wallet,
             CustomError::UnauthorizedSender
         );
 
@@ -272,6 +283,8 @@ pub mod zynk_protocol {
         };
         let cpi_ctx = CpiContext::new(ctx.accounts.token_program.to_account_info(), cpi_accounts);
         token::transfer(cpi_ctx, payback_amount)?;
+
+        order_tracker.amount_in += payback_amount;
 
         emit!(Replenish {
             order_id,
@@ -291,6 +304,11 @@ pub mod zynk_protocol {
         require!(
             ctx.accounts.order_tracker.order_id == order_id,
             CustomError::InvalidOrderId
+        );
+
+        require!(
+            ctx.accounts.order_tracker.amount_in >= ctx.accounts.order_tracker.amount_out,
+            CustomError::DeficientOrder
         );
 
         emit!(ReplenishClosure {

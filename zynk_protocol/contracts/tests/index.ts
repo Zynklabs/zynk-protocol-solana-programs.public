@@ -250,6 +250,67 @@ describe("zynk-protocol", () => {
     assert.ok(orderId.toNumber() > 0);
   });
 
+  it("Should fail closing order with zero amount_in", async () => {
+    try {
+      await program.methods
+        .closeOrder(orderId)
+        .accounts({
+          config: configPDA,
+          admin: admin.publicKey,
+          orderTracker: orderTracker.publicKey,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([admin])
+        .rpc();
+      assert.fail("Expected close order to fail with zero amount_in");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "DeficientOrder",
+        "Expected DeficientOrder error"
+      );
+    }
+  });
+
+  it("Should fail closing order when amount_in is less than amount_out", async () => {
+    const paybackAmount = new anchor.BN(50000000000);
+    const now = Math.floor(Date.now() / 1000);
+    const validity = now + 3600;
+
+    await program.methods
+        .replenish(orderId, new anchor.BN(validity), paybackAmount)
+        .accounts({
+          config: configPDA,
+          orderTracker: orderTracker.publicKey,
+          depositWallet: partnerDepositWallet.publicKey,
+          depositTokenAccount: partnerDepositTokenAccount,
+          paybackTokenAccount: paybackTokenAccount,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([partnerDepositWallet])
+        .rpc();
+
+     try {
+      await program.methods
+        .closeOrder(orderId)
+        .accounts({
+          config: configPDA,
+          admin: admin.publicKey,
+          orderTracker: orderTracker.publicKey,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([admin])
+        .rpc();
+      assert.fail("Expected close order to fail when amount_in is less than amount_out");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "DeficientOrder",
+        "Expected DeficientOrder error"
+      );
+    }
+  });
+
   it("Replenishes tokens from partner_deposit_wallet to payback_wallet", async () => {
     const paybackAmount = new anchor.BN(100000000000);
     const now = Math.floor(Date.now() / 1000);
@@ -279,13 +340,13 @@ describe("zynk-protocol", () => {
 
     // Verify token pull
     const sourceBalance_postTx = await provider.connection.getTokenAccountBalance(
-      zynkOpTokenAccount
+      partnerDepositTokenAccount
     );
     assert.equal(+sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount, +paybackAmount)
     
     // Verify token transfer
     const destBalance_postTx = await provider.connection.getTokenAccountBalance(
-      partnerOperationalTokenAccount
+      paybackTokenAccount
     );
     assert.equal(+destBalance_postTx.value.amount - +destBalance_preTx.value.amount, +paybackAmount)
 
