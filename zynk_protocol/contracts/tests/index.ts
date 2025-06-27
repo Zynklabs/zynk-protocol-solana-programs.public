@@ -8,7 +8,7 @@ import {
   mintTo,
 } from "@solana/spl-token";
 import { ZynkProtocol } from "../target/types/zynk_protocol";
-import { assert } from "chai";
+import { assert, expect } from "chai";
 
 describe("zynk-protocol", () => {
   // Configure the client to use the local cluster
@@ -133,6 +133,65 @@ describe("zynk-protocol", () => {
     assert.ok(configAccount.paybackWallet.equals(paybackWallet.publicKey));
     assert.equal(configAccount.paused, false);
     assert.equal(configAccount.currentNonce.toNumber(), 0);
+  });
+
+  it("Pulls tokens from partner_deposit_wallet to zynkOpWallet and sends tokens from zynkOpWallet to partner_operational_wallet", async () => {
+    const amount = new anchor.BN(100000000000);
+    orderTracker = Keypair.generate();
+
+    const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
+      partnerDepositTokenAccount
+    );
+    expect(+sourceBalance_preTx.value.amount).to.be.gte(+amount);
+
+    const destBalance_preTx = await provider.connection.getTokenAccountBalance(
+      partnerOperationalTokenAccount
+    );
+
+    await program.methods
+      .pullAndSend(
+        tokenMint,
+        amount,
+        partnerDepositWallet.publicKey 
+      )
+      .accounts({
+        config: configPDA,
+        zynkOpWallet: zynkOpWallet.publicKey,
+        sourceTokenAccount: zynkOpTokenAccount,
+        partnerOperationalWallet: partnerOperationalTokenAccount,
+        depositWallet: partnerDepositWallet.publicKey,
+        depositTokenAccount: partnerDepositTokenAccount,
+        paybackTokenAccount: paybackTokenAccount,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        orderTracker: orderTracker.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([orderTracker, zynkOpWallet, partnerDepositWallet])
+      .rpc();
+
+    // Verify token pull
+    const sourceBalance_postTx = await provider.connection.getTokenAccountBalance(
+      partnerDepositTokenAccount
+    );
+    assert.equal(+sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount, +amount)
+    
+    // Verify token transfer
+    const destBalance_postTx = await provider.connection.getTokenAccountBalance(
+      partnerOperationalTokenAccount
+    );
+    assert.equal(+destBalance_postTx.value.amount - +destBalance_preTx.value.amount, +amount)
+
+    // Verify OrderTracker stores correct partner deposit wallet
+    const orderTrackerAccount = await program.account.orderTracker.fetch(
+      orderTracker.publicKey
+    );
+    assert.ok(
+      orderTrackerAccount.partnerDepositWallet.equals(
+        partnerDepositWallet.publicKey
+      )
+    );
+    orderId = orderTrackerAccount.orderId
+    assert.ok(orderId.toNumber() > 0);
   });
 
   it("Sends tokens from zynkOpWallet to partner_operational_wallet", async () => {
