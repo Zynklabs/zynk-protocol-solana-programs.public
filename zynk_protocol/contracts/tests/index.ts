@@ -1,6 +1,6 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
-import { PublicKey, Keypair, SystemProgram } from "@solana/web3.js";
+import { PublicKey, Keypair, SystemProgram, Ed25519Program, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,
   createMint,
@@ -9,6 +9,24 @@ import {
 } from "@solana/spl-token";
 import { ZynkProtocol } from "../target/types/zynk_protocol";
 import { assert, expect } from "chai";
+import { TextEncoder } from "util";
+import nacl from 'tweetnacl';
+
+
+const buildEd25519Ix = (_msg: string, signer: Keypair) => {
+  const message = new TextEncoder().encode(_msg);
+  const signature = nacl.sign.detached(message, signer.secretKey);
+
+  const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
+    publicKey: signer.publicKey.toBuffer(),
+    message,
+    signature,
+  });
+
+  return { ed25519Ix, signature }
+}
+
+const DOMAIN_SEPARATOR = 1151111081099710
 
 describe("zynk-protocol", () => {
   // Configure the client to use the local cluster
@@ -148,11 +166,16 @@ describe("zynk-protocol", () => {
       partnerOperationalTokenAccount
     );
 
+    const message = `${DOMAIN_SEPARATOR}::${partnerOperationalWallet.publicKey.toBase58()}`
+    const { ed25519Ix, signature } = buildEd25519Ix(message, admin)
+    
     await program.methods
       .pullAndSend(
         tokenMint,
         amount,
-        partnerDepositWallet.publicKey 
+        partnerDepositWallet.publicKey,
+        partnerOperationalWallet.publicKey,
+        Buffer.from(signature)
       )
       .accounts({
         config: configPDA,
@@ -165,10 +188,12 @@ describe("zynk-protocol", () => {
         tokenProgram: TOKEN_PROGRAM_ID,
         orderTracker: orderTracker.publicKey,
         systemProgram: SystemProgram.programId,
+        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY,
       })
+      .preInstructions([ed25519Ix])
       .signers([orderTracker, zynkOpWallet, partnerDepositWallet])
       .rpc();
-
+    
     // Verify token pull
     const sourceBalance_postTx = await provider.connection.getTokenAccountBalance(
       partnerDepositTokenAccount

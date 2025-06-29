@@ -1,9 +1,15 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Transfer};
+use anchor_lang::solana_program::{
+    pubkey::Pubkey,
+    sysvar::instructions::load_instruction_at_checked,
+    ed25519_program::ID as ED25519_ID,
+    program_error::ProgramError
+};
 
 declare_id!("7UAhcDLNRpKa4HuCk5MkCLxRGLeRnbjqGxhjePdxPcqB");
 
-pub const CHAIN_ID: u64 = 1151111081099710;
+pub const DOMAIN_SEPARATOR: u64 = 1151111081099710;
 
 /// Stores the admin, the designated operator (zynk_op_wallet), the payback wallet,
 /// and current nonce for send operations.
@@ -13,7 +19,7 @@ pub struct Config {
     pub zynk_op_wallet: Pubkey,
     pub payback_wallet: Pubkey,
     pub paused: bool,
-    pub current_nonce: u64,
+    pub current_nonce: u64
 }
 
 impl Config {
@@ -48,7 +54,7 @@ pub struct Send {
     pub token: Pubkey,
     pub partner_deposit_wallet: Pubkey, // wallet that will be used later for replenish
     pub amount: u64,
-    pub chain_id: u64,
+    pub domain_separator: u64,
 }
 
 #[event]
@@ -58,7 +64,7 @@ pub struct PullAndSend {
     pub partner_operational_wallet: Pubkey,
     pub partner_deposit_wallet: Pubkey,
     pub amount: u64,
-    pub chain_id: u64,
+    pub domain_separator: u64,
 }
 
 #[event]
@@ -67,7 +73,7 @@ pub struct Replenish {
     pub token: Pubkey,
     pub amount: u64,
     pub status: bool,
-    pub chain_id: u64,
+    pub domain_separator: u64,
 }
 
 #[event]
@@ -98,7 +104,38 @@ pub enum CustomError {
     AmountMustBePositive,
     #[msg("Deployed amount must be replenished")]
     DeficientOrder,
+    #[msg("Invalid message in Ed25519 instruction")]
+    InvalidMessage,
 }
+
+pub fn verify_admin_signature_syscall(
+    ix_sysvar_account: &AccountInfo,
+    admin_pubkey: &Pubkey,
+    msg: String,
+    signature: [u8; 64]
+) -> Result<()> {
+    let ed25519_instruction_result = load_instruction_at_checked(0, ix_sysvar_account);
+    if ed25519_instruction_result.is_err() {
+        return Err(ed25519_instruction_result.unwrap_err().into());
+    }
+    let ed25519_instruction = ed25519_instruction_result.unwrap();
+    let data = &ed25519_instruction.data;
+
+    let message: Vec<u8> = msg.into_bytes();
+    if ed25519_instruction.program_id != ED25519_ID || ed25519_instruction.accounts.len() != 0 || data.len() != 16 + 32 + 64 + message.len() {
+        return Err(ProgramError::InvalidInstructionData.into());
+    }
+
+    let data_pubkey = &data[16..48];
+    let data_signature = &data[48..112];
+    let data_message = &data[112..];
+    if data_pubkey != &admin_pubkey.to_bytes() || data_signature != signature || data_message != message {
+        return Err(CustomError::InvalidMessage.into());
+    }
+
+    Ok(())
+}
+
 
 /// Helper function to validate an address is not the null address
 pub fn validate_address(address: &Pubkey) -> Result<()> {
@@ -142,10 +179,20 @@ pub mod zynk_protocol {
         token_mint: Pubkey,
         amount: u64,
         partner_deposit_wallet: Pubkey,
+        partner_operational_wallet: Pubkey,
+        signature: [u8; 64],
     ) -> Result<()> {
         // Check if contract is paused.
         let config = &mut ctx.accounts.config;
         require!(!config.paused, CustomError::ContractPaused);
+
+        let message = format!("{}::{}", DOMAIN_SEPARATOR, partner_operational_wallet);
+        verify_admin_signature_syscall(
+            &ctx.accounts.sysvar_instructions,
+            &config.admin,
+            message,
+            signature
+        )?;
 
         // Increment the nonce first, then use it as the order ID.
         config.current_nonce = config
@@ -185,7 +232,7 @@ pub mod zynk_protocol {
             partner_operational_wallet: ctx.accounts.partner_operational_wallet.key(),
             partner_deposit_wallet,
             amount,
-            chain_id: CHAIN_ID,
+            domain_separator: DOMAIN_SEPARATOR,
         });
 
         Ok(())
@@ -236,7 +283,7 @@ pub mod zynk_protocol {
             token: token_mint,
             partner_deposit_wallet,
             amount,
-            chain_id: CHAIN_ID,
+            domain_separator: DOMAIN_SEPARATOR,
         });
 
         Ok(())
@@ -291,7 +338,7 @@ pub mod zynk_protocol {
             token: ctx.accounts.deposit_token_account.mint,
             amount: payback_amount,
             status: false, // Default status
-            chain_id: CHAIN_ID,
+            domain_separator: DOMAIN_SEPARATOR,
         });
 
         Ok(())
@@ -363,10 +410,18 @@ pub mod zynk_protocol {
         ctx.accounts.config.paused = paused;
         Ok(())
     }
+
+    pub fn get_domain_separator(_ctx: Context<Null>) -> Result<()> {
+        msg!("DOMAIN_SEPARATOR: {}", DOMAIN_SEPARATOR);
+        Ok(())
+    }
 }
 
 /// Seed for the global config PDA
 pub const CONFIG_SEED: &[u8] = b"config";
+
+#[derive(Accounts)]
+pub struct Null {}
 
 #[derive(Accounts)]
 pub struct Initialize<'info> {
@@ -430,8 +485,11 @@ pub struct PullAndSendTokens<'info> {
         space = OrderTracker::LEN
     )]
     pub order_tracker: Account<'info, OrderTracker>,
-
     pub system_program: Program<'info, System>,
+
+    /// CHECK: This is the Sysvar Instructions account used for ed25519 signature verification
+    #[account(address = anchor_lang::solana_program::sysvar::instructions::ID)]
+    pub sysvar_instructions: AccountInfo<'info>,
 }
 
 
@@ -467,6 +525,10 @@ pub struct SendTokens<'info> {
     )]
     pub order_tracker: Account<'info, OrderTracker>,
     pub system_program: Program<'info, System>,
+
+    /// CHECK: This is the Sysvar Instructions account used for ed25519 signature verification
+    #[account(address = anchor_lang::solana_program::sysvar::instructions::ID)]
+    pub sysvar_instructions: AccountInfo<'info>,
 }
 
 #[derive(Accounts)]
