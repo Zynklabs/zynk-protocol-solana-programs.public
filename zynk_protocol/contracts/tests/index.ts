@@ -171,23 +171,19 @@ describe("zynk-protocol", () => {
     
     await program.methods
       .pullAndSend(
-        tokenMint,
         amount,
-        partnerDepositWallet.publicKey,
-        partnerOperationalWallet.publicKey,
         Buffer.from(signature)
       )
       .accounts({
         config: configPDA,
+        partnerDepositWallet: partnerDepositWallet.publicKey,
+        pdwTokenAccount: partnerDepositTokenAccount,
         zynkOpWallet: zynkOpWallet.publicKey,
-        sourceTokenAccount: zynkOpTokenAccount,
-        partnerOperationalWallet: partnerOperationalTokenAccount,
-        depositWallet: partnerDepositWallet.publicKey,
-        depositTokenAccount: partnerDepositTokenAccount,
-        paybackTokenAccount: paybackTokenAccount,
-        tokenProgram: TOKEN_PROGRAM_ID,
+        zowTokenAccount: zynkOpTokenAccount,
+        beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: orderTracker.publicKey,
         systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
         sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY,
       })
       .preInstructions([ed25519Ix])
@@ -234,18 +230,17 @@ describe("zynk-protocol", () => {
 
     await program.methods
       .send(
-        tokenMint,
         amount,
         partnerDepositWallet.publicKey // wallet that will be used later for replenish
       )
       .accounts({
         config: configPDA,
         zynkOpWallet: zynkOpWallet.publicKey,
-        sourceTokenAccount: zynkOpTokenAccount,
-        partnerOperationalWallet: partnerOperationalTokenAccount,
-        tokenProgram: TOKEN_PROGRAM_ID,
+        zowTokenAccount: zynkOpTokenAccount,
+        beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: orderTracker.publicKey,
         systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
       })
       .signers([orderTracker, zynkOpWallet])
       .rpc();
@@ -306,10 +301,10 @@ describe("zynk-protocol", () => {
         .replenish(orderId, new anchor.BN(validity), paybackAmount)
         .accounts({
           config: configPDA,
-          orderTracker: orderTracker.publicKey,
-          depositWallet: partnerDepositWallet.publicKey,
-          depositTokenAccount: partnerDepositTokenAccount,
+          partnerDepositWallet: partnerDepositWallet.publicKey,
+          pdwTokenAccount: partnerDepositTokenAccount,
           paybackTokenAccount: paybackTokenAccount,
+          orderTracker: orderTracker.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
         })
         .signers([partnerDepositWallet])
@@ -354,10 +349,10 @@ describe("zynk-protocol", () => {
       .replenish(orderId, new anchor.BN(validity), paybackAmount)
       .accounts({
         config: configPDA,
-        orderTracker: orderTracker.publicKey,
-        depositWallet: partnerDepositWallet.publicKey,
-        depositTokenAccount: partnerDepositTokenAccount,
+        partnerDepositWallet: partnerDepositWallet.publicKey,
+        pdwTokenAccount: partnerDepositTokenAccount,
         paybackTokenAccount: paybackTokenAccount,
+        orderTracker: orderTracker.publicKey,
         tokenProgram: TOKEN_PROGRAM_ID,
       })
       .signers([partnerDepositWallet])
@@ -394,10 +389,10 @@ describe("zynk-protocol", () => {
         .replenish(orderId, new anchor.BN(pastTimestamp), paybackAmount)
         .accounts({
           config: configPDA,
-          orderTracker: orderTracker.publicKey,
-          depositWallet: partnerDepositWallet.publicKey,
-          depositTokenAccount: partnerDepositTokenAccount,
+          partnerDepositWallet: partnerDepositWallet.publicKey,
+          pdwTokenAccount: partnerDepositTokenAccount,
           paybackTokenAccount: paybackTokenAccount,
+          orderTracker: orderTracker.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
         })
         .signers([partnerDepositWallet])
@@ -423,10 +418,10 @@ describe("zynk-protocol", () => {
         .replenish(orderId, new anchor.BN(validity), new anchor.BN(0))
         .accounts({
           config: configPDA,
-          orderTracker: orderTracker.publicKey,
-          depositWallet: partnerDepositWallet.publicKey,
-          depositTokenAccount: partnerDepositTokenAccount,
+          partnerDepositWallet: partnerDepositWallet.publicKey,
+          pdwTokenAccount: partnerDepositTokenAccount,
           paybackTokenAccount: paybackTokenAccount,
+          orderTracker: orderTracker.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
         })
         .signers([partnerDepositWallet])
@@ -460,10 +455,10 @@ describe("zynk-protocol", () => {
       .replenish(orderId, new anchor.BN(validity), paybackAmount)
       .accounts({
         config: configPDA,
-        orderTracker: orderTracker.publicKey,
-        depositWallet: partnerDepositWallet.publicKey,
-        depositTokenAccount: partnerDepositTokenAccount,
+        partnerDepositWallet: partnerDepositWallet.publicKey,
+        pdwTokenAccount: partnerDepositTokenAccount,
         paybackTokenAccount: paybackTokenAccount,
+        orderTracker: orderTracker.publicKey,
         tokenProgram: TOKEN_PROGRAM_ID,
       })
       .signers([partnerDepositWallet])
@@ -508,10 +503,10 @@ describe("zynk-protocol", () => {
         )
         .accounts({
           config: configPDA,
-          orderTracker: orderTracker.publicKey,
-          depositWallet: wrongSigner.publicKey,
-          depositTokenAccount: partnerDepositTokenAccount,
+          partnerDepositWallet: wrongSigner.publicKey,
+          pdwTokenAccount: partnerDepositTokenAccount,
           paybackTokenAccount: paybackTokenAccount,
+          orderTracker: orderTracker.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
         })
         .signers([wrongSigner])
@@ -559,18 +554,17 @@ describe("zynk-protocol", () => {
     // Initialize new order
     await program.methods
       .send(
-        tokenMint,
         new anchor.BN(100000000000),
         partnerDepositWallet.publicKey
       )
       .accounts({
         config: configPDA,
         zynkOpWallet: zynkOpWallet.publicKey,
-        sourceTokenAccount: zynkOpTokenAccount,
-        partnerOperationalWallet: partnerOperationalTokenAccount,
-        tokenProgram: TOKEN_PROGRAM_ID,
+        zowTokenAccount: zynkOpTokenAccount,
+        beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: newOrderTracker.publicKey,
         systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
       })
       .signers([newOrderTracker, zynkOpWallet])
       .rpc();
@@ -638,10 +632,10 @@ describe("zynk-protocol", () => {
         )
         .accounts({
           config: configPDA,
-          orderTracker: orderTracker.publicKey,
-          depositWallet: partnerDepositWallet.publicKey,
-          depositTokenAccount: partnerDepositTokenAccount,
+          partnerDepositWallet: partnerDepositWallet.publicKey,
+          pdwTokenAccount: partnerDepositTokenAccount,
           paybackTokenAccount: paybackTokenAccount,
+          orderTracker: orderTracker.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
         })
         .signers([partnerDepositWallet])
@@ -663,18 +657,17 @@ describe("zynk-protocol", () => {
     // Initialize new order
     await program.methods
       .send(
-        tokenMint,
         new anchor.BN(100000000000),
         partnerDepositWallet.publicKey
       )
       .accounts({
         config: configPDA,
         zynkOpWallet: zynkOpWallet.publicKey,
-        sourceTokenAccount: zynkOpTokenAccount,
-        partnerOperationalWallet: partnerOperationalTokenAccount,
-        tokenProgram: TOKEN_PROGRAM_ID,
+        zowTokenAccount: zynkOpTokenAccount,
+        beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: newOrderTracker.publicKey,
         systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
       })
       .signers([newOrderTracker, zynkOpWallet])
       .rpc();
@@ -697,10 +690,10 @@ describe("zynk-protocol", () => {
       )
       .accounts({
         config: configPDA,
-        orderTracker: newOrderTracker.publicKey,
-        depositWallet: partnerDepositWallet.publicKey,
-        depositTokenAccount: partnerDepositTokenAccount,
+        partnerDepositWallet: partnerDepositWallet.publicKey,
+        pdwTokenAccount: partnerDepositTokenAccount,
         paybackTokenAccount: paybackTokenAccount,
+        orderTracker: newOrderTracker.publicKey,
         tokenProgram: TOKEN_PROGRAM_ID,
       })
       .signers([partnerDepositWallet])
@@ -716,10 +709,10 @@ describe("zynk-protocol", () => {
         )
         .accounts({
           config: configPDA,
-          orderTracker: newOrderTracker.publicKey,
-          depositWallet: partnerDepositWallet.publicKey,
-          depositTokenAccount: partnerDepositTokenAccount,
+          partnerDepositWallet: partnerDepositWallet.publicKey,
+          pdwTokenAccount: partnerDepositTokenAccount,
           paybackTokenAccount: paybackTokenAccount,
+          orderTracker: newOrderTracker.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
         })
         .signers([partnerDepositWallet])
