@@ -213,6 +213,11 @@ describe("zynk-protocol", () => {
     );
     orderId = orderTrackerAccount.orderId
     assert.ok(orderId.toNumber() > 0);
+
+    const orderAmountIn = orderTrackerAccount.amountIn
+    const orderAmountOut = orderTrackerAccount.amountOut
+    assert.equal(orderAmountIn.toNumber(), amount.toNumber());
+    assert.equal(orderAmountOut.toNumber(), amount.toNumber());
   });
 
   it("Sends tokens from zynkOpWallet to partner_operational_wallet", async () => {
@@ -274,6 +279,11 @@ describe("zynk-protocol", () => {
     );
     orderId = orderTrackerAccount.orderId;
     assert.ok(orderId.toNumber() > 0);
+
+    const orderAmountIn = orderTrackerAccount.amountIn
+    const orderAmountOut = orderTrackerAccount.amountOut
+    assert.equal(orderAmountIn.toNumber(), 0);
+    assert.equal(orderAmountOut.toNumber(), amount.toNumber());
   });
 
   it("Should fail closing order with zero amount_in", async () => {
@@ -384,6 +394,13 @@ describe("zynk-protocol", () => {
       orderTrackerInfo,
       "OrderTracker should still be active after replenish"
     );
+
+    const orderTrackerAccount = await program.account.orderTracker.fetch(
+      orderTracker.publicKey
+    );
+
+    const orderAmountIn = orderTrackerAccount.amountIn
+    assert.equal(orderAmountIn.toNumber() - +destBalance_preTx.value.amount, paybackAmount.toNumber());
   });
 
   it("Should fail when replenishing with past validity timestamp", async () => {
