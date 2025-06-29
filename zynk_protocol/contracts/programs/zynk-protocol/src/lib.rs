@@ -250,10 +250,20 @@ pub mod zynk_protocol {
         ctx: Context<SendTokens>,
         amount: u64,
         partner_deposit_wallet: Pubkey,
+        signature: [u8; 64],
     ) -> Result<()> {
         // Check if contract is paused.
         let config = &mut ctx.accounts.config;
         require!(!config.paused, CustomError::ContractPaused);
+
+        let beneficiary_wallet = ctx.accounts.beneficiary_token_account.owner.key();
+        let message = format!("{}::{}", DOMAIN_SEPARATOR, beneficiary_wallet);
+        verify_admin_signature_syscall(
+            &ctx.accounts.sysvar_instructions,
+            &config.admin,
+            message,
+            signature
+        )?;
 
         // Increment the nonce first, then use it as the order ID.
         config.current_nonce = config

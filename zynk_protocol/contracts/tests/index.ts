@@ -228,10 +228,14 @@ describe("zynk-protocol", () => {
       partnerOperationalTokenAccount
     );
 
+    const message = `${DOMAIN_SEPARATOR}::${partnerOperationalWallet.publicKey.toBase58()}`
+    const { ed25519Ix, signature } = buildEd25519Ix(message, admin)
+
     await program.methods
       .send(
         amount,
-        partnerDepositWallet.publicKey // wallet that will be used later for replenish
+        partnerDepositWallet.publicKey, // wallet that will be used later for replenish
+        Buffer.from(signature)
       )
       .accounts({
         config: configPDA,
@@ -241,7 +245,9 @@ describe("zynk-protocol", () => {
         orderTracker: orderTracker.publicKey,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY,
       })
+      .preInstructions([ed25519Ix])
       .signers([orderTracker, zynkOpWallet])
       .rpc();
 
@@ -551,11 +557,15 @@ describe("zynk-protocol", () => {
     // Create a new order since previous one is closed
     const newOrderTracker = Keypair.generate();
 
+    const message = `${DOMAIN_SEPARATOR}::${partnerOperationalWallet.publicKey.toBase58()}`
+    const { ed25519Ix, signature } = buildEd25519Ix(message, admin)
+
     // Initialize new order
     await program.methods
       .send(
         new anchor.BN(100000000000),
-        partnerDepositWallet.publicKey
+        partnerDepositWallet.publicKey,
+        Buffer.from(signature)
       )
       .accounts({
         config: configPDA,
@@ -565,7 +575,9 @@ describe("zynk-protocol", () => {
         orderTracker: newOrderTracker.publicKey,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY,
       })
+      .preInstructions([ed25519Ix])
       .signers([newOrderTracker, zynkOpWallet])
       .rpc();
 
@@ -654,11 +666,15 @@ describe("zynk-protocol", () => {
     // Create a new order since previous one is closed
     const newOrderTracker = Keypair.generate();
 
+    const message = `${DOMAIN_SEPARATOR}::${partnerOperationalWallet.publicKey.toBase58()}`
+    const { ed25519Ix, signature } = buildEd25519Ix(message, admin)
+    
     // Initialize new order
     await program.methods
       .send(
         new anchor.BN(100000000000),
-        partnerDepositWallet.publicKey
+        partnerDepositWallet.publicKey,
+        Buffer.from(signature)
       )
       .accounts({
         config: configPDA,
@@ -668,7 +684,9 @@ describe("zynk-protocol", () => {
         orderTracker: newOrderTracker.publicKey,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY,
       })
+      .preInstructions([ed25519Ix])
       .signers([newOrderTracker, zynkOpWallet])
       .rpc();
 
