@@ -77,7 +77,7 @@ pub struct Replenish {
 }
 
 #[event]
-pub struct ReplenishClosure {
+pub struct OrderClosure {
     pub order_id: u64,
     pub order_tracker: Pubkey,
     pub timestamp: i64,
@@ -166,15 +166,17 @@ pub mod zynk_protocol {
     }
 
 
-    /// Pulls tokes from the partner deposit wallet (deposit_wallet) into zynk_op_wallet (operator) and then,
+    /// Pulls tokens from the partner_deposit_wallet into zynk_op_wallet (operator) and then,
     /// Sends tokens from the zynk_op_wallet (operator) to the beneficiary_wallet.
-    /// The user provides the token mint, amount, and the partner_deposit_wallet (to be used later for replenish).
+    /// The user provides the amount, whitelist signature and the partner_deposit_wallet (to be used later for replenish).
     /// This function:
     /// - Checks that the protocol isn’t paused.
+    /// - Verifies admin-signed message to check if beneficiary is whitelisted
     /// - Increments the nonce (to derive a unique, nonzero order ID).
-    /// - Transfers tokens from the source token account (owned by zynk_op_wallet) to the beneficiary_wallet.
-    /// - Records the order details (order_id and partner_deposit_wallet) in a new OrderTracker account.
-    /// - Emits a Send event.
+    /// - Pulls in tokens from the pdw_token_account (owned by partner_deposit_wallet) to the zow_token_account.
+    /// - Transfers tokens from the zow_token_account (owned by zynk_op_wallet) to the beneficiary_wallet.
+    /// - Records the order details (order_id, partner_deposit_wallet, amount_out and amount_in) in a new OrderTracker account.
+    /// - Emits a PullAndSend event.
     pub fn pull_and_send(
         ctx: Context<PullAndSendTokens>,
         amount: u64,
@@ -239,12 +241,13 @@ pub mod zynk_protocol {
     }
 
     /// Sends tokens from the zynk_op_wallet (operator) to the beneficiary_wallet.
-    /// The user provides the token mint, amount, and the partner_deposit_wallet (to be used later for replenish).
+    /// The user provides the amount, signature and the partner_deposit_wallet (to be used later for replenish).
     /// This function:
     /// - Checks that the protocol isn’t paused.
+    /// - Verifies admin-signed message to check if beneficiary is whitelisted
     /// - Increments the nonce (to derive a unique, nonzero order ID).
-    /// - Transfers tokens from the source token account (owned by zynk_op_wallet) to the beneficiary_wallet.
-    /// - Records the order details (order_id and partner_deposit_wallet) in a new OrderTracker account.
+    /// - Transfers tokens from the zow_token_account (owned by zynk_op_wallet) to the beneficiary_wallet.
+    /// - Records the order details (order_id, partner_deposit_wallet and amount_out) in a new OrderTracker account.
     /// - Emits a Send event.
     pub fn send(
         ctx: Context<SendTokens>,
@@ -298,9 +301,15 @@ pub mod zynk_protocol {
         Ok(())
     }
 
-    /// Replenishes tokens by transferring them from the partner_deposit_wallet (deposit_wallet)
+    /// Replenishes tokens by transferring them from the partner_deposit_wallet
     /// to the payback_wallet.
-    /// The deposit wallet must match the partner_deposit_wallet recorded in the OrderTracker.
+    /// This function:
+    /// - Checks that the protocol isn’t paused.
+    /// - Verify the order_id matches.
+    /// - Checks if validity is in future.
+    /// - Transfers tokens from the pdw_token_account (owned by partner_deposit_wallet) to the zow_token_account (owned by zynk_op_wallet).
+    /// - Records amount_in in the dedicated OrderTracker account.
+    /// - Emits a Replenish event.
     pub fn replenish(
         ctx: Context<ReplenishTokens>,
         order_id: u64,
@@ -356,6 +365,12 @@ pub mod zynk_protocol {
 
     /// Closes the order account and emits closure events.
     /// Only callable by admin.
+    /// This function:
+    /// - Verify the order_id matches.
+    /// - Checks if order_tracker's amount_in is greater than or equal to the order_tracker's amount_out.
+    /// - Emits a OrderClosure event.
+    /// - Transfers lamports to admin
+    /// - Clears the account data
     pub fn close_order(ctx: Context<CloseOrder>, order_id: u64) -> Result<()> {
         // Verify that the order_id matches.
         require!(
@@ -368,7 +383,7 @@ pub mod zynk_protocol {
             CustomError::DeficientOrder
         );
 
-        emit!(ReplenishClosure {
+        emit!(OrderClosure {
             order_id,
             order_tracker: ctx.accounts.order_tracker.key(),
             timestamp: Clock::get()?.unix_timestamp,
@@ -422,6 +437,7 @@ pub mod zynk_protocol {
         Ok(())
     }
 
+    /// Logs the DOMAIN_SEPARATOR
     pub fn domain_separator(_ctx: Context<Null>) -> Result<()> {
         msg!("DOMAIN_SEPARATOR: {}", DOMAIN_SEPARATOR);
         Ok(())
