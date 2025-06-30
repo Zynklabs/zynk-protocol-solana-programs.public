@@ -5,12 +5,19 @@ skip-lint = false
 [programs.localnet]
 zynk_protocol = "7UAhcDLNRpKa4HuCk5MkCLxRGLeRnbjqGxhjePdxPcqB"
 
+[programs.devnet]
+zynk_protocol = "AHPfQdfzNVS7vLA8Lqqo75XaVGwDjQBobqwvDqBZ5njX"
+
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "Localnet"
+cluster = "devnet"
 wallet = "~/.config/solana/id.json"
+
+# [provider]
+# cluster = "Localnet"
+# wallet = "~/.config/solana/id.json"
 
 [test.validator]
 rpc_port = 8899

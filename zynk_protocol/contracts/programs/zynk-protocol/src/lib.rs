@@ -7,7 +7,7 @@ use anchor_lang::solana_program::{
     program_error::ProgramError
 };
 
-declare_id!("7UAhcDLNRpKa4HuCk5MkCLxRGLeRnbjqGxhjePdxPcqB");
+declare_id!("AHPfQdfzNVS7vLA8Lqqo75XaVGwDjQBobqwvDqBZ5njX");
 
 pub const DOMAIN_SEPARATOR: u64 = 1151111081099710;
 
