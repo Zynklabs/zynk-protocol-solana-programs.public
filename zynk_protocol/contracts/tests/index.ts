@@ -13,8 +13,8 @@ import { TextEncoder } from "util";
 import nacl from 'tweetnacl';
 
 
-const buildEd25519Ix = (_msg: string, signer: Keypair) => {
-  const message = new TextEncoder().encode(_msg);
+const buildEd25519Ix = (msg: string, signer: Keypair) => {
+  const message = new TextEncoder().encode(msg);
   const signature = nacl.sign.detached(message, signer.secretKey);
 
   const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({

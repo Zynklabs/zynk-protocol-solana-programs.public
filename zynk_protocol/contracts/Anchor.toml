@@ -3,7 +3,7 @@ seeds = false
 skip-lint = false
 
 [programs.localnet]
-zynk_protocol = "7UAhcDLNRpKa4HuCk5MkCLxRGLeRnbjqGxhjePdxPcqB"
+zynk_protocol = "AHPfQdfzNVS7vLA8Lqqo75XaVGwDjQBobqwvDqBZ5njX"
 
 [programs.devnet]
 zynk_protocol = "AHPfQdfzNVS7vLA8Lqqo75XaVGwDjQBobqwvDqBZ5njX"
