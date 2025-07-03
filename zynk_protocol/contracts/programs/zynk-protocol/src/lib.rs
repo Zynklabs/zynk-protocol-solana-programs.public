@@ -11,13 +11,13 @@ declare_id!("AHPfQdfzNVS7vLA8Lqqo75XaVGwDjQBobqwvDqBZ5njX");
 
 pub const DOMAIN_SEPARATOR: u64 = 1151111081099710;
 
-/// Stores the admin, the designated operator (zynk_op_wallet), the payback wallet,
+/// Stores the admin, the designated operator (zynk_op_wallet), the manager wallet,
 /// and current nonce for send operations.
 #[account]
 pub struct Config {
     pub admin: Pubkey,
+    pub manager: Pubkey,
     pub zynk_op_wallet: Pubkey,
-    pub payback_wallet: Pubkey,
     pub paused: bool,
     pub current_nonce: u64
 }
@@ -25,8 +25,8 @@ pub struct Config {
 impl Config {
     pub const LEN: usize = 8  + // discriminator
         32 + // admin
+        32 + // manager
         32 + // zynk_op_wallet
-        32 + // payback_wallet
         1  + // paused
         8; // current_nonce
 }
@@ -95,6 +95,8 @@ pub enum CustomError {
     NonceOverflow,
     #[msg("Unauthorized admin")]
     UnauthorizedAdmin,
+    #[msg("Unauthorized manager")]
+    UnauthorizedManager,
     #[msg("Invalid order ID")]
     InvalidOrderId,
     #[msg("Invalid token mint")]
@@ -109,9 +111,9 @@ pub enum CustomError {
     InvalidEd25519Message,
 }
 
-pub fn verify_admin_signature_syscall(
+pub fn verify_signature_syscall(
     ix_sysvar_account: &AccountInfo,
-    admin_pubkey: &Pubkey,
+    signer_pubkey: &Pubkey,
     msg: String,
     signature: [u8; 64]
 ) -> Result<()> {
@@ -130,7 +132,7 @@ pub fn verify_admin_signature_syscall(
     let data_pubkey = &data[16..48];
     let data_signature = &data[48..112];
     let data_message = &data[112..];
-    if data_pubkey != &admin_pubkey.to_bytes() || data_signature != signature || data_message != message {
+    if data_pubkey != &signer_pubkey.to_bytes() || data_signature != signature || data_message != message {
         return Err(CustomError::InvalidEd25519Message.into());
     }
 
@@ -150,16 +152,16 @@ pub fn validate_address(address: &Pubkey) -> Result<()> {
 pub mod zynk_protocol {
     use super::*;
 
-    /// Initialize the protocol with admin, zynk operator wallet, and payback wallet.
+    /// Initialize the protocol with admin, zynk operator wallet, and manager wallet.
     pub fn initialize(
         ctx: Context<Initialize>,
         zynk_op_wallet: Pubkey,
-        payback_wallet: Pubkey,
+        manager: Pubkey,
     ) -> Result<()> {
         let config = &mut ctx.accounts.config;
         config.admin = ctx.accounts.admin.key();
         config.zynk_op_wallet = zynk_op_wallet;
-        config.payback_wallet = payback_wallet;
+        config.manager = manager;
         config.paused = false;
         config.current_nonce = 0;
         Ok(())
@@ -171,7 +173,7 @@ pub mod zynk_protocol {
     /// The user provides the amount, whitelist signature and the partner_deposit_wallet (to be used later for replenish).
     /// This function:
     /// - Checks that the protocol isn’t paused.
-    /// - Verifies admin-signed message to check if beneficiary is whitelisted
+    /// - Verifies manager-signed message to check if beneficiary is whitelisted
     /// - Increments the nonce (to derive a unique, nonzero order ID).
     /// - Pulls in tokens from the pdw_token_account (owned by partner_deposit_wallet) to the zow_token_account.
     /// - Transfers tokens from the zow_token_account (owned by zynk_op_wallet) to the beneficiary_wallet.
@@ -182,16 +184,16 @@ pub mod zynk_protocol {
         amount: u64,
         signature: [u8; 64],
     ) -> Result<()> {
-        // Check if contract is paused.
+        // Check if program is paused.
         let config = &mut ctx.accounts.config;
         require!(!config.paused, CustomError::ContractPaused);
 
         let beneficiary_wallet = ctx.accounts.beneficiary_token_account.owner.key();
         let partner_deposit_wallet = ctx.accounts.partner_deposit_wallet.key();
         let message = format!("{}::{}", DOMAIN_SEPARATOR, beneficiary_wallet);
-        verify_admin_signature_syscall(
+        verify_signature_syscall(
             &ctx.accounts.sysvar_instructions,
-            &config.admin,
+            &config.manager,
             message,
             signature
         )?;
@@ -203,7 +205,7 @@ pub mod zynk_protocol {
             .ok_or(CustomError::NonceOverflow)?;
         let nonce = config.current_nonce;
 
-        // Perform token transfer from deposit token account to payback token account.
+        // Perform token transfer from pdw_token_account to zow_token_account.
         let pull_accounts = Transfer {
             from: ctx.accounts.pdw_token_account.to_account_info(),
             to: ctx.accounts.zow_token_account.to_account_info(),
@@ -212,7 +214,7 @@ pub mod zynk_protocol {
         let cpi_ctx = CpiContext::new(ctx.accounts.token_program.to_account_info(), pull_accounts);
         token::transfer(cpi_ctx, amount)?;
 
-        // Perform token transfer from zow_token_account to beneficiary_wallet.
+        // Perform token transfer from zow_token_account to beneficiary_token_account.
         let send_accounts = Transfer {
             from: ctx.accounts.zow_token_account.to_account_info(),
             to: ctx.accounts.beneficiary_token_account.to_account_info(),
@@ -244,7 +246,7 @@ pub mod zynk_protocol {
     /// The user provides the amount, signature and the partner_deposit_wallet (to be used later for replenish).
     /// This function:
     /// - Checks that the protocol isn’t paused.
-    /// - Verifies admin-signed message to check if beneficiary is whitelisted
+    /// - Verifies manager-signed message to check if beneficiary is whitelisted
     /// - Increments the nonce (to derive a unique, nonzero order ID).
     /// - Transfers tokens from the zow_token_account (owned by zynk_op_wallet) to the beneficiary_wallet.
     /// - Records the order details (order_id, partner_deposit_wallet and amount_out) in a new OrderTracker account.
@@ -254,16 +256,18 @@ pub mod zynk_protocol {
         amount: u64,
         partner_deposit_wallet: Pubkey,
         signature: [u8; 64],
-    ) -> Result<()> {
-        // Check if contract is paused.
+    ) -> Result<()> {        
+        // Check if program is paused.
         let config = &mut ctx.accounts.config;
         require!(!config.paused, CustomError::ContractPaused);
 
+        validate_address(&partner_deposit_wallet)?;
+
         let beneficiary_wallet = ctx.accounts.beneficiary_token_account.owner.key();
         let message = format!("{}::{}", DOMAIN_SEPARATOR, beneficiary_wallet);
-        verify_admin_signature_syscall(
+        verify_signature_syscall(
             &ctx.accounts.sysvar_instructions,
-            &config.admin,
+            &config.manager,
             message,
             signature
         )?;
@@ -302,10 +306,10 @@ pub mod zynk_protocol {
     }
 
     /// Replenishes tokens by transferring them from the partner_deposit_wallet
-    /// to the payback_wallet.
+    /// to the zynk_op_wallet.
     /// This function:
     /// - Checks that the protocol isn’t paused.
-    /// - Verify the order_id matches.
+    /// - Verifies the order_id matches.
     /// - Checks if validity is in future.
     /// - Transfers tokens from the pdw_token_account (owned by partner_deposit_wallet) to the zow_token_account (owned by zynk_op_wallet).
     /// - Records amount_in in the dedicated OrderTracker account.
@@ -314,9 +318,9 @@ pub mod zynk_protocol {
         ctx: Context<ReplenishTokens>,
         order_id: u64,
         validity: i64,
-        payback_amount: u64,
+        amount: u64,
     ) -> Result<()> {
-        // Check if contract is paused.
+        // Check if program is paused.
         require!(!ctx.accounts.config.paused, CustomError::ContractPaused);
 
         let order_tracker = &mut ctx.accounts.order_tracker;
@@ -332,31 +336,31 @@ pub mod zynk_protocol {
         require!(validity > now, CustomError::ValidityMustBeFuture);
 
         // Validate amount is positive
-        require!(payback_amount > 0, CustomError::AmountMustBePositive);
+        require!(amount > 0, CustomError::AmountMustBePositive);
 
         let partner_deposit_wallet = ctx.accounts.partner_deposit_wallet.key();
-        // Verify that the deposit wallet is authorized by comparing it with the stored partner_deposit_wallet.
+        // Verify that the partner_deposit_wallet is authorized by comparing it with the stored partner_deposit_wallet.
         require!(
             partner_deposit_wallet == order_tracker.partner_deposit_wallet,
             CustomError::UnauthorizedSender
         );
 
-        // Perform token transfer from pdw_token_account to payback token account.
+        // Perform token transfer from pdw_token_account to zow_token_account.
         let cpi_accounts = Transfer {
             from: ctx.accounts.pdw_token_account.to_account_info(),
-            to: ctx.accounts.payback_token_account.to_account_info(),
+            to: ctx.accounts.zow_token_account.to_account_info(),
             authority: ctx.accounts.partner_deposit_wallet.to_account_info(),
         };
         let cpi_ctx = CpiContext::new(ctx.accounts.token_program.to_account_info(), cpi_accounts);
-        token::transfer(cpi_ctx, payback_amount)?;
+        token::transfer(cpi_ctx, amount)?;
 
-        order_tracker.amount_in += payback_amount;
+        order_tracker.amount_in += amount;
 
         emit!(Replenish {
             order_id,
             token: ctx.accounts.pdw_token_account.mint,
             partner_deposit_wallet,
-            amount: payback_amount,
+            amount,
             domain_separator: DOMAIN_SEPARATOR,
         });
 
@@ -364,12 +368,12 @@ pub mod zynk_protocol {
     }
 
     /// Closes the order account and emits closure events.
-    /// Only callable by admin.
+    /// Only callable by manager.
     /// This function:
     /// - Verify the order_id matches.
     /// - Checks if order_tracker's amount_in is greater than or equal to the order_tracker's amount_out.
     /// - Emits a OrderClosure event.
-    /// - Transfers lamports to admin
+    /// - Transfers lamports to manager
     /// - Clears the account data
     pub fn close_order(ctx: Context<CloseOrder>, order_id: u64) -> Result<()> {
         // Verify that the order_id matches.
@@ -390,9 +394,9 @@ pub mod zynk_protocol {
         });
 
         let order_tracker_account = &ctx.accounts.order_tracker.to_account_info();
-        let dest_account = &ctx.accounts.admin.to_account_info();
+        let dest_account = &ctx.accounts.manager.to_account_info();
 
-        // Close the order account by transferring its lamports to the admin.
+        // Close the order account by transferring its lamports to the manager.
         **dest_account.try_borrow_mut_lamports()? +=
             **order_tracker_account.try_borrow_lamports()?;
         **order_tracker_account.try_borrow_mut_lamports()? = 0;
@@ -405,7 +409,7 @@ pub mod zynk_protocol {
 
     /// Updates the zynk_op_wallet (operator) address. Only callable by admin.
     pub fn update_zynk_op_wallet(
-        ctx: Context<UpdateConfigAddress>,
+        ctx: Context<UpdateConfig>,
         new_zynk_op_wallet: Pubkey,
     ) -> Result<()> {
         validate_address(&new_zynk_op_wallet)?;
@@ -413,18 +417,18 @@ pub mod zynk_protocol {
         Ok(())
     }
 
-    /// Updates the payback_wallet address. Only callable by admin.
-    pub fn update_payback_wallet(
-        ctx: Context<UpdateConfigAddress>,
-        new_payback_wallet: Pubkey,
+    /// Updates the manager address. Only callable by admin.
+    pub fn update_manager(
+        ctx: Context<UpdateConfig>,
+        new_manager: Pubkey,
     ) -> Result<()> {
-        validate_address(&new_payback_wallet)?;
-        ctx.accounts.config.payback_wallet = new_payback_wallet;
+        validate_address(&new_manager)?;
+        ctx.accounts.config.manager = new_manager;
         Ok(())
     }
 
     /// Transfers admin rights to a new admin address. Only callable by the current admin.
-    pub fn transfer_admin(ctx: Context<UpdateConfigAddress>, new_admin: Pubkey) -> Result<()> {
+    pub fn transfer_admin(ctx: Context<UpdateConfig>, new_admin: Pubkey) -> Result<()> {
         validate_address(&new_admin)?;
         ctx.accounts.config.admin = new_admin;
         Ok(())
@@ -432,8 +436,14 @@ pub mod zynk_protocol {
 
     /// Sets the emergency pause state. When paused, send and replenish operations are disabled.
     /// Only callable by admin.
-    pub fn set_pause_state(ctx: Context<UpdateConfigAddress>, paused: bool) -> Result<()> {
+    pub fn set_pause_state(ctx: Context<UpdateConfig>, paused: bool) -> Result<()> {
         ctx.accounts.config.paused = paused;
+        Ok(())
+    }
+
+    // Pause functionality only callable by manager
+    pub fn pause(ctx: Context<Pause>) -> Result<()> {
+        ctx.accounts.config.paused = true;
         Ok(())
     }
 
@@ -571,29 +581,28 @@ pub struct ReplenishTokens<'info> {
     #[account(
         mut,
         constraint = pdw_token_account.owner == partner_deposit_wallet.key() @ CustomError::UnauthorizedSender,
-        constraint = pdw_token_account.mint == payback_token_account.mint @ CustomError::InvalidTokenMint
+        constraint = pdw_token_account.mint == zow_token_account.mint @ CustomError::InvalidTokenMint
     )]
     pub pdw_token_account: Box<Account<'info, TokenAccount>>,
 
     // Tokens pulled in to
     #[account(
         mut,
-        constraint = payback_token_account.owner == config.payback_wallet @ CustomError::InvalidTokenMint
+        constraint = zow_token_account.owner == config.zynk_op_wallet @ CustomError::InvalidTokenMint
     )]
-    pub payback_token_account: Box<Account<'info, TokenAccount>>,
+    pub zow_token_account: Box<Account<'info, TokenAccount>>,
 
     #[account(
         mut,
         constraint = order_tracker.partner_deposit_wallet == partner_deposit_wallet.key() @ CustomError::UnauthorizedSender
     )]
-
     pub order_tracker: Account<'info, OrderTracker>,
 
     pub token_program: Program<'info, Token>,
 }
 
 #[derive(Accounts)]
-pub struct UpdateConfigAddress<'info> {
+pub struct UpdateConfig<'info> {
     #[account(
         mut,
         seeds = [CONFIG_SEED],
@@ -602,6 +611,18 @@ pub struct UpdateConfigAddress<'info> {
     )]
     pub config: Account<'info, Config>,
     pub admin: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct Pause<'info> {
+    #[account(
+        mut,
+        seeds = [CONFIG_SEED],
+        bump,
+        has_one = manager @ CustomError::UnauthorizedManager
+    )]
+    pub config: Account<'info, Config>,
+    pub manager: Signer<'info>,
 }
 
 #[derive(Accounts)]
@@ -610,14 +631,14 @@ pub struct CloseOrder<'info> {
         mut,
         seeds = [CONFIG_SEED],
         bump,
-        has_one = admin @ CustomError::UnauthorizedAdmin
+        has_one = manager @ CustomError::UnauthorizedManager
     )]
     pub config: Account<'info, Config>,
     #[account(mut)]
-    pub admin: Signer<'info>,
+    pub manager: Signer<'info>,
     #[account(
         mut,
-        close = admin
+        close = manager
     )]
     pub order_tracker: Account<'info, OrderTracker>,
     pub system_program: Program<'info, System>,
