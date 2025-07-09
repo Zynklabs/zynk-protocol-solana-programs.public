@@ -19,7 +19,8 @@ pub struct Config {
     pub manager: Pubkey,
     pub zynk_op_wallet: Pubkey,
     pub paused: bool,
-    pub current_nonce: u64
+    pub current_nonce: u64,
+    pub guardian: Pubkey
 }
 
 impl Config {
@@ -28,7 +29,8 @@ impl Config {
         32 + // manager
         32 + // zynk_op_wallet
         1  + // paused
-        8; // current_nonce
+        8  + // current_nonce
+        32;  // guardian
 }
 
 /// Tracks order details including the designated partner_deposit_wallet
@@ -46,6 +48,60 @@ impl OrderTracker {
         8  + // amount_out (u64)
         8  + // amount_in (u64)
         32; // partner_deposit_wallet
+}
+
+
+#[account]
+pub struct TimelockRequest {
+    pub action: u8,             // Enum tag for the action
+    pub value: Pubkey       ,   // New value (wallet or admin address)
+    pub eta: i64,               // Earliest time the action can be executed
+    pub executed: bool,         // Prevent double execution
+}
+
+impl TimelockRequest {
+    pub const LEN: usize = 8 + // discriminator
+        1  + // action
+        32 + // value
+        8  + // eta
+        1;   // executed
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq)]
+#[repr(u8)]
+pub enum TimelockAction {
+    TransferAdmin,
+    UpdateManager,
+    UpdateGuardian,
+    Unpause,
+    UpdateZynkOpWallet,
+}
+
+impl TimelockAction {
+    pub fn delay(&self) -> i64 {
+        match self {
+            TimelockAction::TransferAdmin => 24 * 60 * 60,         // 24 hours
+            TimelockAction::UpdateManager => 12 * 60 * 60,         // 12 hours
+            TimelockAction::UpdateZynkOpWallet => 12 * 60 * 60,    // 12 hours
+            TimelockAction::Unpause => 6 * 60 * 60,                // 6 hours
+            TimelockAction::UpdateGuardian => 48 * 60 * 60,        // 48 hours
+        }
+    }
+}
+
+impl TryFrom<u8> for TimelockAction {
+    type Error = CustomError;
+    
+    fn try_from(value: u8) -> std::result::Result<Self, Self::Error> {
+        match value {
+            0 => Ok(TimelockAction::TransferAdmin),
+            1 => Ok(TimelockAction::UpdateManager),
+            2 => Ok(TimelockAction::UpdateZynkOpWallet),
+            3 => Ok(TimelockAction::Unpause),
+            4 => Ok(TimelockAction::UpdateGuardian),
+            _ => Err(CustomError::InvalidTimelockAction.into()),
+        }
+    }
 }
 
 #[event]
@@ -85,8 +141,8 @@ pub struct OrderClosure {
 
 #[error_code]
 pub enum CustomError {
-    #[msg("Unauthorized sender")]
-    UnauthorizedSender,
+    #[msg("Unauthorized signer")]
+    UnauthorizedSigner,
     #[msg("Invalid address: cannot use null address")]
     InvalidAddress,
     #[msg("Contract is paused")]
@@ -97,6 +153,8 @@ pub enum CustomError {
     UnauthorizedAdmin,
     #[msg("Unauthorized manager")]
     UnauthorizedManager,
+    #[msg("Unauthorized guardian")]
+    UnauthorizedGuardian,
     #[msg("Invalid order ID")]
     InvalidOrderId,
     #[msg("Invalid token mint")]
@@ -109,7 +167,14 @@ pub enum CustomError {
     DeficientOrder,
     #[msg("Invalid message in Ed25519 instruction")]
     InvalidEd25519Message,
+    #[msg("Timelock not yet ready")]
+    TimelockNotReady,
+    #[msg("Action already executed")]
+    AlreadyExecuted,
+    #[msg("Invalid timelock action")]
+    InvalidTimelockAction,
 }
+
 
 pub fn verify_signature_syscall(
     ix_sysvar_account: &AccountInfo,
@@ -145,6 +210,19 @@ pub fn validate_address(address: &Pubkey) -> Result<()> {
     if address == &Pubkey::default() {
         return Err(error!(CustomError::InvalidAddress));
     }
+    Ok(())
+}
+
+/// Closes an account and transfers lamports to the given destination.
+/// Also zeroes out the account data to prevent reuse.
+pub fn close_account<'a>(from: impl ToAccountInfo<'a>, to: impl ToAccountInfo<'a>) -> Result<()> {
+    let from = from.to_account_info();
+    let to = to.to_account_info();
+
+    **to.try_borrow_mut_lamports()? += **from.try_borrow_lamports()?;
+    **from.try_borrow_mut_lamports()? = 0;
+    from.try_borrow_mut_data()?.fill(0);
+    
     Ok(())
 }
 
@@ -342,7 +420,7 @@ pub mod zynk_protocol {
         // Verify that the partner_deposit_wallet is authorized by comparing it with the stored partner_deposit_wallet.
         require!(
             partner_deposit_wallet == order_tracker.partner_deposit_wallet,
-            CustomError::UnauthorizedSender
+            CustomError::UnauthorizedSigner
         );
 
         // Perform token transfer from pdw_token_account to zow_token_account.
@@ -393,57 +471,149 @@ pub mod zynk_protocol {
             timestamp: Clock::get()?.unix_timestamp,
         });
 
-        let order_tracker_account = &ctx.accounts.order_tracker.to_account_info();
-        let dest_account = &ctx.accounts.manager.to_account_info();
-
-        // Close the order account by transferring its lamports to the manager.
-        **dest_account.try_borrow_mut_lamports()? +=
-            **order_tracker_account.try_borrow_lamports()?;
-        **order_tracker_account.try_borrow_mut_lamports()? = 0;
-
-        // Clear the account data.
-        order_tracker_account.try_borrow_mut_data()?.fill(0);
+        // Close the order account (transfer lamports back to manager)
+        close_account(&ctx.accounts.order_tracker, &ctx.accounts.manager)?;
 
         Ok(())
     }
 
-    /// Updates the zynk_op_wallet (operator) address. Only callable by admin.
-    pub fn update_zynk_op_wallet(
-        ctx: Context<UpdateConfig>,
-        new_zynk_op_wallet: Pubkey,
+    ////////////////////////////////////////////////////////////////
+    /////////////////// critical functionalities ///////////////////
+    ////////////////////////////////////////////////////////////////
+
+    pub fn request_timelock(
+        ctx: Context<RequestTimelock>,
+        action: u8,
+        value: Option<Pubkey>,
     ) -> Result<()> {
-        validate_address(&new_zynk_op_wallet)?;
-        ctx.accounts.config.zynk_op_wallet = new_zynk_op_wallet;
+        let clock = Clock::get()?;
+        let req = &mut ctx.accounts.timelock;
+        let action_enum = TimelockAction::try_from(action)?;
+
+        req.action = action;
+        req.value = value.unwrap_or(Pubkey::default());
+        req.eta = clock.unix_timestamp + action_enum.delay();
+        req.executed = false;
+
         Ok(())
     }
 
-    /// Updates the manager address. Only callable by admin.
-    pub fn update_manager(
-        ctx: Context<UpdateConfig>,
-        new_manager: Pubkey,
-    ) -> Result<()> {
-        validate_address(&new_manager)?;
-        ctx.accounts.config.manager = new_manager;
+    pub fn revoke_timelock(ctx: Context<ExecuteByAdminAndGuardian>) -> Result<()> {
+        let req = &mut ctx.accounts.timelock;
+        require!(!req.executed, CustomError::AlreadyExecuted);
+
+        // Close the timelock account (transfer lamports back to admin)
+        close_account(req, &ctx.accounts.admin)?;
+
         Ok(())
     }
 
-    /// Transfers admin rights to a new admin address. Only callable by the current admin.
-    pub fn transfer_admin(ctx: Context<UpdateConfig>, new_admin: Pubkey) -> Result<()> {
-        validate_address(&new_admin)?;
-        ctx.accounts.config.admin = new_admin;
+    pub fn execute_wallet_update(ctx: Context<ExecuteByAdmin>) -> Result<()> {
+        let clock = Clock::get()?;
+        let req = &mut ctx.accounts.timelock;
+
+        require!(!req.executed, CustomError::AlreadyExecuted);
+
+        let config_guardian = ctx.accounts.config.guardian;
+        let mut bypass_ready = false;
+        if let Some(guardian) = &ctx.accounts.guardian {
+            if (guardian.key() == config_guardian) {
+                bypass_ready = true
+            }
+        }
+
+        let eta_ready = clock.unix_timestamp >= req.eta;
+        require!(eta_ready || bypass_ready, CustomError::TimelockNotReady);
+
+        let value = req.value;
+        validate_address(&value)?;
+
+        let config = &mut ctx.accounts.config;
+
+        match req.action {
+            0 => config.admin = value,
+            1 => config.manager = value,
+            2 => config.zynk_op_wallet = value,
+            _ => return Err(error!(CustomError::InvalidTimelockAction)),
+        }
+
+        req.executed = true;
+
+        // Close the timelock account (transfer lamports back to admin)
+        close_account(req, &ctx.accounts.admin)?;
+        
         Ok(())
     }
 
-    /// Sets the emergency pause state. When paused, send and replenish operations are disabled.
-    /// Only callable by admin.
-    pub fn set_pause_state(ctx: Context<UpdateConfig>, paused: bool) -> Result<()> {
-        ctx.accounts.config.paused = paused;
+    pub fn execute_guardian_update(ctx: Context<ExecuteByAdminAndGuardian>) -> Result<()> {
+        let clock = Clock::get()?;
+        let req = &mut ctx.accounts.timelock;
+        let config = &mut ctx.accounts.config;
+
+        require!(!req.executed, CustomError::AlreadyExecuted);
+
+        let eta_ready = clock.unix_timestamp >= req.eta;
+        require!(eta_ready, CustomError::TimelockNotReady);
+
+        let value = req.value;
+        validate_address(&value)?;
+
+        config.guardian = value;
+        req.executed = true;
+
+        // Close the timelock account (transfer lamports back to admin)
+        close_account(req, &ctx.accounts.admin)?;
+        
         Ok(())
     }
 
-    // Pause functionality only callable by manager
-    pub fn pause(ctx: Context<Pause>) -> Result<()> {
-        ctx.accounts.config.paused = true;
+    pub fn set_guardian(ctx: Context<Misc>) -> Result<()> {
+        let config = &mut ctx.accounts.config;
+        require!(config.guardian == Pubkey::default(), CustomError::AlreadyExecuted);
+        
+        let authority = ctx.accounts.authority.key;
+        config.guardian = *authority;
+        Ok(())
+    }
+
+    pub fn execute_unpause(ctx: Context<ExecuteByAdmin>) -> Result<()> {
+        let clock = Clock::get()?;
+        let req = &mut ctx.accounts.timelock;
+
+        require!(!req.executed, CustomError::AlreadyExecuted);
+
+        let config_guardian = ctx.accounts.config.guardian;
+        let mut bypass_ready = false;
+        if let Some(guardian) = &ctx.accounts.guardian {
+            if (guardian.key() == config_guardian) {
+                bypass_ready = true
+            }
+        }
+
+        let eta_ready = clock.unix_timestamp >= req.eta;
+        require!(eta_ready || bypass_ready, CustomError::TimelockNotReady);
+
+        let config = &mut ctx.accounts.config;
+
+        config.paused = false;
+        req.executed = true;
+
+        // Close the timelock account (transfer lamports back to admin)
+        close_account(req, &ctx.accounts.admin)?;
+
+        Ok(())
+    }
+
+    // Pause functionality
+    pub fn pause(ctx: Context<Misc>) -> Result<()> {
+        let config = &mut ctx.accounts.config;
+        let authority = ctx.accounts.authority.key;
+
+        if authority != &config.admin && authority != &config.manager && authority != &config.guardian {
+            return Err(error!(CustomError::UnauthorizedSigner));
+        }
+
+        config.paused = true;
         Ok(())
     }
 
@@ -456,6 +626,8 @@ pub mod zynk_protocol {
 
 /// Seed for the global config PDA
 pub const CONFIG_SEED: &[u8] = b"config";
+/// Seed for the global timelock PDA
+pub const TIMELOCK_SEED: &[u8] = b"timelock";
 
 #[derive(Accounts)]
 pub struct Null {}
@@ -488,7 +660,7 @@ pub struct PullAndSendTokens<'info> {
     pub partner_deposit_wallet: Signer<'info>,
     #[account(
         mut,
-        constraint = pdw_token_account.owner == partner_deposit_wallet.key() @ CustomError::UnauthorizedSender,
+        constraint = pdw_token_account.owner == partner_deposit_wallet.key() @ CustomError::UnauthorizedSigner,
         constraint = pdw_token_account.mint == beneficiary_token_account.mint @ CustomError::InvalidTokenMint
     )]
     pub pdw_token_account: Box<Account<'info, TokenAccount>>,
@@ -496,12 +668,12 @@ pub struct PullAndSendTokens<'info> {
     // Admin-controlled signer to transfer tokens
     #[account(
         mut,
-        constraint = zynk_op_wallet.key() == config.zynk_op_wallet @ CustomError::UnauthorizedSender
+        constraint = zynk_op_wallet.key() == config.zynk_op_wallet @ CustomError::UnauthorizedSigner
     )]
     pub zynk_op_wallet: Signer<'info>,
     #[account(
         mut,
-        constraint = zow_token_account.owner == config.zynk_op_wallet @ CustomError::UnauthorizedSender,
+        constraint = zow_token_account.owner == config.zynk_op_wallet @ CustomError::UnauthorizedSigner,
         constraint = zow_token_account.mint == beneficiary_token_account.mint @ CustomError::InvalidTokenMint
     )]
     pub zow_token_account: Box<Account<'info, TokenAccount>>,
@@ -536,14 +708,14 @@ pub struct SendTokens<'info> {
     pub config: Account<'info, Config>,
     #[account(
         mut,
-        constraint = zynk_op_wallet.key() == config.zynk_op_wallet @ CustomError::UnauthorizedSender
+        constraint = zynk_op_wallet.key() == config.zynk_op_wallet @ CustomError::UnauthorizedSigner
     )]
 
     // Tokens sent out from
     pub zynk_op_wallet: Signer<'info>,
     #[account(
         mut,
-        constraint = zow_token_account.owner == config.zynk_op_wallet @ CustomError::UnauthorizedSender,
+        constraint = zow_token_account.owner == config.zynk_op_wallet @ CustomError::UnauthorizedSigner,
         constraint = zow_token_account.mint == beneficiary_token_account.mint @ CustomError::InvalidTokenMint
     )]
     pub zow_token_account: Box<Account<'info, TokenAccount>>,
@@ -580,7 +752,7 @@ pub struct ReplenishTokens<'info> {
     pub partner_deposit_wallet: Signer<'info>,
     #[account(
         mut,
-        constraint = pdw_token_account.owner == partner_deposit_wallet.key() @ CustomError::UnauthorizedSender,
+        constraint = pdw_token_account.owner == partner_deposit_wallet.key() @ CustomError::UnauthorizedSigner,
         constraint = pdw_token_account.mint == zow_token_account.mint @ CustomError::InvalidTokenMint
     )]
     pub pdw_token_account: Box<Account<'info, TokenAccount>>,
@@ -594,7 +766,7 @@ pub struct ReplenishTokens<'info> {
 
     #[account(
         mut,
-        constraint = order_tracker.partner_deposit_wallet == partner_deposit_wallet.key() @ CustomError::UnauthorizedSender
+        constraint = order_tracker.partner_deposit_wallet == partner_deposit_wallet.key() @ CustomError::UnauthorizedSigner
     )]
     pub order_tracker: Account<'info, OrderTracker>,
 
@@ -602,7 +774,8 @@ pub struct ReplenishTokens<'info> {
 }
 
 #[derive(Accounts)]
-pub struct UpdateConfig<'info> {
+#[instruction(action: u8)]
+pub struct RequestTimelock<'info> {
     #[account(
         mut,
         seeds = [CONFIG_SEED],
@@ -610,19 +783,74 @@ pub struct UpdateConfig<'info> {
         has_one = admin @ CustomError::UnauthorizedAdmin
     )]
     pub config: Account<'info, Config>,
+    #[account(
+        init,
+        payer = admin,
+        space = TimelockRequest::LEN,
+        seeds = [TIMELOCK_SEED, &[action]],
+        bump
+    )]
+    pub timelock: Account<'info, TimelockRequest>,
+
+    #[account(mut)]
     pub admin: Signer<'info>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
-pub struct Pause<'info> {
+pub struct ExecuteByAdmin<'info> {
     #[account(
         mut,
         seeds = [CONFIG_SEED],
         bump,
-        has_one = manager @ CustomError::UnauthorizedManager
+        has_one = admin @ CustomError::UnauthorizedAdmin
     )]
     pub config: Account<'info, Config>,
-    pub manager: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [TIMELOCK_SEED, &[timelock.action]],
+        bump
+    )]
+    pub timelock: Account<'info, TimelockRequest>,
+
+    #[account(mut)]
+    pub admin: Signer<'info>,
+
+    // Optional signer — must match config.guardian
+    pub guardian: Option<Signer<'info>>,
+}
+
+#[derive(Accounts)]
+pub struct ExecuteByAdminAndGuardian<'info> {
+    #[account(
+        mut,
+        seeds = [CONFIG_SEED],
+        bump,
+        has_one = admin @ CustomError::UnauthorizedAdmin,
+        has_one = guardian @ CustomError::UnauthorizedGuardian
+    )]
+    pub config: Account<'info, Config>,
+    #[account(
+        mut,
+        seeds = [TIMELOCK_SEED, &[timelock.action]],
+        bump
+    )]
+    pub timelock: Account<'info, TimelockRequest>,
+
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    pub guardian: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct Misc<'info> {
+    #[account(
+        mut,
+        seeds = [CONFIG_SEED],
+        bump
+    )]
+    pub config: Account<'info, Config>,
+    pub authority: Signer<'info>,
 }
 
 #[derive(Accounts)]

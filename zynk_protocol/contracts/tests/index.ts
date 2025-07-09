@@ -28,6 +28,22 @@ const buildEd25519Ix = (msg: string, signer: Keypair) => {
 
 const DOMAIN_SEPARATOR = 1151111081099710
 
+enum TimelockAction {
+  TransferAdmin,
+  UpdateManager,
+  UpdateZynkOpWallet,
+  Unpause,
+  UpdateGuardian,
+}
+
+const timelockDelays = {
+  [TimelockAction.TransferAdmin]: 24 * 60 * 60,
+  [TimelockAction.UpdateManager]: 12 * 60 * 60,
+  [TimelockAction.UpdateZynkOpWallet]: 12 * 60 * 60,
+  [TimelockAction.Unpause]: 6 * 60 * 60,
+  [TimelockAction.UpdateGuardian]: 48 * 60 * 60,
+}
+
 describe("zynk-protocol", () => {
   // Configure the client to use the local cluster
   const provider = anchor.AnchorProvider.env();
@@ -39,6 +55,7 @@ describe("zynk-protocol", () => {
   const admin = Keypair.generate();
   const zynkOpWallet = Keypair.generate();
   const manager = Keypair.generate();
+  const guardian = Keypair.generate();
   const partnerOperationalWallet = Keypair.generate();
   const partnerDepositWallet = Keypair.generate();
 
@@ -58,11 +75,14 @@ describe("zynk-protocol", () => {
   let orderTracker: Keypair;
   let orderId: anchor.BN;
 
+  let timelockPDA: PublicKey;
+
   before(async () => {
     // Airdrop SOL to test wallets for transactions
     for (const kp of [
       admin,
       manager,
+      guardian,
       zynkOpWallet,
       partnerOperationalWallet,
       partnerDepositWallet,
@@ -535,8 +555,8 @@ describe("zynk-protocol", () => {
     } catch (error) {
       assert.include(
         error.message,
-        "UnauthorizedSender",
-        "Expected UnauthorizedSender error"
+        "UnauthorizedSigner",
+        "Expected UnauthorizedSigner error"
       );
     }
   });
@@ -759,12 +779,45 @@ describe("zynk-protocol", () => {
     }
   });
 
+  it("Should be able to set guardian by guardian itself, if not set already", async () => {
+    await program.methods
+      .setGuardian()
+      .accounts({
+        config: configPDA,
+        authority: guardian.publicKey,
+      })
+      .signers([guardian])
+      .rpc();
+
+    const configAccount = await program.account.config.fetch(configPDA);
+    assert.equal(configAccount.guardian.toBase58(), guardian.publicKey.toBase58());
+  })
+
+  it("Should not be able to set guardian by anyone, once set already", async () => {
+    try {
+      await program.methods
+        .setGuardian()
+        .accounts({
+          config: configPDA,
+          authority: admin.publicKey,
+        })
+        .signers([admin])
+        .rpc();
+    } catch (error) {
+      assert.include(
+        error.message,
+        "AlreadyExecuted",
+        "Expected AlreadyExecuted error"
+      )
+    }
+  })
+
   it("Should be able to pause by manager", async () => {
     await program.methods
       .pause()
       .accounts({
         config: configPDA,
-        manager: manager.publicKey
+        authority: manager.publicKey
       })
       .signers([manager])
       .rpc()
@@ -773,34 +826,72 @@ describe("zynk-protocol", () => {
     assert.ok(configAccount.paused, "Expected program to be paused!")
   })
 
-  it("Should not be able to pause by non-manager", async () => {
+  it("Should be able to pause by admin", async () => {
+    await program.methods
+      .pause()
+      .accounts({
+        config: configPDA,
+        authority: admin.publicKey
+      })
+      .signers([admin])
+      .rpc()
+
+    const configAccount = await program.account.config.fetch(configPDA);
+    assert.ok(configAccount.paused, "Expected program to be paused!")
+  })
+
+  it("Should be able to pause by guardian", async () => {
+    await program.methods
+      .pause()
+      .accounts({
+        config: configPDA,
+        authority: guardian.publicKey
+      })
+      .signers([guardian])
+      .rpc()
+
+    const configAccount = await program.account.config.fetch(configPDA);
+    assert.ok(configAccount.paused, "Expected program to be paused!")
+  })
+
+  it("Should not be able to pause by non-authority", async () => {
     try {
       await program.methods
         .pause()
         .accounts({
           config: configPDA,
-          manager: partnerDepositWallet.publicKey
+          authority: partnerDepositWallet.publicKey
         })
         .signers([partnerDepositWallet])
         .rpc()
     } catch (error) {
       assert.include(
         error.message,
-        "UnauthorizedManager",
-        "Expected UnauthorizedManager error"
+        "UnauthorizedSigner",
+        "Expected UnauthorizedSigner error"
       )
     }
   })
 
-  it("Should not be able to set pause state by non-admin", async () => {
+  it("Should not be able to request timelock by non-admin", async () => {
+    const action = TimelockAction.UpdateGuardian
+    const [timelockPDA, _] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("timelock"),
+        Buffer.from([action]),
+      ],
+      program.programId
+    );
+
     try {
       await program.methods
-        .setPauseState(false)
+        .requestTimelock(action, guardian.publicKey)
         .accounts({
           config: configPDA,
-          admin: manager.publicKey
+          timelock: timelockPDA,
+          admin: guardian.publicKey
         })
-        .signers([manager])
+        .signers([guardian])
         .rpc()
     } catch (error) {
       assert.include(
@@ -811,35 +902,86 @@ describe("zynk-protocol", () => {
     }
   })
 
-  it("Should be able to set pause state by admin", async () => {
+  it("Should be able to request timelock by admin", async () => {
+    const action = TimelockAction.Unpause
+    const result = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("timelock"),
+        Buffer.from([action]),
+      ],
+      program.programId
+    );
+    timelockPDA = result[0]
+
     await program.methods
-      .setPauseState(false)
+      .requestTimelock(action, guardian.publicKey)
       .accounts({
         config: configPDA,
+        timelock: timelockPDA,
         admin: admin.publicKey
       })
       .signers([admin])
       .rpc()
 
-    const configAccount = await program.account.config.fetch(configPDA);
-    assert.ok(!configAccount.paused, "Expected program to be unpaused!")
+    const timelockAccount = await program.account.timelockRequest.fetch(timelockPDA);
+    assert.equal(timelockAccount.action, action);
+    assert.equal(timelockAccount.executed, false);
+    assert.equal(timelockAccount.value.toBase58(), guardian.publicKey.toBase58());
+
+    const expectedDelay = timelockDelays[action];
+    const now = Math.floor(Date.now() / 1000);
+    assert.ok(Math.abs(timelockAccount.eta.toNumber() - (now + expectedDelay)) < 10);
   })
 
-  it("Should not be able to transfer admin by non-admin", async () => {
+  it("Should not be able to execute timelock before eta", async () => {
+    const timelockAccount = await program.account.timelockRequest.fetch(timelockPDA);
+    assert.ok(Math.floor(Date.now() / 1000) < timelockAccount.eta.toNumber(), "ETA elapsed already.");
+
     try {
       await program.methods
-        .transferAdmin(manager.publicKey)
+        .executeUnpause()
         .accounts({
           config: configPDA,
-          admin: manager.publicKey
+          timelock: timelockPDA,
+          admin: admin.publicKey
         })
-        .signers([manager])
+        .signers([admin])
         .rpc()
     } catch (error) {
       assert.include(
         error.message,
-        "UnauthorizedAdmin",
-        "Expected UnauthorizedAdmin error"
+        "TimelockNotReady",
+        "Expected TimelockNotReady error"
+      )
+    }
+  })
+
+  it("Should be able to bypass timelock by guardian, along with admin", async () => {
+    let configAccount = await program.account.config.fetch(configPDA);
+    assert.ok(configAccount.paused, "Expected program to be paused!")
+    
+    await program.methods
+      .executeUnpause()
+      .accounts({
+        config: configPDA,
+        timelock: timelockPDA,
+        admin: admin.publicKey,
+        guardian: guardian.publicKey
+      })
+      .signers([admin, guardian])
+      .rpc()
+
+    configAccount = await program.account.config.fetch(configPDA);
+    assert.ok(!configAccount.paused, "Expected program to be unpaused!")
+    
+    try {
+      const timelockAccount = await program.account.timelockRequest.fetch(timelockPDA);
+      console.log(timelockAccount)
+    } catch (error) {
+      assert.include(
+        error.message,
+        "Account does not exist",
+        "Expected `Account does not exist` error"
       )
     }
   })
