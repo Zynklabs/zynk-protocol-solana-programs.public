@@ -52,7 +52,7 @@ impl OrderTracker {
 
 
 #[account]
-pub struct TimelockRequest {
+pub struct Request {
     pub action: u8,             // Enum tag for the action
     pub value: Pubkey       ,   // New value (wallet or admin address)
     pub eta: i64,               // Earliest time the action can be executed
@@ -61,7 +61,7 @@ pub struct TimelockRequest {
     pub consensus: bool,        // Is consensus request?
 }
 
-impl TimelockRequest {
+impl Request {
     pub const LEN: usize = 8 + // discriminator
         1  + // action
         32 + // value
@@ -69,6 +69,14 @@ impl TimelockRequest {
         1  + // executed
         1  + // ack
         1;   // consensus
+}
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq)]
+#[repr(u8)]
+pub enum ActionStatus {
+    Initiated,
+    Acked,
+    Executed,
+    Revoked
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq)]
@@ -141,15 +149,6 @@ pub struct OrderClosure {
     pub order_id: u64,
     pub order_tracker: Pubkey,
     pub timestamp: i64,
-}
-
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq)]
-#[repr(u8)]
-pub enum ActionStatus {
-    Initiated,
-    Acked,
-    Executed,
-    Revoked
 }
 
 #[event]
@@ -501,7 +500,7 @@ pub mod zynk_protocol {
     ////////////////////////////////////////////////////////////////
 
     pub fn request_timelock(
-        ctx: Context<Request>,
+        ctx: Context<TimelockRequest>,
         action_u8: u8,
         value: Option<Pubkey>,
     ) -> Result<()> {
@@ -640,22 +639,20 @@ pub mod zynk_protocol {
     pub fn request_consensus(
         ctx: Context<Consensus>,
         action_u8: u8,
-        value: Option<Pubkey>,
+        value: Pubkey,
     ) -> Result<()> {
-        let timestamp = Clock::get()?.unix_timestamp;
         let req = &mut ctx.accounts.timelock;
         let action: TimelockAction = action_u8.try_into()?;
 
         req.action = action_u8;
-        req.value = value.unwrap_or(Pubkey::default());
-        req.eta = timestamp + action.delay();
+        req.value = value;
         req.consensus = true;
 
         emit!(Action {
             action: action_u8,
             timelock: req.key(),
             status: ActionStatus::Initiated,
-            timestamp,
+            timestamp: Clock::get()?.unix_timestamp,
         });
 
         Ok(())
@@ -873,7 +870,7 @@ pub struct CloseOrder<'info> {
 
 #[derive(Accounts)]
 #[instruction(action: u8)]
-pub struct Request<'info> {
+pub struct TimelockRequest<'info> {
     #[account(
         mut,
         seeds = [CONFIG_SEED],
@@ -884,11 +881,11 @@ pub struct Request<'info> {
     #[account(
         init,
         payer = manager,
-        space = TimelockRequest::LEN,
+        space = Request::LEN,
         seeds = [TIMELOCK_SEED, &[action]],
         bump
     )]
-    pub timelock: Account<'info, TimelockRequest>,
+    pub timelock: Account<'info, Request>,
 
     #[account(mut)]
     pub manager: Signer<'info>,
@@ -910,7 +907,7 @@ pub struct Execute<'info> {
         bump,
         close = admin
     )]
-    pub timelock: Account<'info, TimelockRequest>,
+    pub timelock: Account<'info, Request>,
 
     #[account(mut)]
     pub admin: Signer<'info>,
@@ -930,7 +927,7 @@ pub struct Ack<'info> {
         seeds = [TIMELOCK_SEED, &[timelock.action]],
         bump
     )]
-    pub timelock: Account<'info, TimelockRequest>,
+    pub timelock: Account<'info, Request>,
 
     #[account(mut)]
     pub guardian: Signer<'info>,
@@ -962,11 +959,11 @@ pub struct Consensus<'info> {
     #[account(
         init,
         payer = manager,
-        space = TimelockRequest::LEN,
+        space = Request::LEN,
         seeds = [TIMELOCK_SEED, &[action]],
         bump
     )]
-    pub timelock: Account<'info, TimelockRequest>,
+    pub timelock: Account<'info, Request>,
 
     #[account(mut)]
     pub manager: Signer<'info>,

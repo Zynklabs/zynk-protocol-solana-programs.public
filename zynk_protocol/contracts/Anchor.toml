@@ -3,21 +3,18 @@ seeds = false
 skip-lint = false
 
 [programs.localnet]
-zynk_protocol = "AHPfQdfzNVS7vLA8Lqqo75XaVGwDjQBobqwvDqBZ5njX"
+zynk_protocol = "EMNqHAmpFnLsQdmoDbcDYJe9fny6Q42ALoNdH1Z5XZ3e"
 
 [programs.devnet]
-zynk_protocol = "AHPfQdfzNVS7vLA8Lqqo75XaVGwDjQBobqwvDqBZ5njX"
+zynk_protocol = "EMNqHAmpFnLsQdmoDbcDYJe9fny6Q42ALoNdH1Z5XZ3e"
 
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "devnet"
+cluster = "Localnet"
+# cluster = "devnet"
 wallet = "~/.config/solana/id.json"
-
-# [provider]
-# cluster = "Localnet"
-# wallet = "~/.config/solana/id.json"
 
 [test.validator]
 rpc_port = 8899

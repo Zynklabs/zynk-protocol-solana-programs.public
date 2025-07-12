@@ -891,7 +891,7 @@ describe("zynk-protocol", () => {
       .signers([manager])
       .rpc()
 
-    const timelockAccount = await program.account.timelockRequest.fetch(timelockPDA);
+    const timelockAccount = await program.account.request.fetch(timelockPDA);
     assert.equal(timelockAccount.action, action);
     assert.ok(!timelockAccount.executed, "Timelock should not be in executed state");
     assert.ok(!timelockAccount.ack, "Timelock should not be in ack'ed state");
@@ -904,7 +904,7 @@ describe("zynk-protocol", () => {
   })
 
   it("Should not be able to execute timelock before eta", async () => {
-    const timelockAccount = await program.account.timelockRequest.fetch(timelockPDA);
+    const timelockAccount = await program.account.request.fetch(timelockPDA);
     assert.ok(Math.floor(Date.now() / 1000) < timelockAccount.eta.toNumber(), "ETA elapsed already.");
 
     try {
@@ -960,7 +960,7 @@ describe("zynk-protocol", () => {
         .signers([guardian])
         .rpc()
 
-    const timelockAccount = await program.account.timelockRequest.fetch(timelockPDA);
+    const timelockAccount = await program.account.request.fetch(timelockPDA);
     assert.ok(timelockAccount.ack, "Timelock not ack'ed!");
 
     await program.methods
@@ -977,7 +977,7 @@ describe("zynk-protocol", () => {
     assert.ok(!configAccount.paused, "Expected program to be unpaused!")
     
     try {
-      const timelockAccount = await program.account.timelockRequest.fetch(timelockPDA);
+      const timelockAccount = await program.account.request.fetch(timelockPDA);
       console.log(timelockAccount)
     } catch (error) {
       assert.include(
@@ -1008,7 +1008,7 @@ describe("zynk-protocol", () => {
       .signers([manager])
       .rpc()
 
-    let timelockAccount = await program.account.timelockRequest.fetch(timelockPDA);
+    let timelockAccount = await program.account.request.fetch(timelockPDA);
     assert.equal(timelockAccount.action, action);
 
     await program.methods
@@ -1021,7 +1021,7 @@ describe("zynk-protocol", () => {
         .signers([guardian])
         .rpc()
 
-    timelockAccount = await program.account.timelockRequest.fetch(timelockPDA);
+    timelockAccount = await program.account.request.fetch(timelockPDA);
     assert.ok(timelockAccount.ack, "Timelock not ack'ed!");
 
     await program.methods
@@ -1035,7 +1035,7 @@ describe("zynk-protocol", () => {
       .rpc()
     
     try {
-      const timelockAccount = await program.account.timelockRequest.fetch(timelockPDA);
+      const timelockAccount = await program.account.request.fetch(timelockPDA);
       console.log(timelockAccount)
     } catch (error) {
       assert.include(
@@ -1128,7 +1128,7 @@ describe("zynk-protocol", () => {
       .signers([manager, zynkOpWallet])
       .rpc()
 
-    let timelockAccount = await program.account.timelockRequest.fetch(timelockPDA);
+    let timelockAccount = await program.account.request.fetch(timelockPDA);
     assert.equal(timelockAccount.action, action);
     assert.ok(timelockAccount.consensus, "Timelock should be a consensus request");
     assert.ok(!timelockAccount.executed, "Timelock should not be in executed state");
@@ -1137,7 +1137,7 @@ describe("zynk-protocol", () => {
   })
 
   it("Should be able to execute consensus request by guardian", async () => {
-    let timelockAccount = await program.account.timelockRequest.fetch(timelockPDA);
+    let timelockAccount = await program.account.request.fetch(timelockPDA);
     assert.ok(timelockAccount.consensus, "Timelock should be a consensus request");
 
     await program.methods
@@ -1152,7 +1152,7 @@ describe("zynk-protocol", () => {
 
     // timelock account must be closed
     try {
-      timelockAccount = await program.account.timelockRequest.fetch(timelockPDA);
+      timelockAccount = await program.account.request.fetch(timelockPDA);
       console.log(timelockAccount)
     } catch (error) {
       assert.include(
@@ -1186,7 +1186,7 @@ describe("zynk-protocol", () => {
       .signers([manager])
       .rpc()
 
-    let timelockAccount = await program.account.timelockRequest.fetch(timelockPDA);
+    let timelockAccount = await program.account.request.fetch(timelockPDA);
     assert.equal(timelockAccount.action, action);
     assert.ok(!timelockAccount.consensus, "Timelock should not be a consensus request");
     assert.equal(timelockAccount.value.toBase58(), guardian.publicKey.toBase58());
@@ -1209,7 +1209,7 @@ describe("zynk-protocol", () => {
       )
     }
 
-    timelockAccount = await program.account.timelockRequest.fetch(timelockPDA);
+    timelockAccount = await program.account.request.fetch(timelockPDA);
     assert.ok(!timelockAccount.executed, "Timelock should not be in executed state");
     assert.ok(!timelockAccount.ack, "Timelock should not be in ack'ed state");
     assert.ok(!timelockAccount.consensus, "Timelock should not be a consensus request");
