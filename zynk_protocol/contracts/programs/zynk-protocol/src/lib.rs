@@ -7,7 +7,7 @@ use anchor_lang::solana_program::{
     program_error::ProgramError
 };
 
-declare_id!("AHPfQdfzNVS7vLA8Lqqo75XaVGwDjQBobqwvDqBZ5njX");
+declare_id!("EMNqHAmpFnLsQdmoDbcDYJe9fny6Q42ALoNdH1Z5XZ3e");
 
 pub const DOMAIN_SEPARATOR: u64 = 1151111081099710;
 
@@ -17,20 +17,20 @@ pub const DOMAIN_SEPARATOR: u64 = 1151111081099710;
 pub struct Config {
     pub admin: Pubkey,
     pub manager: Pubkey,
+    pub guardian: Pubkey,
     pub zynk_op_wallet: Pubkey,
-    pub paused: bool,
     pub current_nonce: u64,
-    pub guardian: Pubkey
+    pub paused: bool,
 }
 
 impl Config {
     pub const LEN: usize = 8  + // discriminator
         32 + // admin
         32 + // manager
+        32 + // guardian
         32 + // zynk_op_wallet
-        1  + // paused
         8  + // current_nonce
-        32;  // guardian
+        1;   // paused
 }
 
 /// Tracks order details including the designated partner_deposit_wallet
@@ -57,6 +57,8 @@ pub struct TimelockRequest {
     pub value: Pubkey       ,   // New value (wallet or admin address)
     pub eta: i64,               // Earliest time the action can be executed
     pub executed: bool,         // Prevent double execution
+    pub ack: bool,              // Acknowledgement flag (only by guardian)
+    pub consensus: bool,        // Is consensus request?
 }
 
 impl TimelockRequest {
@@ -64,7 +66,9 @@ impl TimelockRequest {
         1  + // action
         32 + // value
         8  + // eta
-        1;   // executed
+        1  + // executed
+        1  + // ack
+        1;   // consensus
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq)]
@@ -73,8 +77,8 @@ pub enum TimelockAction {
     TransferAdmin,
     UpdateManager,
     UpdateGuardian,
-    Unpause,
     UpdateZynkOpWallet,
+    Unpause,
 }
 
 impl TimelockAction {
@@ -82,9 +86,9 @@ impl TimelockAction {
         match self {
             TimelockAction::TransferAdmin => 24 * 60 * 60,         // 24 hours
             TimelockAction::UpdateManager => 12 * 60 * 60,         // 12 hours
+            TimelockAction::UpdateGuardian => 48 * 60 * 60,        // 48 hours
             TimelockAction::UpdateZynkOpWallet => 12 * 60 * 60,    // 12 hours
             TimelockAction::Unpause => 6 * 60 * 60,                // 6 hours
-            TimelockAction::UpdateGuardian => 48 * 60 * 60,        // 48 hours
         }
     }
 }
@@ -96,10 +100,10 @@ impl TryFrom<u8> for TimelockAction {
         match value {
             0 => Ok(TimelockAction::TransferAdmin),
             1 => Ok(TimelockAction::UpdateManager),
-            2 => Ok(TimelockAction::UpdateZynkOpWallet),
-            3 => Ok(TimelockAction::Unpause),
-            4 => Ok(TimelockAction::UpdateGuardian),
-            _ => Err(CustomError::InvalidTimelockAction.into()),
+            2 => Ok(TimelockAction::UpdateGuardian),
+            3 => Ok(TimelockAction::UpdateZynkOpWallet),
+            4 => Ok(TimelockAction::Unpause),
+            _ => Err(CustomError::InvalidAction.into()),
         }
     }
 }
@@ -139,6 +143,24 @@ pub struct OrderClosure {
     pub timestamp: i64,
 }
 
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq)]
+#[repr(u8)]
+pub enum ActionStatus {
+    Initiated,
+    Acked,
+    Executed,
+    Revoked
+}
+
+#[event]
+pub struct Action {
+    pub action: u8,
+    pub timelock: Pubkey,
+    pub status: ActionStatus,
+    pub timestamp: i64,
+}
+
+
 #[error_code]
 pub enum CustomError {
     #[msg("Unauthorized signer")]
@@ -167,12 +189,12 @@ pub enum CustomError {
     DeficientOrder,
     #[msg("Invalid message in Ed25519 instruction")]
     InvalidEd25519Message,
-    #[msg("Timelock not yet ready")]
-    TimelockNotReady,
+    #[msg("Action under review")]
+    ActionUnderReview,
     #[msg("Action already executed")]
     AlreadyExecuted,
-    #[msg("Invalid timelock action")]
-    InvalidTimelockAction,
+    #[msg("Invalid action")]
+    InvalidAction,
 }
 
 
@@ -207,9 +229,7 @@ pub fn verify_signature_syscall(
 
 /// Helper function to validate an address is not the null address
 pub fn validate_address(address: &Pubkey) -> Result<()> {
-    if address == &Pubkey::default() {
-        return Err(error!(CustomError::InvalidAddress));
-    }
+    require!(*address != Pubkey::default(), CustomError::InvalidAddress);
     Ok(())
 }
 
@@ -230,15 +250,17 @@ pub fn close_account<'a>(from: impl ToAccountInfo<'a>, to: impl ToAccountInfo<'a
 pub mod zynk_protocol {
     use super::*;
 
-    /// Initialize the protocol with admin, zynk operator wallet, and manager wallet.
+    /// Initialize the protocol with admin, zynk operator wallet, guardian, and manager wallet.
     pub fn initialize(
         ctx: Context<Initialize>,
         zynk_op_wallet: Pubkey,
+        guardian: Pubkey,
         manager: Pubkey,
     ) -> Result<()> {
         let config = &mut ctx.accounts.config;
         config.admin = ctx.accounts.admin.key();
         config.zynk_op_wallet = zynk_op_wallet;
+        config.guardian = guardian;
         config.manager = manager;
         config.paused = false;
         config.current_nonce = 0;
@@ -471,9 +493,6 @@ pub mod zynk_protocol {
             timestamp: Clock::get()?.unix_timestamp,
         });
 
-        // Close the order account (transfer lamports back to manager)
-        close_account(&ctx.accounts.order_tracker, &ctx.accounts.manager)?;
-
         Ok(())
     }
 
@@ -482,130 +501,131 @@ pub mod zynk_protocol {
     ////////////////////////////////////////////////////////////////
 
     pub fn request_timelock(
-        ctx: Context<RequestTimelock>,
-        action: u8,
+        ctx: Context<Request>,
+        action_u8: u8,
         value: Option<Pubkey>,
     ) -> Result<()> {
-        let clock = Clock::get()?;
+        let timestamp = Clock::get()?.unix_timestamp;
         let req = &mut ctx.accounts.timelock;
-        let action_enum = TimelockAction::try_from(action)?;
+        let action: TimelockAction = action_u8.try_into()?;
 
-        req.action = action;
+        req.action = action_u8;
         req.value = value.unwrap_or(Pubkey::default());
-        req.eta = clock.unix_timestamp + action_enum.delay();
-        req.executed = false;
+        req.eta = timestamp + action.delay();
+
+        emit!(Action {
+            action: action_u8,
+            timelock: req.key(),
+            status: ActionStatus::Initiated,
+            timestamp,
+        });
 
         Ok(())
     }
 
-    pub fn revoke_timelock(ctx: Context<ExecuteByAdminAndGuardian>) -> Result<()> {
+    pub fn revoke_timelock(ctx: Context<Execute>) -> Result<()> {
+        let req = &mut ctx.accounts.timelock;
+
+        require!(!req.executed, CustomError::AlreadyExecuted);
+        require!(req.ack, CustomError::ActionUnderReview);
+
+        emit!(Action {
+            action: req.action,
+            timelock: req.key(),
+            status: ActionStatus::Revoked,
+            timestamp: Clock::get()?.unix_timestamp,
+        });
+        
+        Ok(())
+    }
+
+    pub fn ack_timelock(ctx: Context<Ack>) -> Result<()> {
         let req = &mut ctx.accounts.timelock;
         require!(!req.executed, CustomError::AlreadyExecuted);
 
-        // Close the timelock account (transfer lamports back to admin)
-        close_account(req, &ctx.accounts.admin)?;
+        req.ack = true;
+
+        emit!(Action {
+            action: req.action,
+            timelock: req.key(),
+            status: ActionStatus::Acked,
+            timestamp: Clock::get()?.unix_timestamp,
+        });
 
         Ok(())
     }
 
-    pub fn execute_wallet_update(ctx: Context<ExecuteByAdmin>) -> Result<()> {
-        let clock = Clock::get()?;
+    pub fn execute_wallet_update(ctx: Context<Execute>) -> Result<()> {
+        let timestamp = Clock::get()?.unix_timestamp;
         let req = &mut ctx.accounts.timelock;
+        let action: TimelockAction = req.action.try_into()?;
 
         require!(!req.executed, CustomError::AlreadyExecuted);
+        require!(!req.consensus, CustomError::InvalidAction);
 
-        let config_guardian = ctx.accounts.config.guardian;
-        let mut bypass_ready = false;
-        if let Some(guardian) = &ctx.accounts.guardian {
-            if (guardian.key() == config_guardian) {
-                bypass_ready = true
-            }
-        }
+        let acked = req.ack;
+        let eta_ready = timestamp >= req.eta;
 
-        let eta_ready = clock.unix_timestamp >= req.eta;
-        require!(eta_ready || bypass_ready, CustomError::TimelockNotReady);
+        let ok = if action == TimelockAction::UpdateGuardian {
+            eta_ready && acked
+        } else {
+            eta_ready || acked
+        };
+
+        require!(ok, CustomError::ActionUnderReview);
 
         let value = req.value;
         validate_address(&value)?;
 
         let config = &mut ctx.accounts.config;
 
-        match req.action {
-            0 => config.admin = value,
-            1 => config.manager = value,
-            2 => config.zynk_op_wallet = value,
-            _ => return Err(error!(CustomError::InvalidTimelockAction)),
+        match action {
+            TimelockAction::TransferAdmin => config.admin = value,
+            TimelockAction::UpdateManager => config.manager = value,
+            TimelockAction::UpdateGuardian => config.guardian = value,
+            TimelockAction::UpdateZynkOpWallet => config.zynk_op_wallet = value,
+            _ => return Err(error!(CustomError::InvalidAction)),
         }
 
         req.executed = true;
 
-        // Close the timelock account (transfer lamports back to admin)
-        close_account(req, &ctx.accounts.admin)?;
-        
+        emit!(Action {
+            action: req.action,
+            timelock: req.key(),
+            status: ActionStatus::Executed,
+            timestamp,
+        });
+
         Ok(())
     }
 
-    pub fn execute_guardian_update(ctx: Context<ExecuteByAdminAndGuardian>) -> Result<()> {
-        let clock = Clock::get()?;
-        let req = &mut ctx.accounts.timelock;
-        let config = &mut ctx.accounts.config;
-
-        require!(!req.executed, CustomError::AlreadyExecuted);
-
-        let eta_ready = clock.unix_timestamp >= req.eta;
-        require!(eta_ready, CustomError::TimelockNotReady);
-
-        let value = req.value;
-        validate_address(&value)?;
-
-        config.guardian = value;
-        req.executed = true;
-
-        // Close the timelock account (transfer lamports back to admin)
-        close_account(req, &ctx.accounts.admin)?;
-        
-        Ok(())
-    }
-
-    pub fn set_guardian(ctx: Context<Misc>) -> Result<()> {
-        let config = &mut ctx.accounts.config;
-        require!(config.guardian == Pubkey::default(), CustomError::AlreadyExecuted);
-        
-        let authority = ctx.accounts.authority.key;
-        config.guardian = *authority;
-        Ok(())
-    }
-
-    pub fn execute_unpause(ctx: Context<ExecuteByAdmin>) -> Result<()> {
-        let clock = Clock::get()?;
+    pub fn execute_unpause(ctx: Context<Execute>) -> Result<()> {
+        let timestamp = Clock::get()?.unix_timestamp;
         let req = &mut ctx.accounts.timelock;
 
         require!(!req.executed, CustomError::AlreadyExecuted);
 
-        let config_guardian = ctx.accounts.config.guardian;
-        let mut bypass_ready = false;
-        if let Some(guardian) = &ctx.accounts.guardian {
-            if (guardian.key() == config_guardian) {
-                bypass_ready = true
-            }
-        }
-
-        let eta_ready = clock.unix_timestamp >= req.eta;
-        require!(eta_ready || bypass_ready, CustomError::TimelockNotReady);
+        let acked = req.ack;
+        let eta_ready = timestamp >= req.eta;
+        require!(eta_ready || acked, CustomError::ActionUnderReview);
 
         let config = &mut ctx.accounts.config;
 
         config.paused = false;
         req.executed = true;
 
-        // Close the timelock account (transfer lamports back to admin)
-        close_account(req, &ctx.accounts.admin)?;
+        emit!(Action {
+            action: req.action,
+            timelock: req.key(),
+            status: ActionStatus::Executed,
+            timestamp,
+        });
 
         Ok(())
     }
 
     // Pause functionality
-    pub fn pause(ctx: Context<Misc>) -> Result<()> {
+    pub fn pause(ctx: Context<Pause>) -> Result<()> {
         let config = &mut ctx.accounts.config;
         let authority = ctx.accounts.authority.key;
 
@@ -616,6 +636,66 @@ pub mod zynk_protocol {
         config.paused = true;
         Ok(())
     }
+
+    pub fn request_consensus(
+        ctx: Context<Consensus>,
+        action_u8: u8,
+        value: Option<Pubkey>,
+    ) -> Result<()> {
+        let timestamp = Clock::get()?.unix_timestamp;
+        let req = &mut ctx.accounts.timelock;
+        let action: TimelockAction = action_u8.try_into()?;
+
+        req.action = action_u8;
+        req.value = value.unwrap_or(Pubkey::default());
+        req.eta = timestamp + action.delay();
+        req.consensus = true;
+
+        emit!(Action {
+            action: action_u8,
+            timelock: req.key(),
+            status: ActionStatus::Initiated,
+            timestamp,
+        });
+
+        Ok(())
+    }
+
+    pub fn execute_consensus(ctx: Context<Ack>) -> Result<()> {
+        let req = &mut ctx.accounts.timelock;
+        let action: TimelockAction = req.action.try_into()?;
+
+        require!(!req.executed, CustomError::AlreadyExecuted);
+        require!(req.consensus, CustomError::InvalidAction);
+
+        let value = req.value;
+        validate_address(&value)?;
+
+        let config = &mut ctx.accounts.config;
+
+        match action {
+            TimelockAction::TransferAdmin => config.admin = value,
+            TimelockAction::UpdateManager => config.manager = value,
+            TimelockAction::UpdateZynkOpWallet => config.zynk_op_wallet = value,
+            _ => return Err(error!(CustomError::InvalidAction)),
+        }
+
+        req.ack = true;
+        req.executed = true;
+
+        emit!(Action {
+            action: req.action,
+            timelock: req.key(),
+            status: ActionStatus::Executed,
+            timestamp: Clock::get()?.unix_timestamp,
+        });
+
+        // Close the timelock account (transfer lamports back to guardian)
+        close_account(req, &ctx.accounts.guardian)?;
+        
+        Ok(())
+    }
+
 
     /// Logs the DOMAIN_SEPARATOR
     pub fn domain_separator(_ctx: Context<Null>) -> Result<()> {
@@ -697,7 +777,6 @@ pub struct PullAndSendTokens<'info> {
     pub sysvar_instructions: AccountInfo<'info>,
 }
 
-
 #[derive(Accounts)]
 pub struct SendTokens<'info> {
     #[account(
@@ -774,86 +853,6 @@ pub struct ReplenishTokens<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(action: u8)]
-pub struct RequestTimelock<'info> {
-    #[account(
-        mut,
-        seeds = [CONFIG_SEED],
-        bump,
-        has_one = admin @ CustomError::UnauthorizedAdmin
-    )]
-    pub config: Account<'info, Config>,
-    #[account(
-        init,
-        payer = admin,
-        space = TimelockRequest::LEN,
-        seeds = [TIMELOCK_SEED, &[action]],
-        bump
-    )]
-    pub timelock: Account<'info, TimelockRequest>,
-
-    #[account(mut)]
-    pub admin: Signer<'info>,
-    pub system_program: Program<'info, System>,
-}
-
-#[derive(Accounts)]
-pub struct ExecuteByAdmin<'info> {
-    #[account(
-        mut,
-        seeds = [CONFIG_SEED],
-        bump,
-        has_one = admin @ CustomError::UnauthorizedAdmin
-    )]
-    pub config: Account<'info, Config>,
-    #[account(
-        mut,
-        seeds = [TIMELOCK_SEED, &[timelock.action]],
-        bump
-    )]
-    pub timelock: Account<'info, TimelockRequest>,
-
-    #[account(mut)]
-    pub admin: Signer<'info>,
-
-    // Optional signer — must match config.guardian
-    pub guardian: Option<Signer<'info>>,
-}
-
-#[derive(Accounts)]
-pub struct ExecuteByAdminAndGuardian<'info> {
-    #[account(
-        mut,
-        seeds = [CONFIG_SEED],
-        bump,
-        has_one = admin @ CustomError::UnauthorizedAdmin,
-        has_one = guardian @ CustomError::UnauthorizedGuardian
-    )]
-    pub config: Account<'info, Config>,
-    #[account(
-        mut,
-        seeds = [TIMELOCK_SEED, &[timelock.action]],
-        bump
-    )]
-    pub timelock: Account<'info, TimelockRequest>,
-
-    #[account(mut)]
-    pub admin: Signer<'info>,
-    pub guardian: Signer<'info>,
-}
-
-#[derive(Accounts)]
-pub struct Misc<'info> {
-    #[account(
-        mut,
-        seeds = [CONFIG_SEED],
-        bump
-    )]
-    pub config: Account<'info, Config>,
-    pub authority: Signer<'info>,
-}
-
-#[derive(Accounts)]
 pub struct CloseOrder<'info> {
     #[account(
         mut,
@@ -869,5 +868,109 @@ pub struct CloseOrder<'info> {
         close = manager
     )]
     pub order_tracker: Account<'info, OrderTracker>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(action: u8)]
+pub struct Request<'info> {
+    #[account(
+        mut,
+        seeds = [CONFIG_SEED],
+        bump,
+        has_one = manager @ CustomError::UnauthorizedAdmin
+    )]
+    pub config: Account<'info, Config>,
+    #[account(
+        init,
+        payer = manager,
+        space = TimelockRequest::LEN,
+        seeds = [TIMELOCK_SEED, &[action]],
+        bump
+    )]
+    pub timelock: Account<'info, TimelockRequest>,
+
+    #[account(mut)]
+    pub manager: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct Execute<'info> {
+    #[account(
+        mut,
+        seeds = [CONFIG_SEED],
+        bump,
+        has_one = admin @ CustomError::UnauthorizedAdmin
+    )]
+    pub config: Account<'info, Config>,
+    #[account(
+        mut,
+        seeds = [TIMELOCK_SEED, &[timelock.action]],
+        bump,
+        close = admin
+    )]
+    pub timelock: Account<'info, TimelockRequest>,
+
+    #[account(mut)]
+    pub admin: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct Ack<'info> {
+    #[account(
+        mut,
+        seeds = [CONFIG_SEED],
+        bump,
+        has_one = guardian @ CustomError::UnauthorizedGuardian
+    )]
+    pub config: Account<'info, Config>,
+    #[account(
+        mut,
+        seeds = [TIMELOCK_SEED, &[timelock.action]],
+        bump
+    )]
+    pub timelock: Account<'info, TimelockRequest>,
+
+    #[account(mut)]
+    pub guardian: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct Pause<'info> {
+    #[account(
+        mut,
+        seeds = [CONFIG_SEED],
+        bump
+    )]
+    pub config: Account<'info, Config>,
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+#[instruction(action: u8)]
+pub struct Consensus<'info> {
+    #[account(
+        mut,
+        seeds = [CONFIG_SEED],
+        bump,
+        has_one = manager @ CustomError::UnauthorizedManager,
+        has_one = zynk_op_wallet @ CustomError::UnauthorizedSigner
+    )]
+    pub config: Account<'info, Config>,
+
+    #[account(
+        init,
+        payer = manager,
+        space = TimelockRequest::LEN,
+        seeds = [TIMELOCK_SEED, &[action]],
+        bump
+    )]
+    pub timelock: Account<'info, TimelockRequest>,
+
+    #[account(mut)]
+    pub manager: Signer<'info>,
+    pub zynk_op_wallet: Signer<'info>,
+
     pub system_program: Program<'info, System>,
 }
