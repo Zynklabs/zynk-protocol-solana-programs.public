@@ -33,13 +33,13 @@ impl Config {
         1;   // paused
 }
 
-/// Tracks order details including the designated partner_deposit_wallet
+/// Tracks order details including the designated pdw_token_account
 #[account]
 pub struct OrderTracker {
     pub order_id: u64,
     pub amount_out: u64,
     pub amount_in: u64,
-    pub partner_deposit_wallet: Pubkey,
+    pub pdw_token_account: Pubkey,
 }
 
 impl OrderTracker {
@@ -47,7 +47,7 @@ impl OrderTracker {
         8  + // order_id (u64)
         8  + // amount_out (u64)
         8  + // amount_in (u64)
-        32; // partner_deposit_wallet
+        32; // pdw_token_account
 }
 
 
@@ -289,7 +289,6 @@ pub mod zynk_protocol {
         require!(!config.paused, CustomError::ContractPaused);
 
         let beneficiary_wallet = ctx.accounts.beneficiary_token_account.owner.key();
-        let partner_deposit_wallet = ctx.accounts.partner_deposit_wallet.key();
         let message = format!("{}::{}", DOMAIN_SEPARATOR, beneficiary_wallet);
         verify_signature_syscall(
             &ctx.accounts.sysvar_instructions,
@@ -326,14 +325,14 @@ pub mod zynk_protocol {
         // Store order details with the new (nonzero) order ID.
         let order_tracker = &mut ctx.accounts.order_tracker;
         order_tracker.order_id = nonce;
-        order_tracker.partner_deposit_wallet = partner_deposit_wallet;
+        order_tracker.pdw_token_account = ctx.accounts.pdw_token_account.key();
         order_tracker.amount_out = amount;
         order_tracker.amount_in = amount;
 
         emit!(PullAndSend {
             order_id: nonce,
             token: ctx.accounts.pdw_token_account.mint,
-            partner_deposit_wallet,
+            partner_deposit_wallet: ctx.accounts.partner_deposit_wallet.key(),
             beneficiary_wallet,
             amount,
             domain_separator: DOMAIN_SEPARATOR,
@@ -343,25 +342,25 @@ pub mod zynk_protocol {
     }
 
     /// Creates order and if needed, sends tokens from the zynk_op_wallet (operator) to the beneficiary_wallet.
-    /// The user provides the amount, signature and the partner_deposit_wallet (to be used later for replenish).
+    /// The user provides the amount, signature and the pdw_token_account (to be used later for replenish).
     /// This function:
     /// - Checks that the protocol isn’t paused.
     /// - Verifies manager-signed message to check if beneficiary is whitelisted
     /// - Increments the nonce (to derive a unique, nonzero order ID).
     /// - If amount is non-zero, transfers tokens from the zow_token_account (owned by zynk_op_wallet) to the beneficiary_wallet.
-    /// - Records the order details (order_id, partner_deposit_wallet and amount_out) in a new OrderTracker account.
+    /// - Records the order details (order_id, pdw_token_account and amount_out) in a new OrderTracker account.
     /// - Emits a Send event.
     pub fn create_order(
         ctx: Context<SendTokens>,
         amount: u64,
-        partner_deposit_wallet: Pubkey,
+        pdw_token_account: Pubkey,
         signature: [u8; 64],
     ) -> Result<()> {        
         // Check if program is paused.
         let config = &mut ctx.accounts.config;
         require!(!config.paused, CustomError::ContractPaused);
 
-        validate_address(&partner_deposit_wallet)?;
+        validate_address(&pdw_token_account)?;
 
         let beneficiary_wallet = ctx.accounts.beneficiary_token_account.owner.key();
         let message = format!("{}::{}", DOMAIN_SEPARATOR, beneficiary_wallet);
@@ -393,7 +392,7 @@ pub mod zynk_protocol {
         // Store order details with the new (nonzero) order ID.
         let order_tracker = &mut ctx.accounts.order_tracker;
         order_tracker.order_id = nonce;
-        order_tracker.partner_deposit_wallet = partner_deposit_wallet;
+        order_tracker.pdw_token_account = pdw_token_account;
         order_tracker.amount_out = amount;
 
         emit!(Send {
@@ -440,10 +439,10 @@ pub mod zynk_protocol {
         // Validate amount is positive
         require!(amount > 0, CustomError::AmountMustBePositive);
 
-        let partner_deposit_wallet = ctx.accounts.partner_deposit_wallet.key();
-        // Verify that the partner_deposit_wallet is authorized by comparing it with the stored partner_deposit_wallet.
+        let pdw_token_account = ctx.accounts.pdw_token_account.key();
+        // Verify that the pdw_token_account is authorized by comparing it with the stored pdw_token_account.
         require!(
-            partner_deposit_wallet == order_tracker.partner_deposit_wallet,
+            pdw_token_account == order_tracker.pdw_token_account,
             CustomError::UnauthorizedSigner
         );
 
@@ -461,7 +460,7 @@ pub mod zynk_protocol {
         emit!(Replenish {
             order_id,
             token: ctx.accounts.pdw_token_account.mint,
-            partner_deposit_wallet,
+            partner_deposit_wallet: ctx.accounts.partner_deposit_wallet.key(),
             amount,
             domain_separator: DOMAIN_SEPARATOR,
         });
@@ -845,7 +844,7 @@ pub struct ReplenishTokens<'info> {
 
     #[account(
         mut,
-        constraint = order_tracker.partner_deposit_wallet == partner_deposit_wallet.key() @ CustomError::UnauthorizedSigner
+        constraint = order_tracker.pdw_token_account == pdw_token_account.key() @ CustomError::UnauthorizedSigner
     )]
     pub order_tracker: Account<'info, OrderTracker>,
 

@@ -216,14 +216,9 @@ describe("zynk-protocol", () => {
     assert.equal(+destBalance_postTx.value.amount - +destBalance_preTx.value.amount, +amount)
 
     // Verify OrderTracker stores correct partner deposit wallet
-    const orderTrackerAccount = await program.account.orderTracker.fetch(
-      orderTracker.publicKey
-    );
-    assert.ok(
-      orderTrackerAccount.partnerDepositWallet.equals(
-        partnerDepositWallet.publicKey
-      )
-    );
+    const orderTrackerAccount = await program.account.orderTracker.fetch(orderTracker.publicKey);
+    assert.equal(orderTrackerAccount.pdwTokenAccount.toBase58(), partnerDepositTokenAccount.toBase58())
+
     orderId = orderTrackerAccount.orderId
     assert.ok(orderId.toNumber() > 0);
 
@@ -253,7 +248,7 @@ describe("zynk-protocol", () => {
     await program.methods
       .createOrder(
         amount,
-        partnerDepositWallet.publicKey, // wallet that will be used later for replenish
+        partnerDepositTokenAccount, // wallet that will be used later for replenish
         Buffer.from(signature).toJSON().data
       )
       .accounts({
@@ -283,14 +278,9 @@ describe("zynk-protocol", () => {
     assert.equal(+destBalance_postTx.value.amount - +destBalance_preTx.value.amount, 0)
 
     // Verify OrderTracker stores correct details
-    const orderTrackerAccount = await program.account.orderTracker.fetch(
-      orderTracker.publicKey
-    );
-    assert.ok(
-      orderTrackerAccount.partnerDepositWallet.equals(
-        partnerDepositWallet.publicKey
-      )
-    );
+    const orderTrackerAccount = await program.account.orderTracker.fetch(orderTracker.publicKey);
+    assert.equal(orderTrackerAccount.pdwTokenAccount.toBase58(), partnerDepositTokenAccount.toBase58())
+
     orderId = orderTrackerAccount.orderId;
     assert.ok(orderId.toNumber() > 0);
 
@@ -319,7 +309,7 @@ describe("zynk-protocol", () => {
     await program.methods
       .createOrder(
         amount,
-        partnerDepositWallet.publicKey, // wallet that will be used later for replenish
+        partnerDepositTokenAccount,
         Buffer.from(signature).toJSON().data
       )
       .accounts({
@@ -349,14 +339,9 @@ describe("zynk-protocol", () => {
     assert.equal(+destBalance_postTx.value.amount - +destBalance_preTx.value.amount, +amount)
 
     // Verify OrderTracker stores correct details
-    const orderTrackerAccount = await program.account.orderTracker.fetch(
-      orderTracker.publicKey
-    );
-    assert.ok(
-      orderTrackerAccount.partnerDepositWallet.equals(
-        partnerDepositWallet.publicKey
-      )
-    );
+    const orderTrackerAccount = await program.account.orderTracker.fetch(orderTracker.publicKey);
+    assert.equal(orderTrackerAccount.pdwTokenAccount.toBase58(), partnerDepositTokenAccount.toBase58())
+
     orderId = orderTrackerAccount.orderId;
     assert.ok(orderId.toNumber() > 0);
 
@@ -441,9 +426,7 @@ describe("zynk-protocol", () => {
       zynkOpTokenAccount
     );
 
-    let orderTrackerAccount = await program.account.orderTracker.fetch(
-      orderTracker.publicKey
-    );
+    let orderTrackerAccount = await program.account.orderTracker.fetch(orderTracker.publicKey);
     const orderAmountIn_preTx = orderTrackerAccount.amountIn
 
     await program.methods
@@ -480,9 +463,7 @@ describe("zynk-protocol", () => {
       "OrderTracker should still be active after replenish"
     );
 
-    orderTrackerAccount = await program.account.orderTracker.fetch(
-      orderTracker.publicKey
-    );
+    orderTrackerAccount = await program.account.orderTracker.fetch(orderTracker.publicKey);
 
     const orderAmountIn_postTx = orderTrackerAccount.amountIn
     assert.equal(orderAmountIn_postTx.toNumber() - orderAmountIn_preTx.toNumber(), amount.toNumber());
@@ -656,6 +637,8 @@ describe("zynk-protocol", () => {
   });
 
   it("Should fail when non-manager tries to close order", async () => {
+    const amount = new anchor.BN(100000000000);
+
     // Create a new order since previous one is closed
     const newOrderTracker = Keypair.generate();
 
@@ -665,8 +648,8 @@ describe("zynk-protocol", () => {
     // Initialize new order
     await program.methods
       .createOrder(
-        new anchor.BN(100000000000),
-        partnerDepositWallet.publicKey,
+        amount,
+        partnerDepositTokenAccount,
         Buffer.from(signature).toJSON().data
       )
       .accounts({
@@ -775,7 +758,7 @@ describe("zynk-protocol", () => {
     await program.methods
       .createOrder(
         new anchor.BN(100000000000),
-        partnerDepositWallet.publicKey,
+        partnerDepositTokenAccount,
         Buffer.from(signature).toJSON().data
       )
       .accounts({
@@ -793,9 +776,7 @@ describe("zynk-protocol", () => {
       .rpc();
 
     // Get the order ID from the new order tracker
-    const orderTrackerAccount = await program.account.orderTracker.fetch(
-      newOrderTracker.publicKey
-    );
+    const orderTrackerAccount = await program.account.orderTracker.fetch(newOrderTracker.publicKey);
     const newOrderId = orderTrackerAccount.orderId;
 
     // First drain the deposit wallet by replenishing the maximum amount
