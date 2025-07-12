@@ -269,6 +269,7 @@ pub mod zynk_protocol {
 
     /// Pulls tokens from the partner_deposit_wallet into zynk_op_wallet (operator) and then,
     /// Sends tokens from the zynk_op_wallet (operator) to the beneficiary_wallet.
+    /// Create an order.
     /// The user provides the amount, whitelist signature and the partner_deposit_wallet (to be used later for replenish).
     /// This function:
     /// - Checks that the protocol isn’t paused.
@@ -341,16 +342,16 @@ pub mod zynk_protocol {
         Ok(())
     }
 
-    /// Sends tokens from the zynk_op_wallet (operator) to the beneficiary_wallet.
+    /// Creates order and if needed, sends tokens from the zynk_op_wallet (operator) to the beneficiary_wallet.
     /// The user provides the amount, signature and the partner_deposit_wallet (to be used later for replenish).
     /// This function:
     /// - Checks that the protocol isn’t paused.
     /// - Verifies manager-signed message to check if beneficiary is whitelisted
     /// - Increments the nonce (to derive a unique, nonzero order ID).
-    /// - Transfers tokens from the zow_token_account (owned by zynk_op_wallet) to the beneficiary_wallet.
+    /// - If amount is non-zero, transfers tokens from the zow_token_account (owned by zynk_op_wallet) to the beneficiary_wallet.
     /// - Records the order details (order_id, partner_deposit_wallet and amount_out) in a new OrderTracker account.
     /// - Emits a Send event.
-    pub fn send(
+    pub fn create_order(
         ctx: Context<SendTokens>,
         amount: u64,
         partner_deposit_wallet: Pubkey,
@@ -378,14 +379,16 @@ pub mod zynk_protocol {
             .ok_or(CustomError::NonceOverflow)?;
         let nonce = config.current_nonce;
 
-        // Perform token transfer from zow_token_account to beneficiary_token_account.
-        let cpi_accounts = Transfer {
-            from: ctx.accounts.zow_token_account.to_account_info(),
-            to: ctx.accounts.beneficiary_token_account.to_account_info(),
-            authority: ctx.accounts.zynk_op_wallet.to_account_info(),
-        };
-        let cpi_ctx = CpiContext::new(ctx.accounts.token_program.to_account_info(), cpi_accounts);
-        token::transfer(cpi_ctx, amount)?;
+        if amount != 0 {
+            // Perform token transfer from zow_token_account to beneficiary_token_account.
+            let cpi_accounts = Transfer {
+                from: ctx.accounts.zow_token_account.to_account_info(),
+                to: ctx.accounts.beneficiary_token_account.to_account_info(),
+                authority: ctx.accounts.zynk_op_wallet.to_account_info(),
+            };
+            let cpi_ctx = CpiContext::new(ctx.accounts.token_program.to_account_info(), cpi_accounts);
+            token::transfer(cpi_ctx, amount)?;
+        }
 
         // Store order details with the new (nonzero) order ID.
         let order_tracker = &mut ctx.accounts.order_tracker;
@@ -642,7 +645,7 @@ pub mod zynk_protocol {
         value: Pubkey,
     ) -> Result<()> {
         let req = &mut ctx.accounts.timelock;
-        let action: TimelockAction = action_u8.try_into()?;
+        let _: TimelockAction = action_u8.try_into()?;
 
         req.action = action_u8;
         req.value = value;

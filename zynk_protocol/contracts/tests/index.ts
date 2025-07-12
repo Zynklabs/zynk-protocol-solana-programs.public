@@ -233,6 +233,73 @@ describe("zynk-protocol", () => {
     assert.equal(orderAmountOut.toNumber(), amount.toNumber());
   });
 
+
+  it("Creates order without transferring tokens, in case of zero amount", async () => {
+    const amount = new anchor.BN(0);
+    orderTracker = Keypair.generate();
+
+    const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
+      zynkOpTokenAccount
+    );
+    expect(+sourceBalance_preTx.value.amount).to.be.gte(+amount);
+
+    const destBalance_preTx = await provider.connection.getTokenAccountBalance(
+      partnerOperationalTokenAccount
+    );
+
+    const message = `${DOMAIN_SEPARATOR}::${partnerOperationalWallet.publicKey.toBase58()}`
+    const { ed25519Ix, signature } = buildEd25519Ix(message, manager)
+
+    await program.methods
+      .createOrder(
+        amount,
+        partnerDepositWallet.publicKey, // wallet that will be used later for replenish
+        Buffer.from(signature).toJSON().data
+      )
+      .accounts({
+        config: configPDA,
+        zynkOpWallet: zynkOpWallet.publicKey,
+        zowTokenAccount: zynkOpTokenAccount,
+        beneficiaryTokenAccount: partnerOperationalTokenAccount,
+        orderTracker: orderTracker.publicKey,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY,
+      })
+      .preInstructions([ed25519Ix])
+      .signers([orderTracker, zynkOpWallet])
+      .rpc();
+
+    // Verify token pull
+    const sourceBalance_postTx = await provider.connection.getTokenAccountBalance(
+      zynkOpTokenAccount
+    );
+    assert.equal(+sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount, 0)
+    
+    // Verify token transfer
+    const destBalance_postTx = await provider.connection.getTokenAccountBalance(
+      partnerOperationalTokenAccount
+    );
+    assert.equal(+destBalance_postTx.value.amount - +destBalance_preTx.value.amount, 0)
+
+    // Verify OrderTracker stores correct details
+    const orderTrackerAccount = await program.account.orderTracker.fetch(
+      orderTracker.publicKey
+    );
+    assert.ok(
+      orderTrackerAccount.partnerDepositWallet.equals(
+        partnerDepositWallet.publicKey
+      )
+    );
+    orderId = orderTrackerAccount.orderId;
+    assert.ok(orderId.toNumber() > 0);
+
+    const orderAmountIn = orderTrackerAccount.amountIn
+    const orderAmountOut = orderTrackerAccount.amountOut
+    assert.equal(orderAmountIn.toNumber(), 0);
+    assert.equal(orderAmountOut.toNumber(), 0);
+  });
+
   it("Sends tokens from zynkOpWallet to partner_operational_wallet", async () => {
     const amount = new anchor.BN(100000000000);
     orderTracker = Keypair.generate();
@@ -250,7 +317,7 @@ describe("zynk-protocol", () => {
     const { ed25519Ix, signature } = buildEd25519Ix(message, manager)
 
     await program.methods
-      .send(
+      .createOrder(
         amount,
         partnerDepositWallet.publicKey, // wallet that will be used later for replenish
         Buffer.from(signature).toJSON().data
@@ -562,7 +629,7 @@ describe("zynk-protocol", () => {
     }
   });
 
-  it("Closes the replenish order by manager", async () => {
+  it("Should be able close the order by manager", async () => {
     // Admin closes the order
     await program.methods
       .closeOrder(orderId)
@@ -597,7 +664,7 @@ describe("zynk-protocol", () => {
 
     // Initialize new order
     await program.methods
-      .send(
+      .createOrder(
         new anchor.BN(100000000000),
         partnerDepositWallet.publicKey,
         Buffer.from(signature).toJSON().data
@@ -706,7 +773,7 @@ describe("zynk-protocol", () => {
     
     // Initialize new order
     await program.methods
-      .send(
+      .createOrder(
         new anchor.BN(100000000000),
         partnerDepositWallet.publicKey,
         Buffer.from(signature).toJSON().data
