@@ -117,7 +117,7 @@ impl TryFrom<u8> for TimelockAction {
 }
 
 #[event]
-pub struct PullAndSend {
+pub struct OrderCreation {
     pub order_id: u64,
     pub token: Pubkey,
     pub partner_deposit_wallet: Pubkey,
@@ -127,16 +127,7 @@ pub struct PullAndSend {
 }
 
 #[event]
-pub struct Send {
-    pub order_id: u64,
-    pub token: Pubkey,
-    pub beneficiary_wallet: Pubkey,
-    pub amount: u64,
-    pub domain_separator: u64,
-}
-
-#[event]
-pub struct Replenish {
+pub struct OrderReplenish {
     pub order_id: u64,
     pub token: Pubkey,
     pub partner_deposit_wallet: Pubkey,
@@ -278,15 +269,27 @@ pub mod zynk_protocol {
     /// - Pulls in tokens from the pdw_token_account (owned by partner_deposit_wallet) to the zow_token_account.
     /// - Transfers tokens from the zow_token_account (owned by zynk_op_wallet) to the beneficiary_wallet.
     /// - Records the order details (order_id, partner_deposit_wallet, amount_out and amount_in) in a new OrderTracker account.
-    /// - Emits a PullAndSend event.
-    pub fn pull_and_send(
-        ctx: Context<PullAndSendTokens>,
+    /// - Emits a OrderCreation event.
+    pub fn pull_and_create_order(
+        ctx: Context<CreateOrder>,
         amount: u64,
         signature: [u8; 64],
     ) -> Result<()> {
         // Check if program is paused.
         let config = &mut ctx.accounts.config;
         require!(!config.paused, CustomError::ContractPaused);
+
+        let partner_deposit_wallet = ctx.accounts.partner_deposit_wallet
+            .as_ref()
+            .ok_or(CustomError::UnauthorizedSigner)?;
+
+        let pdw_token_account = &ctx.accounts.pdw_token_account;
+
+        require_keys_eq!(
+            pdw_token_account.owner,
+            partner_deposit_wallet.key(),
+            CustomError::UnauthorizedSigner
+        );
 
         let beneficiary_wallet = ctx.accounts.beneficiary_token_account.owner.key();
         let message = format!("{}::{}", DOMAIN_SEPARATOR, beneficiary_wallet);
@@ -306,9 +309,9 @@ pub mod zynk_protocol {
 
         // Perform token transfer from pdw_token_account to zow_token_account.
         let pull_accounts = Transfer {
-            from: ctx.accounts.pdw_token_account.to_account_info(),
+            from: pdw_token_account.to_account_info(),
             to: ctx.accounts.zow_token_account.to_account_info(),
-            authority: ctx.accounts.partner_deposit_wallet.to_account_info(),
+            authority: partner_deposit_wallet.to_account_info(),
         };
         let cpi_ctx = CpiContext::new(ctx.accounts.token_program.to_account_info(), pull_accounts);
         token::transfer(cpi_ctx, amount)?;
@@ -325,14 +328,14 @@ pub mod zynk_protocol {
         // Store order details with the new (nonzero) order ID.
         let order_tracker = &mut ctx.accounts.order_tracker;
         order_tracker.order_id = nonce;
-        order_tracker.pdw_token_account = ctx.accounts.pdw_token_account.key();
+        order_tracker.pdw_token_account = pdw_token_account.key();
         order_tracker.amount_out = amount;
         order_tracker.amount_in = amount;
 
-        emit!(PullAndSend {
+        emit!(OrderCreation {
             order_id: nonce,
-            token: ctx.accounts.pdw_token_account.mint,
-            partner_deposit_wallet: ctx.accounts.partner_deposit_wallet.key(),
+            token: pdw_token_account.mint,
+            partner_deposit_wallet: partner_deposit_wallet.key(),
             beneficiary_wallet,
             amount,
             domain_separator: DOMAIN_SEPARATOR,
@@ -349,18 +352,15 @@ pub mod zynk_protocol {
     /// - Increments the nonce (to derive a unique, nonzero order ID).
     /// - If amount is non-zero, transfers tokens from the zow_token_account (owned by zynk_op_wallet) to the beneficiary_wallet.
     /// - Records the order details (order_id, pdw_token_account and amount_out) in a new OrderTracker account.
-    /// - Emits a Send event.
+    /// - Emits a OrderCreation event.
     pub fn create_order(
-        ctx: Context<SendTokens>,
+        ctx: Context<CreateOrder>,
         amount: u64,
-        pdw_token_account: Pubkey,
         signature: [u8; 64],
     ) -> Result<()> {        
         // Check if program is paused.
         let config = &mut ctx.accounts.config;
         require!(!config.paused, CustomError::ContractPaused);
-
-        validate_address(&pdw_token_account)?;
 
         let beneficiary_wallet = ctx.accounts.beneficiary_token_account.owner.key();
         let message = format!("{}::{}", DOMAIN_SEPARATOR, beneficiary_wallet);
@@ -389,15 +389,18 @@ pub mod zynk_protocol {
             token::transfer(cpi_ctx, amount)?;
         }
 
+        let pdw_token_account = &ctx.accounts.pdw_token_account;
+
         // Store order details with the new (nonzero) order ID.
         let order_tracker = &mut ctx.accounts.order_tracker;
         order_tracker.order_id = nonce;
-        order_tracker.pdw_token_account = pdw_token_account;
+        order_tracker.pdw_token_account = pdw_token_account.key();
         order_tracker.amount_out = amount;
 
-        emit!(Send {
+        emit!(OrderCreation {
             order_id: nonce,
             token: ctx.accounts.zow_token_account.mint,
+            partner_deposit_wallet: pdw_token_account.owner.key(),
             beneficiary_wallet: ctx.accounts.beneficiary_token_account.owner.key(),
             amount,
             domain_separator: DOMAIN_SEPARATOR,
@@ -416,7 +419,7 @@ pub mod zynk_protocol {
     /// - Records amount_in in the dedicated OrderTracker account.
     /// - Emits a Replenish event.
     pub fn replenish(
-        ctx: Context<ReplenishTokens>,
+        ctx: Context<Replenish>,
         order_id: u64,
         validity: i64,
         amount: u64,
@@ -457,7 +460,7 @@ pub mod zynk_protocol {
 
         order_tracker.amount_in += amount;
 
-        emit!(Replenish {
+        emit!(OrderReplenish {
             order_id,
             token: ctx.accounts.pdw_token_account.mint,
             partner_deposit_wallet: ctx.accounts.partner_deposit_wallet.key(),
@@ -727,7 +730,7 @@ pub struct Initialize<'info> {
 }
 
 #[derive(Accounts)]
-pub struct PullAndSendTokens<'info> {
+pub struct CreateOrder<'info> {
     #[account(
         mut,
         seeds = [CONFIG_SEED],
@@ -736,10 +739,9 @@ pub struct PullAndSendTokens<'info> {
     pub config: Account<'info, Config>,
 
     // Tokens pulled in from
-    pub partner_deposit_wallet: Signer<'info>,
+    pub partner_deposit_wallet: Option<Signer<'info>>,
     #[account(
         mut,
-        constraint = pdw_token_account.owner == partner_deposit_wallet.key() @ CustomError::UnauthorizedSigner,
         constraint = pdw_token_account.mint == beneficiary_token_account.mint @ CustomError::InvalidTokenMint
     )]
     pub pdw_token_account: Box<Account<'info, TokenAccount>>,
@@ -777,48 +779,7 @@ pub struct PullAndSendTokens<'info> {
 }
 
 #[derive(Accounts)]
-pub struct SendTokens<'info> {
-    #[account(
-        mut,
-        seeds = [CONFIG_SEED],
-        bump
-    )]
-    pub config: Account<'info, Config>,
-    #[account(
-        mut,
-        constraint = zynk_op_wallet.key() == config.zynk_op_wallet @ CustomError::UnauthorizedSigner
-    )]
-
-    // Tokens sent out from
-    pub zynk_op_wallet: Signer<'info>,
-    #[account(
-        mut,
-        constraint = zow_token_account.owner == config.zynk_op_wallet @ CustomError::UnauthorizedSigner,
-        constraint = zow_token_account.mint == beneficiary_token_account.mint @ CustomError::InvalidTokenMint
-    )]
-    pub zow_token_account: Box<Account<'info, TokenAccount>>,
-
-    // Tokens sent out to
-    #[account(mut)]
-    pub beneficiary_token_account: Box<Account<'info, TokenAccount>>,
-
-    #[account(
-        init,
-        payer = zynk_op_wallet,
-        space = OrderTracker::LEN
-    )]
-    pub order_tracker: Account<'info, OrderTracker>,
-
-    pub system_program: Program<'info, System>,
-    pub token_program: Program<'info, Token>,
-
-    /// CHECK: This is the Sysvar Instructions account used for ed25519 signature verification
-    #[account(address = anchor_lang::solana_program::sysvar::instructions::ID)]
-    pub sysvar_instructions: AccountInfo<'info>,
-}
-
-#[derive(Accounts)]
-pub struct ReplenishTokens<'info> {
+pub struct Replenish<'info> {
     #[account(
         mut,
         seeds = [CONFIG_SEED],
@@ -877,7 +838,7 @@ pub struct TimelockRequest<'info> {
         mut,
         seeds = [CONFIG_SEED],
         bump,
-        has_one = manager @ CustomError::UnauthorizedAdmin
+        has_one = manager @ CustomError::UnauthorizedManager
     )]
     pub config: Account<'info, Config>,
     #[account(

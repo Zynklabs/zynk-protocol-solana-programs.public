@@ -183,7 +183,7 @@ describe("zynk-protocol", () => {
     const { ed25519Ix, signature } = buildEd25519Ix(message, manager)
     
     await program.methods
-      .pullAndSend(
+      .pullAndCreateOrder(
         amount,
         Buffer.from(signature).toJSON().data
       )
@@ -248,11 +248,11 @@ describe("zynk-protocol", () => {
     await program.methods
       .createOrder(
         amount,
-        partnerDepositTokenAccount, // wallet that will be used later for replenish
         Buffer.from(signature).toJSON().data
       )
       .accounts({
         config: configPDA,
+        pdwTokenAccount: partnerDepositTokenAccount,
         zynkOpWallet: zynkOpWallet.publicKey,
         zowTokenAccount: zynkOpTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
@@ -309,11 +309,11 @@ describe("zynk-protocol", () => {
     await program.methods
       .createOrder(
         amount,
-        partnerDepositTokenAccount,
         Buffer.from(signature).toJSON().data
       )
       .accounts({
         config: configPDA,
+        pdwTokenAccount: partnerDepositTokenAccount,
         zynkOpWallet: zynkOpWallet.publicKey,
         zowTokenAccount: zynkOpTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
@@ -649,11 +649,11 @@ describe("zynk-protocol", () => {
     await program.methods
       .createOrder(
         amount,
-        partnerDepositTokenAccount,
         Buffer.from(signature).toJSON().data
       )
       .accounts({
         config: configPDA,
+        pdwTokenAccount: partnerDepositTokenAccount,
         zynkOpWallet: zynkOpWallet.publicKey,
         zowTokenAccount: zynkOpTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
@@ -695,7 +695,7 @@ describe("zynk-protocol", () => {
     }
   });
 
-  it("Fails when trying to close an already closed order", async () => {
+  it("Should fail when trying to close an already closed order", async () => {
     // Attempt to close the already closed order
     try {
       await program.methods
@@ -718,7 +718,7 @@ describe("zynk-protocol", () => {
     }
   });
 
-  it("Fails when trying to replenish a closed order", async () => {
+  it("Should fail when trying to replenish a closed order", async () => {
     // Attempt to replenish the closed order
     try {
       await program.methods
@@ -748,6 +748,7 @@ describe("zynk-protocol", () => {
   });
 
   it("Should fail when deposit wallet has insufficient balance", async () => {
+    const amount = new anchor.BN(100000000000);
     // Create a new order since previous one is closed
     const newOrderTracker = Keypair.generate();
 
@@ -757,12 +758,12 @@ describe("zynk-protocol", () => {
     // Initialize new order
     await program.methods
       .createOrder(
-        new anchor.BN(100000000000),
-        partnerDepositTokenAccount,
+        amount,
         Buffer.from(signature).toJSON().data
       )
       .accounts({
         config: configPDA,
+        pdwTokenAccount: partnerDepositTokenAccount,
         zynkOpWallet: zynkOpWallet.publicKey,
         zowTokenAccount: zynkOpTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
@@ -912,8 +913,8 @@ describe("zynk-protocol", () => {
     } catch (error) {
       assert.include(
         error.message,
-        "UnauthorizedAdmin",
-        "Expected UnauthorizedAdmin error"
+        "UnauthorizedManager",
+        "Expected UnauthorizedManager error"
       )
     }
   })
