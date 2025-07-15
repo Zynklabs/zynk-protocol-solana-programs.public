@@ -11,7 +11,7 @@ declare_id!("EMNqHAmpFnLsQdmoDbcDYJe9fny6Q42ALoNdH1Z5XZ3e");
 
 pub const DOMAIN_SEPARATOR: u64 = 1151111081099710;
 
-/// Stores the admin, the designated operator (zynk_op_wallet), the manager wallet,
+/// Stores the admin, the designated operator (zynk_op_wallet), the guardian, the manager,
 /// and current nonce for send operations.
 #[account]
 pub struct Config {
@@ -54,7 +54,7 @@ impl OrderTracker {
 #[account]
 pub struct Request {
     pub action: u8,             // Enum tag for the action
-    pub value: Pubkey       ,   // New value (wallet or admin address)
+    pub value: Pubkey       ,   // New value (wallet address)
     pub eta: i64,               // Earliest time the action can be executed
     pub executed: bool,         // Prevent double execution
     pub ack: bool,              // Acknowledgement flag (only by guardian)
@@ -718,7 +718,6 @@ pub mod zynk_protocol {
         Ok(())
     }
 
-
     /// Logs the DOMAIN_SEPARATOR
     pub fn domain_separator(_ctx: Context<Null>) -> Result<()> {
         msg!("DOMAIN_SEPARATOR: {}", DOMAIN_SEPARATOR);
@@ -746,6 +745,7 @@ pub struct Initialize<'info> {
     pub config: Account<'info, Config>,
     #[account(mut)]
     pub admin: Signer<'info>,
+
     pub system_program: Program<'info, System>,
 }
 
@@ -848,6 +848,7 @@ pub struct CloseOrder<'info> {
         close = manager
     )]
     pub order_tracker: Account<'info, OrderTracker>,
+
     pub system_program: Program<'info, System>,
 }
 
@@ -872,6 +873,7 @@ pub struct TimelockRequest<'info> {
 
     #[account(mut)]
     pub manager: Signer<'info>,
+
     pub system_program: Program<'info, System>,
 }
 
