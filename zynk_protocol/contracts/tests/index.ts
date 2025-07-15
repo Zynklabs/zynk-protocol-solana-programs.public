@@ -185,7 +185,8 @@ describe("zynk-protocol", () => {
     await program.methods
       .pullAndCreateOrder(
         amount,
-        Buffer.from(signature).toJSON().data
+        Buffer.from(signature).toJSON().data,
+        null
       )
       .accounts({
         config: configPDA,
@@ -248,7 +249,8 @@ describe("zynk-protocol", () => {
     await program.methods
       .createOrder(
         amount,
-        Buffer.from(signature).toJSON().data
+        Buffer.from(signature).toJSON().data,
+        null
       )
       .accounts({
         config: configPDA,
@@ -290,6 +292,68 @@ describe("zynk-protocol", () => {
     assert.equal(orderAmountOut.toNumber(), 0);
   });
 
+  it("Should emit OrderCreation event with correct meta", async () => {
+    const prevOrderTrackerAccount = await program.account.orderTracker.fetch(orderTracker.publicKey);
+    assert.equal(prevOrderTrackerAccount.pdwTokenAccount.toBase58(), partnerDepositTokenAccount.toBase58())
+    const prevOrderId = prevOrderTrackerAccount.orderId;
+
+    const amount = new anchor.BN(0);
+    const meta = [
+      { key: "txType", value: "0" },
+      { key: "txAmount", value: "100000000000" }
+    ];
+
+    const listener = program.addEventListener("orderCreation", (event, _slot) => {
+      if (event.orderId.toNumber() !== prevOrderId.toNumber() + 1) return
+
+      try {
+        assert.equal(event.token.toBase58(), tokenMint.toBase58())
+        assert.equal(event.partnerDepositWallet.toBase58(), partnerDepositWallet.publicKey.toBase58())
+        assert.equal(event.beneficiaryWallet.toBase58(), partnerOperationalWallet.publicKey.toBase58())
+        assert.equal(event.amount.toNumber(), amount.toNumber())
+        assert.equal(event.domainSeparator.toNumber(), DOMAIN_SEPARATOR)
+
+        assert.ok(event.meta, "Meta should be present");
+        assert.lengthOf(event.meta, meta.length, `Meta should have ${meta.length} entries`);
+        meta.forEach((item, idx) => {
+          assert.strictEqual(event.meta[idx].key, item.key);
+          assert.strictEqual(event.meta[idx].value, item.value);
+        })
+      } catch (err) {
+        throw err;
+      }
+    });
+
+    const message = `${DOMAIN_SEPARATOR}::${partnerOperationalWallet.publicKey.toBase58()}`
+    const { ed25519Ix, signature } = buildEd25519Ix(message, manager)
+
+    const tempOrderTracker = Keypair.generate();
+
+    await program.methods
+      .createOrder(
+        amount,
+        Buffer.from(signature).toJSON().data,
+        meta
+      )
+      .accounts({
+        config: configPDA,
+        pdwTokenAccount: partnerDepositTokenAccount,
+        zynkOpWallet: zynkOpWallet.publicKey,
+        zowTokenAccount: zynkOpTokenAccount,
+        beneficiaryTokenAccount: partnerOperationalTokenAccount,
+        orderTracker: tempOrderTracker.publicKey,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY,
+      })
+      .preInstructions([ed25519Ix])
+      .signers([tempOrderTracker, zynkOpWallet])
+      .rpc();
+
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await program.removeEventListener(listener);
+  });
+
   it("Sends tokens from zynkOpWallet to partner_operational_wallet", async () => {
     const amount = new anchor.BN(100000000000);
     orderTracker = Keypair.generate();
@@ -309,7 +373,8 @@ describe("zynk-protocol", () => {
     await program.methods
       .createOrder(
         amount,
-        Buffer.from(signature).toJSON().data
+        Buffer.from(signature).toJSON().data,
+        null
       )
       .accounts({
         config: configPDA,
@@ -354,7 +419,7 @@ describe("zynk-protocol", () => {
   it("Should fail closing order with zero amount_in", async () => {
     try {
       await program.methods
-        .closeOrder(orderId)
+        .closeOrder(orderId, null)
         .accounts({
           config: configPDA,
           manager: manager.publicKey,
@@ -379,7 +444,7 @@ describe("zynk-protocol", () => {
     const validity = now + 3600;
 
     await program.methods
-        .replenish(orderId, new anchor.BN(validity), amount)
+        .replenish(orderId, new anchor.BN(validity), amount, null)
         .accounts({
           config: configPDA,
           partnerDepositWallet: partnerDepositWallet.publicKey,
@@ -393,7 +458,7 @@ describe("zynk-protocol", () => {
 
      try {
       await program.methods
-        .closeOrder(orderId)
+        .closeOrder(orderId, null)
         .accounts({
           config: configPDA,
           manager: manager.publicKey,
@@ -430,7 +495,7 @@ describe("zynk-protocol", () => {
     const orderAmountIn_preTx = orderTrackerAccount.amountIn
 
     await program.methods
-      .replenish(orderId, new anchor.BN(validity), amount)
+      .replenish(orderId, new anchor.BN(validity), amount, null)
       .accounts({
         config: configPDA,
         partnerDepositWallet: partnerDepositWallet.publicKey,
@@ -475,7 +540,7 @@ describe("zynk-protocol", () => {
 
     try {
       await program.methods
-        .replenish(orderId, new anchor.BN(pastTimestamp), amount)
+        .replenish(orderId, new anchor.BN(pastTimestamp), amount, null)
         .accounts({
           config: configPDA,
           partnerDepositWallet: partnerDepositWallet.publicKey,
@@ -504,7 +569,7 @@ describe("zynk-protocol", () => {
 
     try {
       await program.methods
-        .replenish(orderId, new anchor.BN(validity), new anchor.BN(0))
+        .replenish(orderId, new anchor.BN(validity), new anchor.BN(0), null)
         .accounts({
           config: configPDA,
           partnerDepositWallet: partnerDepositWallet.publicKey,
@@ -541,7 +606,7 @@ describe("zynk-protocol", () => {
 
     // Second replenish operation
     await program.methods
-      .replenish(orderId, new anchor.BN(validity), amount)
+      .replenish(orderId, new anchor.BN(validity), amount, null)
       .accounts({
         config: configPDA,
         partnerDepositWallet: partnerDepositWallet.publicKey,
@@ -588,7 +653,8 @@ describe("zynk-protocol", () => {
         .replenish(
           orderId,
           new anchor.BN(Math.floor(Date.now() / 1000) + 3600),
-          new anchor.BN(1000000)
+          new anchor.BN(1000000),
+          null
         )
         .accounts({
           config: configPDA,
@@ -613,7 +679,7 @@ describe("zynk-protocol", () => {
   it("Should be able close the order by manager", async () => {
     // Admin closes the order
     await program.methods
-      .closeOrder(orderId)
+      .closeOrder(orderId, null)
       .accounts({
         config: configPDA,
         manager: manager.publicKey,
@@ -649,7 +715,8 @@ describe("zynk-protocol", () => {
     await program.methods
       .createOrder(
         amount,
-        Buffer.from(signature).toJSON().data
+        Buffer.from(signature).toJSON().data,
+        null
       )
       .accounts({
         config: configPDA,
@@ -676,7 +743,7 @@ describe("zynk-protocol", () => {
 
     try {
       await program.methods
-        .closeOrder(orderId)
+        .closeOrder(orderId, null)
         .accounts({
           config: configPDA,
           manager: nonManager.publicKey,
@@ -699,7 +766,7 @@ describe("zynk-protocol", () => {
     // Attempt to close the already closed order
     try {
       await program.methods
-        .closeOrder(orderId)
+        .closeOrder(orderId, null)
         .accounts({
           config: configPDA,
           manager: manager.publicKey,
@@ -719,13 +786,15 @@ describe("zynk-protocol", () => {
   });
 
   it("Should fail when trying to replenish a closed order", async () => {
+    const amount = new anchor.BN(1000000)
     // Attempt to replenish the closed order
     try {
       await program.methods
         .replenish(
           orderId,
           new anchor.BN(Math.floor(Date.now() / 1000) + 3600),
-          new anchor.BN(1000000)
+          amount,
+          null
         )
         .accounts({
           config: configPDA,
@@ -759,7 +828,8 @@ describe("zynk-protocol", () => {
     await program.methods
       .createOrder(
         amount,
-        Buffer.from(signature).toJSON().data
+        Buffer.from(signature).toJSON().data,
+        null
       )
       .accounts({
         config: configPDA,
@@ -788,7 +858,8 @@ describe("zynk-protocol", () => {
       .replenish(
         newOrderId,
         new anchor.BN(Math.floor(Date.now() / 1000) + 3600),
-        new anchor.BN(currentBalance.value.amount)
+        new anchor.BN(currentBalance.value.amount),
+        null
       )
       .accounts({
         config: configPDA,
@@ -807,7 +878,8 @@ describe("zynk-protocol", () => {
         .replenish(
           newOrderId,
           new anchor.BN(Math.floor(Date.now() / 1000) + 3600),
-          new anchor.BN(1000000)
+          new anchor.BN(1000000),
+          null
         )
         .accounts({
           config: configPDA,

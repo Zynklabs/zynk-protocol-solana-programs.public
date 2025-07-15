@@ -116,6 +116,12 @@ impl TryFrom<u8> for TimelockAction {
     }
 }
 
+#[derive(AnchorSerialize, AnchorDeserialize)]
+pub struct EventArg {
+    pub key: String,
+    pub value: String,
+}
+
 #[event]
 pub struct OrderCreation {
     pub order_id: u64,
@@ -124,6 +130,7 @@ pub struct OrderCreation {
     pub beneficiary_wallet: Pubkey,
     pub amount: u64,
     pub domain_separator: u64,
+    pub meta: Option<Vec<EventArg>>
 }
 
 #[event]
@@ -133,6 +140,7 @@ pub struct OrderReplenish {
     pub partner_deposit_wallet: Pubkey,
     pub amount: u64,
     pub domain_separator: u64,
+    pub meta: Option<Vec<EventArg>>
 }
 
 #[event]
@@ -140,6 +148,7 @@ pub struct OrderClosure {
     pub order_id: u64,
     pub order_tracker: Pubkey,
     pub timestamp: i64,
+    pub meta: Option<Vec<EventArg>>
 }
 
 #[event]
@@ -274,6 +283,7 @@ pub mod zynk_protocol {
         ctx: Context<CreateOrder>,
         amount: u64,
         signature: [u8; 64],
+        meta: Option<Vec<EventArg>>
     ) -> Result<()> {
         // Check if program is paused.
         let config = &mut ctx.accounts.config;
@@ -339,6 +349,7 @@ pub mod zynk_protocol {
             beneficiary_wallet,
             amount,
             domain_separator: DOMAIN_SEPARATOR,
+            meta
         });
 
         Ok(())
@@ -357,6 +368,7 @@ pub mod zynk_protocol {
         ctx: Context<CreateOrder>,
         amount: u64,
         signature: [u8; 64],
+        meta: Option<Vec<EventArg>>
     ) -> Result<()> {        
         // Check if program is paused.
         let config = &mut ctx.accounts.config;
@@ -404,6 +416,7 @@ pub mod zynk_protocol {
             beneficiary_wallet: ctx.accounts.beneficiary_token_account.owner.key(),
             amount,
             domain_separator: DOMAIN_SEPARATOR,
+            meta
         });
 
         Ok(())
@@ -423,6 +436,7 @@ pub mod zynk_protocol {
         order_id: u64,
         validity: i64,
         amount: u64,
+        meta: Option<Vec<EventArg>>
     ) -> Result<()> {
         // Check if program is paused.
         require!(!ctx.accounts.config.paused, CustomError::ContractPaused);
@@ -466,6 +480,7 @@ pub mod zynk_protocol {
             partner_deposit_wallet: ctx.accounts.partner_deposit_wallet.key(),
             amount,
             domain_separator: DOMAIN_SEPARATOR,
+            meta
         });
 
         Ok(())
@@ -479,7 +494,11 @@ pub mod zynk_protocol {
     /// - Emits a OrderClosure event.
     /// - Transfers lamports to manager
     /// - Clears the account data
-    pub fn close_order(ctx: Context<CloseOrder>, order_id: u64) -> Result<()> {
+    pub fn close_order(
+        ctx: Context<CloseOrder>, 
+        order_id: u64,
+        meta: Option<Vec<EventArg>>
+    ) -> Result<()> {
         // Verify that the order_id matches.
         require!(
             ctx.accounts.order_tracker.order_id == order_id,
@@ -495,6 +514,7 @@ pub mod zynk_protocol {
             order_id,
             order_tracker: ctx.accounts.order_tracker.key(),
             timestamp: Clock::get()?.unix_timestamp,
+            meta
         });
 
         Ok(())
