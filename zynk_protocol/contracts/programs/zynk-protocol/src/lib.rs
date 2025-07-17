@@ -11,8 +11,8 @@ declare_id!("EMNqHAmpFnLsQdmoDbcDYJe9fny6Q42ALoNdH1Z5XZ3e");
 
 pub const DOMAIN_SEPARATOR: u64 = 1151111081099710;
 
-/// Stores the admin, the designated operator (zynk_op_wallet), the guardian, the manager,
-/// and current nonce for send operations.
+/// Stores the admin, zynk_op_wallet, the guardian, the manager,
+/// and current nonce for transfer operations along with the global paused flag.
 #[account]
 pub struct Config {
     pub admin: Pubkey,
@@ -270,7 +270,6 @@ pub mod zynk_protocol {
     /// Pulls tokens from the partner_deposit_wallet into zynk_op_wallet (operator) and then,
     /// Sends tokens from the zynk_op_wallet (operator) to the beneficiary_wallet.
     /// Create an order.
-    /// The user provides the amount, whitelist signature and the partner_deposit_wallet (to be used later for replenish).
     /// This function:
     /// - Checks that the protocol isn’t paused.
     /// - Verifies manager-signed message to check if beneficiary is whitelisted
@@ -356,7 +355,6 @@ pub mod zynk_protocol {
     }
 
     /// Creates order and if needed, sends tokens from the zynk_op_wallet (operator) to the beneficiary_wallet.
-    /// The user provides the amount, signature and the pdw_token_account (to be used later for replenish).
     /// This function:
     /// - Checks that the protocol isn’t paused.
     /// - Verifies manager-signed message to check if beneficiary is whitelisted
