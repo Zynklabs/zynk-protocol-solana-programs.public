@@ -626,6 +626,7 @@ pub mod zynk_protocol {
         let req = &mut ctx.accounts.timelock;
 
         require!(!req.executed, CustomError::AlreadyExecuted);
+        require!(TimelockAction::try_from(req.action)? == TimelockAction::Unpause, CustomError::InvalidAction);
 
         let acked = req.ack;
         let eta_ready = timestamp >= req.eta;

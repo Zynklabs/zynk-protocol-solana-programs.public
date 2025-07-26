@@ -1067,6 +1067,68 @@ describe("zynk-protocol", () => {
     }
   })
 
+  it("Should not be able to execute unpause using a wrong timelock request", async () => {
+    let configAccount = await program.account.config.fetch(configPDA);
+    assert.ok(configAccount.paused, "Expected program to be paused!")
+
+    const action = TimelockAction.UpdateZynkOpWallet
+    const [ wrongTimelockPDA, ] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("timelock"),
+        Buffer.from([action]),
+      ],
+      program.programId
+    );
+
+    ///// Request wrong timelock /////
+    await program.methods
+      .requestTimelock(action, guardian.publicKey)
+      .accounts({
+        config: configPDA,
+        timelock: wrongTimelockPDA,
+        manager: manager.publicKey
+      })
+      .signers([manager])
+      .rpc()
+
+    ///// Guardian ack for execution readiness /////
+    await program.methods
+        .ackTimelock()
+        .accounts({
+          config: configPDA,
+          timelock: wrongTimelockPDA,
+          guardian: guardian.publicKey
+        })
+        .signers([guardian])
+        .rpc()
+
+    const timelockAccount = await program.account.request.fetch(wrongTimelockPDA);
+    assert.ok(timelockAccount.ack, "Timelock not ack'ed!");
+
+      
+    try {
+       ///// Execute unpause with wrong timelock /////
+      await program.methods
+        .executeUnpause()
+        .accounts({
+          config: configPDA,
+          timelock: wrongTimelockPDA,
+          admin: admin.publicKey
+        })
+        .signers([admin])
+        .rpc()
+    } catch (error) {
+      assert.include(
+        error.message,
+        "InvalidAction",
+        "Expected InvalidAction error"
+      )
+    }
+
+    configAccount = await program.account.config.fetch(configPDA);
+    assert.ok(configAccount.paused, "Expected program to be paused!")
+  })
+
   it("Should be able to execute timelock by admin before eta, if guardian acks", async () => {
     let configAccount = await program.account.config.fetch(configPDA);
     assert.ok(configAccount.paused, "Expected program to be paused!")
