@@ -1,6 +1,6 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
-import { PublicKey, Keypair, SystemProgram } from "@solana/web3.js";
+import { PublicKey, Keypair, SystemProgram, Ed25519Program, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,
   createMint,
@@ -8,7 +8,41 @@ import {
   mintTo,
 } from "@solana/spl-token";
 import { ZynkProtocol } from "../target/types/zynk_protocol";
-import { assert } from "chai";
+import { assert, expect } from "chai";
+import { TextEncoder } from "util";
+import nacl from 'tweetnacl';
+
+
+const buildEd25519Ix = (msg: string, signer: Keypair) => {
+  const message = new TextEncoder().encode(msg);
+  const signature = nacl.sign.detached(message, signer.secretKey);
+
+  const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
+    publicKey: signer.publicKey.toBuffer(),
+    message,
+    signature,
+  });
+
+  return { ed25519Ix, signature }
+}
+
+const DOMAIN_SEPARATOR = 1151111081099710
+
+enum TimelockAction {
+  TransferAdmin,
+  UpdateManager,
+  UpdateGuardian,
+  UpdateZynkOpWallet,
+  Unpause,
+}
+
+const timelockDelays = {
+  [TimelockAction.TransferAdmin]: 24 * 60 * 60,
+  [TimelockAction.UpdateManager]: 12 * 60 * 60,
+  [TimelockAction.UpdateGuardian]: 48 * 60 * 60,
+  [TimelockAction.UpdateZynkOpWallet]: 12 * 60 * 60,
+  [TimelockAction.Unpause]: 6 * 60 * 60,
+}
 
 describe("zynk-protocol", () => {
   // Configure the client to use the local cluster
@@ -20,7 +54,8 @@ describe("zynk-protocol", () => {
   // Test wallets (keypairs)
   const admin = Keypair.generate();
   const zynkOpWallet = Keypair.generate();
-  const paybackWallet = Keypair.generate();
+  const manager = Keypair.generate();
+  const guardian = Keypair.generate();
   const partnerOperationalWallet = Keypair.generate();
   const partnerDepositWallet = Keypair.generate();
 
@@ -35,20 +70,22 @@ describe("zynk-protocol", () => {
   let zynkOpTokenAccount: PublicKey;
   let partnerOperationalTokenAccount: PublicKey;
   let partnerDepositTokenAccount: PublicKey;
-  let paybackTokenAccount: PublicKey;
 
   // Track order details between tests
   let orderTracker: Keypair;
   let orderId: anchor.BN;
 
+  let timelockPDA: PublicKey;
+
   before(async () => {
     // Airdrop SOL to test wallets for transactions
     for (const kp of [
       admin,
+      manager,
+      guardian,
       zynkOpWallet,
-      partnerOperationalWallet,
       partnerDepositWallet,
-      paybackWallet,
+      partnerOperationalWallet,
     ]) {
       const tx = await provider.connection.requestAirdrop(
         kp.publicKey,
@@ -88,13 +125,6 @@ describe("zynk-protocol", () => {
       partnerDepositWallet.publicKey
     );
 
-    paybackTokenAccount = await createAccount(
-      provider.connection,
-      paybackWallet,
-      tokenMint,
-      paybackWallet.publicKey
-    );
-
     // Mint tokens to zynkOpWallet and partnerDepositWallet
     await mintTo(
       provider.connection,
@@ -117,7 +147,7 @@ describe("zynk-protocol", () => {
 
   it("Initializes the protocol", async () => {
     await program.methods
-      .initialize(zynkOpWallet.publicKey, paybackWallet.publicKey)
+      .initialize(zynkOpWallet.publicKey, guardian.publicKey, manager.publicKey)
       .accounts({
         config: configPDA,
         admin: admin.publicKey,
@@ -129,82 +159,365 @@ describe("zynk-protocol", () => {
     // Verify config account fields
     const configAccount = await program.account.config.fetch(configPDA);
     assert.ok(configAccount.admin.equals(admin.publicKey));
+    assert.ok(configAccount.manager.equals(manager.publicKey));
+    assert.ok(configAccount.guardian.equals(guardian.publicKey));
     assert.ok(configAccount.zynkOpWallet.equals(zynkOpWallet.publicKey));
-    assert.ok(configAccount.paybackWallet.equals(paybackWallet.publicKey));
     assert.equal(configAccount.paused, false);
     assert.equal(configAccount.currentNonce.toNumber(), 0);
   });
 
-  it("Sends tokens from zynkOpWallet to partner_operational_wallet", async () => {
-    const amount = new anchor.BN(100000000000); // 100 token
+  it("Pulls tokens from partner_deposit_wallet to zynkOpWallet and sends tokens from zynkOpWallet to partner_operational_wallet", async () => {
+    const amount = new anchor.BN(100000000000);
     orderTracker = Keypair.generate();
 
+    const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
+      partnerDepositTokenAccount
+    );
+    expect(+sourceBalance_preTx.value.amount).to.be.gte(+amount);
+
+    const destBalance_preTx = await provider.connection.getTokenAccountBalance(
+      partnerOperationalTokenAccount
+    );
+
+    const message = `${DOMAIN_SEPARATOR}::${partnerOperationalWallet.publicKey.toBase58()}`
+    const { ed25519Ix, signature } = buildEd25519Ix(message, manager)
+    
     await program.methods
-      .send(
-        tokenMint,
+      .pullAndCreateOrder(
         amount,
-        partnerDepositWallet.publicKey // wallet that will be used later for replenish
+        Buffer.from(signature).toJSON().data,
+        null
       )
       .accounts({
         config: configPDA,
+        partnerDepositWallet: partnerDepositWallet.publicKey,
+        pdwTokenAccount: partnerDepositTokenAccount,
         zynkOpWallet: zynkOpWallet.publicKey,
-        sourceTokenAccount: zynkOpTokenAccount,
-        partnerOperationalWallet: partnerOperationalTokenAccount,
-        tokenProgram: TOKEN_PROGRAM_ID,
+        zowTokenAccount: zynkOpTokenAccount,
+        beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: orderTracker.publicKey,
         systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY,
       })
+      .preInstructions([ed25519Ix])
+      .signers([orderTracker, zynkOpWallet, partnerDepositWallet])
+      .rpc();
+    
+    // Verify token pull
+    const sourceBalance_postTx = await provider.connection.getTokenAccountBalance(
+      partnerDepositTokenAccount
+    );
+    assert.equal(+sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount, +amount)
+    
+    // Verify token transfer
+    const destBalance_postTx = await provider.connection.getTokenAccountBalance(
+      partnerOperationalTokenAccount
+    );
+    assert.equal(+destBalance_postTx.value.amount - +destBalance_preTx.value.amount, +amount)
+
+    // Verify OrderTracker stores correct partner deposit wallet
+    const orderTrackerAccount = await program.account.orderTracker.fetch(orderTracker.publicKey);
+    assert.equal(orderTrackerAccount.pdwTokenAccount.toBase58(), partnerDepositTokenAccount.toBase58())
+
+    orderId = orderTrackerAccount.orderId
+    assert.ok(orderId.toNumber() > 0);
+
+    const orderAmountIn = orderTrackerAccount.amountIn
+    const orderAmountOut = orderTrackerAccount.amountOut
+    assert.equal(orderAmountIn.toNumber(), amount.toNumber());
+    assert.equal(orderAmountOut.toNumber(), amount.toNumber());
+  });
+
+
+  it("Creates order without transferring tokens, in case of zero amount", async () => {
+    const amount = new anchor.BN(0);
+    orderTracker = Keypair.generate();
+
+    const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
+      zynkOpTokenAccount
+    );
+    expect(+sourceBalance_preTx.value.amount).to.be.gte(+amount);
+
+    const destBalance_preTx = await provider.connection.getTokenAccountBalance(
+      partnerOperationalTokenAccount
+    );
+
+    const message = `${DOMAIN_SEPARATOR}::${partnerOperationalWallet.publicKey.toBase58()}`
+    const { ed25519Ix, signature } = buildEd25519Ix(message, manager)
+
+    await program.methods
+      .createOrder(
+        amount,
+        Buffer.from(signature).toJSON().data,
+        null
+      )
+      .accounts({
+        config: configPDA,
+        pdwTokenAccount: partnerDepositTokenAccount,
+        zynkOpWallet: zynkOpWallet.publicKey,
+        zowTokenAccount: zynkOpTokenAccount,
+        beneficiaryTokenAccount: partnerOperationalTokenAccount,
+        orderTracker: orderTracker.publicKey,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY,
+      })
+      .preInstructions([ed25519Ix])
       .signers([orderTracker, zynkOpWallet])
       .rpc();
 
+    // Verify token pull
+    const sourceBalance_postTx = await provider.connection.getTokenAccountBalance(
+      zynkOpTokenAccount
+    );
+    assert.equal(+sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount, 0)
+    
     // Verify token transfer
-    const destBalance = await provider.connection.getTokenAccountBalance(
+    const destBalance_postTx = await provider.connection.getTokenAccountBalance(
       partnerOperationalTokenAccount
     );
-    assert.equal(destBalance.value.amount, "100000000000");
+    assert.equal(+destBalance_postTx.value.amount - +destBalance_preTx.value.amount, 0)
 
-    // Verify OrderTracker stores correct partner deposit wallet
-    const orderTrackerAccount = await program.account.orderTracker.fetch(
-      orderTracker.publicKey
-    );
-    assert.ok(
-      orderTrackerAccount.partnerDepositWallet.equals(
-        partnerDepositWallet.publicKey
-      )
-    );
+    // Verify OrderTracker stores correct details
+    const orderTrackerAccount = await program.account.orderTracker.fetch(orderTracker.publicKey);
+    assert.equal(orderTrackerAccount.pdwTokenAccount.toBase58(), partnerDepositTokenAccount.toBase58())
+
     orderId = orderTrackerAccount.orderId;
     assert.ok(orderId.toNumber() > 0);
+
+    const orderAmountIn = orderTrackerAccount.amountIn
+    const orderAmountOut = orderTrackerAccount.amountOut
+    assert.equal(orderAmountIn.toNumber(), 0);
+    assert.equal(orderAmountOut.toNumber(), 0);
   });
 
-  it("Replenishes tokens from partner_deposit_wallet to payback_wallet", async () => {
-    const paybackAmount = new anchor.BN(100000000000); // 100 token
+  it("Should emit OrderCreation event with correct meta", async () => {
+    const prevOrderTrackerAccount = await program.account.orderTracker.fetch(orderTracker.publicKey);
+    assert.equal(prevOrderTrackerAccount.pdwTokenAccount.toBase58(), partnerDepositTokenAccount.toBase58())
+    const prevOrderId = prevOrderTrackerAccount.orderId;
+
+    const amount = new anchor.BN(0);
+    const meta = [
+      { key: "txType", value: "0" },
+      { key: "txAmount", value: "100000000000" }
+    ];
+
+    const listener = program.addEventListener("orderCreation", (event, _slot) => {
+      if (event.orderId.toNumber() !== prevOrderId.toNumber() + 1) return
+
+      try {
+        assert.equal(event.token.toBase58(), tokenMint.toBase58())
+        assert.equal(event.partnerDepositWallet.toBase58(), partnerDepositWallet.publicKey.toBase58())
+        assert.equal(event.beneficiaryWallet.toBase58(), partnerOperationalWallet.publicKey.toBase58())
+        assert.equal(event.amount.toNumber(), amount.toNumber())
+        assert.equal(event.domainSeparator.toNumber(), DOMAIN_SEPARATOR)
+
+        assert.ok(event.meta, "Meta should be present");
+        assert.lengthOf(event.meta, meta.length, `Meta should have ${meta.length} entries`);
+        meta.forEach((item, idx) => {
+          assert.strictEqual(event.meta[idx].key, item.key);
+          assert.strictEqual(event.meta[idx].value, item.value);
+        })
+      } catch (err) {
+        throw err;
+      }
+    });
+
+    const message = `${DOMAIN_SEPARATOR}::${partnerOperationalWallet.publicKey.toBase58()}`
+    const { ed25519Ix, signature } = buildEd25519Ix(message, manager)
+
+    const tempOrderTracker = Keypair.generate();
+
+    await program.methods
+      .createOrder(
+        amount,
+        Buffer.from(signature).toJSON().data,
+        meta
+      )
+      .accounts({
+        config: configPDA,
+        pdwTokenAccount: partnerDepositTokenAccount,
+        zynkOpWallet: zynkOpWallet.publicKey,
+        zowTokenAccount: zynkOpTokenAccount,
+        beneficiaryTokenAccount: partnerOperationalTokenAccount,
+        orderTracker: tempOrderTracker.publicKey,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY,
+      })
+      .preInstructions([ed25519Ix])
+      .signers([tempOrderTracker, zynkOpWallet])
+      .rpc();
+
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await program.removeEventListener(listener);
+  });
+
+  it("Sends tokens from zynkOpWallet to partner_operational_wallet", async () => {
+    const amount = new anchor.BN(100000000000);
+    orderTracker = Keypair.generate();
+
+    const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
+      zynkOpTokenAccount
+    );
+    expect(+sourceBalance_preTx.value.amount).to.be.gte(+amount);
+
+    const destBalance_preTx = await provider.connection.getTokenAccountBalance(
+      partnerOperationalTokenAccount
+    );
+
+    const message = `${DOMAIN_SEPARATOR}::${partnerOperationalWallet.publicKey.toBase58()}`
+    const { ed25519Ix, signature } = buildEd25519Ix(message, manager)
+
+    await program.methods
+      .createOrder(
+        amount,
+        Buffer.from(signature).toJSON().data,
+        null
+      )
+      .accounts({
+        config: configPDA,
+        pdwTokenAccount: partnerDepositTokenAccount,
+        zynkOpWallet: zynkOpWallet.publicKey,
+        zowTokenAccount: zynkOpTokenAccount,
+        beneficiaryTokenAccount: partnerOperationalTokenAccount,
+        orderTracker: orderTracker.publicKey,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY,
+      })
+      .preInstructions([ed25519Ix])
+      .signers([orderTracker, zynkOpWallet])
+      .rpc();
+
+    // Verify token pull
+    const sourceBalance_postTx = await provider.connection.getTokenAccountBalance(
+      zynkOpTokenAccount
+    );
+    assert.equal(+sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount, +amount)
+    
+    // Verify token transfer
+    const destBalance_postTx = await provider.connection.getTokenAccountBalance(
+      partnerOperationalTokenAccount
+    );
+    assert.equal(+destBalance_postTx.value.amount - +destBalance_preTx.value.amount, +amount)
+
+    // Verify OrderTracker stores correct details
+    const orderTrackerAccount = await program.account.orderTracker.fetch(orderTracker.publicKey);
+    assert.equal(orderTrackerAccount.pdwTokenAccount.toBase58(), partnerDepositTokenAccount.toBase58())
+
+    orderId = orderTrackerAccount.orderId;
+    assert.ok(orderId.toNumber() > 0);
+
+    const orderAmountIn = orderTrackerAccount.amountIn
+    const orderAmountOut = orderTrackerAccount.amountOut
+    assert.equal(orderAmountIn.toNumber(), 0);
+    assert.equal(orderAmountOut.toNumber(), amount.toNumber());
+  });
+
+  it("Should fail closing order with zero amount_in", async () => {
+    try {
+      await program.methods
+        .closeOrder(orderId, null)
+        .accounts({
+          config: configPDA,
+          manager: manager.publicKey,
+          orderTracker: orderTracker.publicKey,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([manager])
+        .rpc();
+      assert.fail("Expected close order to fail with zero amount_in");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "DeficientOrder",
+        "Expected DeficientOrder error"
+      );
+    }
+  });
+
+  it("Should fail closing order when amount_in is less than amount_out", async () => {
+    const amount = new anchor.BN(50000000000);
+    const now = Math.floor(Date.now() / 1000);
+    const validity = now + 3600;
+
+    await program.methods
+        .replenish(orderId, new anchor.BN(validity), amount, null)
+        .accounts({
+          config: configPDA,
+          partnerDepositWallet: partnerDepositWallet.publicKey,
+          pdwTokenAccount: partnerDepositTokenAccount,
+          zowTokenAccount: zynkOpTokenAccount,
+          orderTracker: orderTracker.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([partnerDepositWallet])
+        .rpc();
+
+     try {
+      await program.methods
+        .closeOrder(orderId, null)
+        .accounts({
+          config: configPDA,
+          manager: manager.publicKey,
+          orderTracker: orderTracker.publicKey,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([manager])
+        .rpc();
+      assert.fail("Expected close order to fail when amount_in is less than amount_out");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "DeficientOrder",
+        "Expected DeficientOrder error"
+      );
+    }
+  });
+
+  it("Replenishes tokens from partner_deposit_wallet to zynk_op_wallet", async () => {
+    const amount = new anchor.BN(100000000000);
     const now = Math.floor(Date.now() / 1000);
     const validity = now + 3600; // Valid for 1 hour
 
+    const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
+      partnerDepositTokenAccount
+    );
+    expect(+sourceBalance_preTx.value.amount).to.be.gte(+amount);
+
+    const destBalance_preTx = await provider.connection.getTokenAccountBalance(
+      zynkOpTokenAccount
+    );
+
+    let orderTrackerAccount = await program.account.orderTracker.fetch(orderTracker.publicKey);
+    const orderAmountIn_preTx = orderTrackerAccount.amountIn
+
     await program.methods
-      .replenish(orderId, new anchor.BN(validity), paybackAmount)
+      .replenish(orderId, new anchor.BN(validity), amount, null)
       .accounts({
         config: configPDA,
+        partnerDepositWallet: partnerDepositWallet.publicKey,
+        pdwTokenAccount: partnerDepositTokenAccount,
+        zowTokenAccount: zynkOpTokenAccount,
         orderTracker: orderTracker.publicKey,
-        depositWallet: partnerDepositWallet.publicKey,
-        depositTokenAccount: partnerDepositTokenAccount,
-        paybackTokenAccount: paybackTokenAccount,
         tokenProgram: TOKEN_PROGRAM_ID,
       })
       .signers([partnerDepositWallet])
       .rpc();
 
-    // Verify token transfer to payback wallet
-    const paybackBalance = await provider.connection.getTokenAccountBalance(
-      paybackTokenAccount
-    );
-    assert.equal(paybackBalance.value.amount, "100000000000");
-
-    // Verify partner deposit wallet's balance was reduced
-    const depositBalance = await provider.connection.getTokenAccountBalance(
+    // Verify token pull
+    const sourceBalance_postTx = await provider.connection.getTokenAccountBalance(
       partnerDepositTokenAccount
     );
-    assert.equal(depositBalance.value.amount, "9900000000000"); // Initial 10000 - 100 tokens
+    assert.equal(+sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount, +amount)
+    
+    // Verify token transfer
+    const destBalance_postTx = await provider.connection.getTokenAccountBalance(
+      zynkOpTokenAccount
+    );
+    assert.equal(+destBalance_postTx.value.amount - +destBalance_preTx.value.amount, +amount)
 
     // Verify that orderTracker is still active
     const orderTrackerInfo = await provider.connection.getAccountInfo(
@@ -214,21 +527,26 @@ describe("zynk-protocol", () => {
       orderTrackerInfo,
       "OrderTracker should still be active after replenish"
     );
+
+    orderTrackerAccount = await program.account.orderTracker.fetch(orderTracker.publicKey);
+
+    const orderAmountIn_postTx = orderTrackerAccount.amountIn
+    assert.equal(orderAmountIn_postTx.toNumber() - orderAmountIn_preTx.toNumber(), amount.toNumber());
   });
 
   it("Should fail when replenishing with past validity timestamp", async () => {
-    const paybackAmount = new anchor.BN(50000000000); // 50 token
+    const amount = new anchor.BN(50000000000); // 50 token
     const pastTimestamp = Math.floor(Date.now() / 1000) - 3600; // 1 hour ago
 
     try {
       await program.methods
-        .replenish(orderId, new anchor.BN(pastTimestamp), paybackAmount)
+        .replenish(orderId, new anchor.BN(pastTimestamp), amount, null)
         .accounts({
           config: configPDA,
+          partnerDepositWallet: partnerDepositWallet.publicKey,
+          pdwTokenAccount: partnerDepositTokenAccount,
+          zowTokenAccount: zynkOpTokenAccount,
           orderTracker: orderTracker.publicKey,
-          depositWallet: partnerDepositWallet.publicKey,
-          depositTokenAccount: partnerDepositTokenAccount,
-          paybackTokenAccount: paybackTokenAccount,
           tokenProgram: TOKEN_PROGRAM_ID,
         })
         .signers([partnerDepositWallet])
@@ -251,13 +569,13 @@ describe("zynk-protocol", () => {
 
     try {
       await program.methods
-        .replenish(orderId, new anchor.BN(validity), new anchor.BN(0))
+        .replenish(orderId, new anchor.BN(validity), new anchor.BN(0), null)
         .accounts({
           config: configPDA,
+          partnerDepositWallet: partnerDepositWallet.publicKey,
+          pdwTokenAccount: partnerDepositTokenAccount,
+          zowTokenAccount: zynkOpTokenAccount,
           orderTracker: orderTracker.publicKey,
-          depositWallet: partnerDepositWallet.publicKey,
-          depositTokenAccount: partnerDepositTokenAccount,
-          paybackTokenAccount: paybackTokenAccount,
           tokenProgram: TOKEN_PROGRAM_ID,
         })
         .signers([partnerDepositWallet])
@@ -273,51 +591,44 @@ describe("zynk-protocol", () => {
   });
 
   it("Can replenish tokens multiple times before order is closed", async () => {
-    const paybackAmount = new anchor.BN(50000000000); // 50 token
+    const amount = new anchor.BN(50000000000);
     const now = Math.floor(Date.now() / 1000);
     const validity = now + 3600; // Valid for 1 hour
 
-    // Get initial balances
-    const initialPaybackBalance =
-      await provider.connection.getTokenAccountBalance(paybackTokenAccount);
-    const initialDepositBalance =
-      await provider.connection.getTokenAccountBalance(
-        partnerDepositTokenAccount
-      );
+    const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
+      partnerDepositTokenAccount
+    );
+    expect(+sourceBalance_preTx.value.amount).to.be.gte(+amount);
+
+    const destBalance_preTx = await provider.connection.getTokenAccountBalance(
+      zynkOpTokenAccount
+    );
 
     // Second replenish operation
     await program.methods
-      .replenish(orderId, new anchor.BN(validity), paybackAmount)
+      .replenish(orderId, new anchor.BN(validity), amount, null)
       .accounts({
         config: configPDA,
+        partnerDepositWallet: partnerDepositWallet.publicKey,
+        pdwTokenAccount: partnerDepositTokenAccount,
+        zowTokenAccount: zynkOpTokenAccount,
         orderTracker: orderTracker.publicKey,
-        depositWallet: partnerDepositWallet.publicKey,
-        depositTokenAccount: partnerDepositTokenAccount,
-        paybackTokenAccount: paybackTokenAccount,
         tokenProgram: TOKEN_PROGRAM_ID,
       })
       .signers([partnerDepositWallet])
       .rpc();
 
-    // Verify token transfer to payback wallet (increased by 50 tokens)
-    const paybackBalance = await provider.connection.getTokenAccountBalance(
-      paybackTokenAccount
-    );
-    assert.equal(
-      paybackBalance.value.amount,
-      "150000000000",
-      "Payback balance should increase by 50 tokens"
-    );
-
-    // Verify partner deposit wallet's balance was reduced by 50 tokens
-    const depositBalance = await provider.connection.getTokenAccountBalance(
+    // Verify token pull
+    const sourceBalance_postTx = await provider.connection.getTokenAccountBalance(
       partnerDepositTokenAccount
     );
-    assert.equal(
-      depositBalance.value.amount,
-      "9850000000000",
-      "Deposit balance should decrease by 50 tokens"
+    assert.equal(+sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount, +amount)
+    
+    // Verify token transfer
+    const destBalance_postTx = await provider.connection.getTokenAccountBalance(
+      zynkOpTokenAccount
     );
+    assert.equal(+destBalance_postTx.value.amount - +destBalance_preTx.value.amount, +amount)
 
     // Verify that orderTracker is still active
     const orderTrackerInfo = await provider.connection.getAccountInfo(
@@ -342,14 +653,15 @@ describe("zynk-protocol", () => {
         .replenish(
           orderId,
           new anchor.BN(Math.floor(Date.now() / 1000) + 3600),
-          new anchor.BN(1000000)
+          new anchor.BN(1000000),
+          null
         )
         .accounts({
           config: configPDA,
+          partnerDepositWallet: wrongSigner.publicKey,
+          pdwTokenAccount: partnerDepositTokenAccount,
+          zowTokenAccount: zynkOpTokenAccount,
           orderTracker: orderTracker.publicKey,
-          depositWallet: wrongSigner.publicKey,
-          depositTokenAccount: partnerDepositTokenAccount,
-          paybackTokenAccount: paybackTokenAccount,
           tokenProgram: TOKEN_PROGRAM_ID,
         })
         .signers([wrongSigner])
@@ -358,23 +670,23 @@ describe("zynk-protocol", () => {
     } catch (error) {
       assert.include(
         error.message,
-        "UnauthorizedSender",
-        "Expected UnauthorizedSender error"
+        "UnauthorizedSigner",
+        "Expected UnauthorizedSigner error"
       );
     }
   });
 
-  it("Closes the replenish order by admin", async () => {
+  it("Should be able close the order by manager", async () => {
     // Admin closes the order
     await program.methods
-      .closeOrder(orderId)
+      .closeOrder(orderId, null)
       .accounts({
         config: configPDA,
-        admin: admin.publicKey,
+        manager: manager.publicKey,
         orderTracker: orderTracker.publicKey,
         systemProgram: anchor.web3.SystemProgram.programId,
       })
-      .signers([admin])
+      .signers([manager])
       .rpc();
 
     // Verify order is closed
@@ -390,70 +702,78 @@ describe("zynk-protocol", () => {
     }
   });
 
-  it("Should fail when non-admin tries to close order", async () => {
+  it("Should fail when non-manager tries to close order", async () => {
+    const amount = new anchor.BN(100000000000);
+
     // Create a new order since previous one is closed
     const newOrderTracker = Keypair.generate();
 
+    const message = `${DOMAIN_SEPARATOR}::${partnerOperationalWallet.publicKey.toBase58()}`
+    const { ed25519Ix, signature } = buildEd25519Ix(message, manager)
+
     // Initialize new order
     await program.methods
-      .send(
-        tokenMint,
-        new anchor.BN(100000000000),
-        partnerDepositWallet.publicKey
+      .createOrder(
+        amount,
+        Buffer.from(signature).toJSON().data,
+        null
       )
       .accounts({
         config: configPDA,
+        pdwTokenAccount: partnerDepositTokenAccount,
         zynkOpWallet: zynkOpWallet.publicKey,
-        sourceTokenAccount: zynkOpTokenAccount,
-        partnerOperationalWallet: partnerOperationalTokenAccount,
-        tokenProgram: TOKEN_PROGRAM_ID,
+        zowTokenAccount: zynkOpTokenAccount,
+        beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: newOrderTracker.publicKey,
         systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY,
       })
+      .preInstructions([ed25519Ix])
       .signers([newOrderTracker, zynkOpWallet])
       .rpc();
 
     // Create a new keypair for non-admin and fund it
-    const nonAdmin = anchor.web3.Keypair.generate();
+    const nonManager = anchor.web3.Keypair.generate();
     const airdropSig = await provider.connection.requestAirdrop(
-      nonAdmin.publicKey,
+      nonManager.publicKey,
       1000000000
     );
     await provider.connection.confirmTransaction(airdropSig);
 
     try {
       await program.methods
-        .closeOrder(orderId)
+        .closeOrder(orderId, null)
         .accounts({
           config: configPDA,
-          admin: nonAdmin.publicKey,
+          manager: nonManager.publicKey,
           orderTracker: newOrderTracker.publicKey,
           systemProgram: SystemProgram.programId,
         })
-        .signers([nonAdmin])
+        .signers([nonManager])
         .rpc();
       assert.fail("Expected close order to fail with non-admin signer");
     } catch (error) {
       assert.include(
         error.message,
-        "UnauthorizedAdmin",
-        "Expected UnauthorizedAdmin error"
+        "UnauthorizedManager",
+        "Expected UnauthorizedManager error"
       );
     }
   });
 
-  it("Fails when trying to close an already closed order", async () => {
+  it("Should fail when trying to close an already closed order", async () => {
     // Attempt to close the already closed order
     try {
       await program.methods
-        .closeOrder(orderId)
+        .closeOrder(orderId, null)
         .accounts({
           config: configPDA,
-          admin: admin.publicKey,
+          manager: manager.publicKey,
           orderTracker: orderTracker.publicKey,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
-        .signers([admin])
+        .signers([manager])
         .rpc();
       assert.fail("Expected close order to fail on already closed order");
     } catch (error) {
@@ -465,21 +785,23 @@ describe("zynk-protocol", () => {
     }
   });
 
-  it("Fails when trying to replenish a closed order", async () => {
+  it("Should fail when trying to replenish a closed order", async () => {
+    const amount = new anchor.BN(1000000)
     // Attempt to replenish the closed order
     try {
       await program.methods
         .replenish(
           orderId,
           new anchor.BN(Math.floor(Date.now() / 1000) + 3600),
-          new anchor.BN(1000000)
+          amount,
+          null
         )
         .accounts({
           config: configPDA,
+          partnerDepositWallet: partnerDepositWallet.publicKey,
+          pdwTokenAccount: partnerDepositTokenAccount,
+          zowTokenAccount: zynkOpTokenAccount,
           orderTracker: orderTracker.publicKey,
-          depositWallet: partnerDepositWallet.publicKey,
-          depositTokenAccount: partnerDepositTokenAccount,
-          paybackTokenAccount: paybackTokenAccount,
           tokenProgram: TOKEN_PROGRAM_ID,
         })
         .signers([partnerDepositWallet])
@@ -495,32 +817,37 @@ describe("zynk-protocol", () => {
   });
 
   it("Should fail when deposit wallet has insufficient balance", async () => {
+    const amount = new anchor.BN(100000000000);
     // Create a new order since previous one is closed
     const newOrderTracker = Keypair.generate();
 
+    const message = `${DOMAIN_SEPARATOR}::${partnerOperationalWallet.publicKey.toBase58()}`
+    const { ed25519Ix, signature } = buildEd25519Ix(message, manager)
+    
     // Initialize new order
     await program.methods
-      .send(
-        tokenMint,
-        new anchor.BN(100000000000),
-        partnerDepositWallet.publicKey
+      .createOrder(
+        amount,
+        Buffer.from(signature).toJSON().data,
+        null
       )
       .accounts({
         config: configPDA,
+        pdwTokenAccount: partnerDepositTokenAccount,
         zynkOpWallet: zynkOpWallet.publicKey,
-        sourceTokenAccount: zynkOpTokenAccount,
-        partnerOperationalWallet: partnerOperationalTokenAccount,
-        tokenProgram: TOKEN_PROGRAM_ID,
+        zowTokenAccount: zynkOpTokenAccount,
+        beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: newOrderTracker.publicKey,
         systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY,
       })
+      .preInstructions([ed25519Ix])
       .signers([newOrderTracker, zynkOpWallet])
       .rpc();
 
     // Get the order ID from the new order tracker
-    const orderTrackerAccount = await program.account.orderTracker.fetch(
-      newOrderTracker.publicKey
-    );
+    const orderTrackerAccount = await program.account.orderTracker.fetch(newOrderTracker.publicKey);
     const newOrderId = orderTrackerAccount.orderId;
 
     // First drain the deposit wallet by replenishing the maximum amount
@@ -531,14 +858,15 @@ describe("zynk-protocol", () => {
       .replenish(
         newOrderId,
         new anchor.BN(Math.floor(Date.now() / 1000) + 3600),
-        new anchor.BN(currentBalance.value.amount)
+        new anchor.BN(currentBalance.value.amount),
+        null
       )
       .accounts({
         config: configPDA,
+        partnerDepositWallet: partnerDepositWallet.publicKey,
+        pdwTokenAccount: partnerDepositTokenAccount,
+        zowTokenAccount: zynkOpTokenAccount,
         orderTracker: newOrderTracker.publicKey,
-        depositWallet: partnerDepositWallet.publicKey,
-        depositTokenAccount: partnerDepositTokenAccount,
-        paybackTokenAccount: paybackTokenAccount,
         tokenProgram: TOKEN_PROGRAM_ID,
       })
       .signers([partnerDepositWallet])
@@ -550,14 +878,15 @@ describe("zynk-protocol", () => {
         .replenish(
           newOrderId,
           new anchor.BN(Math.floor(Date.now() / 1000) + 3600),
-          new anchor.BN(1000000)
+          new anchor.BN(1000000),
+          null
         )
         .accounts({
           config: configPDA,
+          partnerDepositWallet: partnerDepositWallet.publicKey,
+          pdwTokenAccount: partnerDepositTokenAccount,
+          zowTokenAccount: zynkOpTokenAccount,
           orderTracker: newOrderTracker.publicKey,
-          depositWallet: partnerDepositWallet.publicKey,
-          depositTokenAccount: partnerDepositTokenAccount,
-          paybackTokenAccount: paybackTokenAccount,
           tokenProgram: TOKEN_PROGRAM_ID,
         })
         .signers([partnerDepositWallet])
@@ -571,4 +900,501 @@ describe("zynk-protocol", () => {
       );
     }
   });
+
+  it("Should be able to pause by manager", async () => {
+    await program.methods
+      .pause()
+      .accounts({
+        config: configPDA,
+        authority: manager.publicKey
+      })
+      .signers([manager])
+      .rpc()
+
+    const configAccount = await program.account.config.fetch(configPDA);
+    assert.ok(configAccount.paused, "Expected program to be paused!")
+  })
+
+  it("Should be able to pause by admin", async () => {
+    await program.methods
+      .pause()
+      .accounts({
+        config: configPDA,
+        authority: admin.publicKey
+      })
+      .signers([admin])
+      .rpc()
+
+    const configAccount = await program.account.config.fetch(configPDA);
+    assert.ok(configAccount.paused, "Expected program to be paused!")
+  })
+
+  it("Should be able to pause by guardian", async () => {
+    await program.methods
+      .pause()
+      .accounts({
+        config: configPDA,
+        authority: guardian.publicKey
+      })
+      .signers([guardian])
+      .rpc()
+
+    const configAccount = await program.account.config.fetch(configPDA);
+    assert.ok(configAccount.paused, "Expected program to be paused!")
+  })
+
+  it("Should not be able to pause by non-authority", async () => {
+    try {
+      await program.methods
+        .pause()
+        .accounts({
+          config: configPDA,
+          authority: partnerDepositWallet.publicKey
+        })
+        .signers([partnerDepositWallet])
+        .rpc()
+    } catch (error) {
+      assert.include(
+        error.message,
+        "UnauthorizedSigner",
+        "Expected UnauthorizedSigner error"
+      )
+    }
+  })
+
+  it("Should not be able to request timelock by non-manager", async () => {
+    const action = TimelockAction.UpdateGuardian
+    const [timelockPDA, _] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("timelock"),
+        Buffer.from([action]),
+      ],
+      program.programId
+    );
+
+    try {
+      await program.methods
+        .requestTimelock(action, guardian.publicKey)
+        .accounts({
+          config: configPDA,
+          timelock: timelockPDA,
+          manager: guardian.publicKey
+        })
+        .signers([guardian])
+        .rpc()
+    } catch (error) {
+      assert.include(
+        error.message,
+        "UnauthorizedManager",
+        "Expected UnauthorizedManager error"
+      )
+    }
+  })
+
+  it("Should be able to request timelock by manager", async () => {
+    const action = TimelockAction.Unpause
+    const result = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("timelock"),
+        Buffer.from([action]),
+      ],
+      program.programId
+    );
+    timelockPDA = result[0]
+
+    await program.methods
+      .requestTimelock(action, guardian.publicKey)
+      .accounts({
+        config: configPDA,
+        timelock: timelockPDA,
+        manager: manager.publicKey
+      })
+      .signers([manager])
+      .rpc()
+
+    const timelockAccount = await program.account.request.fetch(timelockPDA);
+    assert.equal(timelockAccount.action, action);
+    assert.ok(!timelockAccount.executed, "Timelock should not be in executed state");
+    assert.ok(!timelockAccount.ack, "Timelock should not be in ack'ed state");
+    assert.ok(!timelockAccount.consensus, "Timelock should not be a consensus request");
+    assert.equal(timelockAccount.value.toBase58(), guardian.publicKey.toBase58());
+
+    const expectedDelay = timelockDelays[action];
+    const now = Math.floor(Date.now() / 1000);
+    assert.ok(Math.abs(timelockAccount.eta.toNumber() - (now + expectedDelay)) < 10);
+  })
+
+  it("Should not be able to execute timelock before eta", async () => {
+    const timelockAccount = await program.account.request.fetch(timelockPDA);
+    assert.ok(Math.floor(Date.now() / 1000) < timelockAccount.eta.toNumber(), "ETA elapsed already.");
+
+    try {
+      await program.methods
+        .executeUnpause()
+        .accounts({
+          config: configPDA,
+          timelock: timelockPDA,
+          admin: admin.publicKey
+        })
+        .signers([admin])
+        .rpc()
+    } catch (error) {
+      assert.include(
+        error.message,
+        "ActionUnderReview",
+        "Expected ActionUnderReview error"
+      )
+    }
+  })
+
+  it("Should not be able to ack timelock by non-guardian", async () => {
+    try {
+      await program.methods
+        .ackTimelock()
+        .accounts({
+          config: configPDA,
+          timelock: timelockPDA,
+          guardian: admin.publicKey
+        })
+        .signers([admin])
+        .rpc()
+    } catch (error) {
+      assert.include(
+        error.message,
+        "UnauthorizedGuardian",
+        "Expected UnauthorizedGuardian error"
+      )
+    }
+  })
+
+  it("Should not be able to execute unpause using a wrong timelock request", async () => {
+    let configAccount = await program.account.config.fetch(configPDA);
+    assert.ok(configAccount.paused, "Expected program to be paused!")
+
+    const action = TimelockAction.UpdateZynkOpWallet
+    const [ wrongTimelockPDA, ] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("timelock"),
+        Buffer.from([action]),
+      ],
+      program.programId
+    );
+
+    ///// Request wrong timelock /////
+    await program.methods
+      .requestTimelock(action, guardian.publicKey)
+      .accounts({
+        config: configPDA,
+        timelock: wrongTimelockPDA,
+        manager: manager.publicKey
+      })
+      .signers([manager])
+      .rpc()
+
+    ///// Guardian ack for execution readiness /////
+    await program.methods
+        .ackTimelock()
+        .accounts({
+          config: configPDA,
+          timelock: wrongTimelockPDA,
+          guardian: guardian.publicKey
+        })
+        .signers([guardian])
+        .rpc()
+
+    const timelockAccount = await program.account.request.fetch(wrongTimelockPDA);
+    assert.ok(timelockAccount.ack, "Timelock not ack'ed!");
+
+      
+    try {
+       ///// Execute unpause with wrong timelock /////
+      await program.methods
+        .executeUnpause()
+        .accounts({
+          config: configPDA,
+          timelock: wrongTimelockPDA,
+          admin: admin.publicKey
+        })
+        .signers([admin])
+        .rpc()
+    } catch (error) {
+      assert.include(
+        error.message,
+        "InvalidAction",
+        "Expected InvalidAction error"
+      )
+    }
+
+    configAccount = await program.account.config.fetch(configPDA);
+    assert.ok(configAccount.paused, "Expected program to be paused!")
+  })
+
+  it("Should be able to execute timelock by admin before eta, if guardian acks", async () => {
+    let configAccount = await program.account.config.fetch(configPDA);
+    assert.ok(configAccount.paused, "Expected program to be paused!")
+
+    await program.methods
+        .ackTimelock()
+        .accounts({
+          config: configPDA,
+          timelock: timelockPDA,
+          guardian: guardian.publicKey
+        })
+        .signers([guardian])
+        .rpc()
+
+    const timelockAccount = await program.account.request.fetch(timelockPDA);
+    assert.ok(timelockAccount.ack, "Timelock not ack'ed!");
+
+    await program.methods
+      .executeUnpause()
+      .accounts({
+        config: configPDA,
+        timelock: timelockPDA,
+        admin: admin.publicKey
+      })
+      .signers([admin])
+      .rpc()
+
+    configAccount = await program.account.config.fetch(configPDA);
+    assert.ok(!configAccount.paused, "Expected program to be unpaused!")
+    
+    try {
+      const timelockAccount = await program.account.request.fetch(timelockPDA);
+      console.log(timelockAccount)
+    } catch (error) {
+      assert.include(
+        error.message,
+        "Account does not exist",
+        "Expected `Account does not exist` error"
+      )
+    }
+  })
+
+  it("Should be able to revoke timelock by admin, once guardian acks", async () => {
+    const action = TimelockAction.UpdateGuardian
+    const [timelockPDA, _] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("timelock"),
+        Buffer.from([action]),
+      ],
+      program.programId
+    );
+
+    await program.methods
+      .requestTimelock(action, guardian.publicKey)
+      .accounts({
+        config: configPDA,
+        timelock: timelockPDA,
+        manager: manager.publicKey
+      })
+      .signers([manager])
+      .rpc()
+
+    let timelockAccount = await program.account.request.fetch(timelockPDA);
+    assert.equal(timelockAccount.action, action);
+
+    await program.methods
+        .ackTimelock()
+        .accounts({
+          config: configPDA,
+          timelock: timelockPDA,
+          guardian: guardian.publicKey
+        })
+        .signers([guardian])
+        .rpc()
+
+    timelockAccount = await program.account.request.fetch(timelockPDA);
+    assert.ok(timelockAccount.ack, "Timelock not ack'ed!");
+
+    await program.methods
+      .revokeTimelock()
+      .accounts({
+        config: configPDA,
+        timelock: timelockPDA,
+        admin: admin.publicKey
+      })
+      .signers([admin])
+      .rpc()
+    
+    try {
+      const timelockAccount = await program.account.request.fetch(timelockPDA);
+      console.log(timelockAccount)
+    } catch (error) {
+      assert.include(
+        error.message,
+        "Account does not exist",
+        "Expected `Account does not exist` error"
+      )
+    }
+  })
+
+  it("Should not be able to request consensus by non-manager", async () => {
+    const action = TimelockAction.TransferAdmin
+    const [timelockPDA, _] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("timelock"),
+        Buffer.from([action]),
+      ],
+      program.programId
+    );
+
+    try {
+      await program.methods
+        .requestConsensus(action, guardian.publicKey)
+        .accounts({
+          config: configPDA,
+          timelock: timelockPDA,
+          manager: admin.publicKey,
+          zynkOpWallet: zynkOpWallet.publicKey
+        })
+        .signers([admin, zynkOpWallet])
+        .rpc()
+    } catch (error) {
+      assert.include(
+        error.message,
+        "UnauthorizedManager",
+        "Expected UnauthorizedManager error"
+      )
+    }
+  })
+
+  it("Should not be able to request consensus by non-zow", async () => {
+    const action = TimelockAction.TransferAdmin
+    const [timelockPDA, _] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("timelock"),
+        Buffer.from([action]),
+      ],
+      program.programId
+    );
+
+    try {
+      await program.methods
+        .requestConsensus(action, guardian.publicKey)
+        .accounts({
+          config: configPDA,
+          timelock: timelockPDA,
+          manager: manager.publicKey,
+          zynkOpWallet: partnerDepositWallet.publicKey
+        })
+        .signers([manager, partnerDepositWallet])
+        .rpc()
+    } catch (error) {
+      assert.include(
+        error.message,
+        "UnauthorizedSigner",
+        "Expected UnauthorizedSigner error"
+      )
+    }
+  })
+
+  it("Should be able to request consensus by valid signers", async () => {
+    const action = TimelockAction.TransferAdmin
+    const result = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("timelock"),
+        Buffer.from([action]),
+      ],
+      program.programId
+    );
+    timelockPDA = result[0]
+
+    await program.methods
+      .requestConsensus(action, guardian.publicKey)
+      .accounts({
+        config: configPDA,
+        timelock: timelockPDA,
+        manager: manager.publicKey,
+        zynkOpWallet: zynkOpWallet.publicKey
+      })
+      .signers([manager, zynkOpWallet])
+      .rpc()
+
+    let timelockAccount = await program.account.request.fetch(timelockPDA);
+    assert.equal(timelockAccount.action, action);
+    assert.ok(timelockAccount.consensus, "Timelock should be a consensus request");
+    assert.ok(!timelockAccount.executed, "Timelock should not be in executed state");
+    assert.ok(!timelockAccount.ack, "Timelock should not be in ack'ed state");
+    assert.equal(timelockAccount.value.toBase58(), guardian.publicKey.toBase58());
+  })
+
+  it("Should be able to execute consensus request by guardian", async () => {
+    let timelockAccount = await program.account.request.fetch(timelockPDA);
+    assert.ok(timelockAccount.consensus, "Timelock should be a consensus request");
+
+    await program.methods
+      .executeConsensus()
+      .accounts({
+        config: configPDA,
+        timelock: timelockPDA,
+        guardian: guardian.publicKey,
+      })
+      .signers([guardian])
+      .rpc()
+
+    // timelock account must be closed
+    try {
+      timelockAccount = await program.account.request.fetch(timelockPDA);
+      console.log(timelockAccount)
+    } catch (error) {
+      assert.include(
+        error.message,
+        "Account does not exist",
+        "Expected `Account does not exist` error"
+      )
+    }
+
+    const configAccount = await program.account.config.fetch(configPDA);
+    assert.equal(configAccount.admin.toBase58(), guardian.publicKey.toBase58())
+  })
+
+  it("Should not be able to execute non-consensus request by guardian", async () => {
+    const action = TimelockAction.TransferAdmin
+    const [timelockPDA, _] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("timelock"),
+        Buffer.from([action]),
+      ],
+      program.programId
+    );
+
+   await program.methods
+      .requestTimelock(action, guardian.publicKey)
+      .accounts({
+        config: configPDA,
+        timelock: timelockPDA,
+        manager: manager.publicKey
+      })
+      .signers([manager])
+      .rpc()
+
+    let timelockAccount = await program.account.request.fetch(timelockPDA);
+    assert.equal(timelockAccount.action, action);
+    assert.ok(!timelockAccount.consensus, "Timelock should not be a consensus request");
+    assert.equal(timelockAccount.value.toBase58(), guardian.publicKey.toBase58());
+
+    try {
+      await program.methods
+        .executeConsensus()
+        .accounts({
+          config: configPDA,
+          timelock: timelockPDA,
+          guardian: guardian.publicKey,
+        })
+        .signers([guardian])
+        .rpc()
+    } catch (error) {
+      assert.include(
+        error.message,
+        "InvalidAction",
+        "Expected InvalidAction error"
+      )
+    }
+
+    timelockAccount = await program.account.request.fetch(timelockPDA);
+    assert.ok(!timelockAccount.executed, "Timelock should not be in executed state");
+    assert.ok(!timelockAccount.ack, "Timelock should not be in ack'ed state");
+    assert.ok(!timelockAccount.consensus, "Timelock should not be a consensus request");
+  })
 });

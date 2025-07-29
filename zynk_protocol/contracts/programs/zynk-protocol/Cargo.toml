@@ -1,6 +1,6 @@
 [package]
 name = "zynk-protocol"
-version = "0.1.0"
+version = "2.0.0"
 description = "Created with Anchor"
 edition = "2021"
 
@@ -17,6 +17,5 @@ default = []
 idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
 
 [dependencies]
-anchor-lang = "0.30.1"
-anchor-spl = "0.30.1"
-solana-program = "1.16.24"
+anchor-lang = "0.31.1"
+anchor-spl = "0.31.1"
