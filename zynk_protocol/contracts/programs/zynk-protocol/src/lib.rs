@@ -194,6 +194,8 @@ pub enum CustomError {
     AlreadyExecuted,
     #[msg("Invalid action")]
     InvalidAction,
+    #[msg("Invalid partner deposit wallet authority")]
+    InvalidPdwAuthority
 }
 
 
@@ -280,6 +282,7 @@ pub mod zynk_protocol {
     /// - Emits a OrderCreation event.
     pub fn pull_and_create_order(
         ctx: Context<CreateOrder>,
+        partner_id: [u8; 32],
         amount: u64,
         signature: [u8; 64],
         meta: Option<Vec<EventArg>>
@@ -288,18 +291,27 @@ pub mod zynk_protocol {
         let config = &mut ctx.accounts.config;
         require!(!config.paused, CustomError::ContractPaused);
 
-        let partner_deposit_wallet = ctx.accounts.partner_deposit_wallet
-            .as_ref()
-            .ok_or(CustomError::UnauthorizedSigner)?;
-
+        let partner_deposit_wallet = &ctx.accounts.partner_deposit_wallet;
         let pdw_token_account = &ctx.accounts.pdw_token_account;
 
         require_keys_eq!(
             pdw_token_account.owner,
             partner_deposit_wallet.key(),
-            CustomError::UnauthorizedSigner
+            CustomError::InvalidPdwAuthority
         );
 
+        require_keys_eq!(
+            pdw_token_account.mint,
+            ctx.accounts.zow_token_account.mint,
+            CustomError::InvalidTokenMint
+        );
+        
+        require_keys_eq!(
+            ctx.accounts.zow_token_account.mint,
+            ctx.accounts.beneficiary_token_account.mint,
+            CustomError::InvalidTokenMint
+        );
+        
         let beneficiary_wallet = ctx.accounts.beneficiary_token_account.owner.key();
         let message = format!("{}::{}", DOMAIN_SEPARATOR, beneficiary_wallet);
         verify_signature_syscall(
@@ -322,7 +334,18 @@ pub mod zynk_protocol {
             to: ctx.accounts.zow_token_account.to_account_info(),
             authority: partner_deposit_wallet.to_account_info(),
         };
-        let cpi_ctx = CpiContext::new(ctx.accounts.token_program.to_account_info(), pull_accounts);
+
+        let seeds = &[
+            PARTNER_DEPOSIT_WALLET_SEED,
+            partner_id.as_ref(),
+            &[ctx.bumps.get("partner_deposit_wallet").copied().unwrap_or(0)],
+        ];
+        let signer_seeds = &[&seeds[..]];
+        let cpi_ctx = CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            pull_accounts,
+            signer_seeds,
+        );
         token::transfer(cpi_ctx, amount)?;
 
         // Perform token transfer from zow_token_account to beneficiary_token_account.
@@ -431,6 +454,7 @@ pub mod zynk_protocol {
     /// - Emits a Replenish event.
     pub fn replenish(
         ctx: Context<Replenish>,
+        partner_id: [u8; 32],
         order_id: u64,
         validity: i64,
         amount: u64,
@@ -461,13 +485,36 @@ pub mod zynk_protocol {
             CustomError::UnauthorizedSigner
         );
 
+        // Verify that the pdw_token_account is owned by the partner_deposit_wallet PDA
+        require_keys_eq!(
+            ctx.accounts.pdw_token_account.owner,
+            ctx.accounts.partner_deposit_wallet.key(),
+            CustomError::InvalidPdwAuthority
+        );
+
+        require_keys_eq!(
+            ctx.accounts.pdw_token_account.mint,
+            ctx.accounts.zow_token_account.mint,
+            CustomError::InvalidTokenMint
+        );
+
         // Perform token transfer from pdw_token_account to zow_token_account.
         let cpi_accounts = Transfer {
             from: ctx.accounts.pdw_token_account.to_account_info(),
             to: ctx.accounts.zow_token_account.to_account_info(),
             authority: ctx.accounts.partner_deposit_wallet.to_account_info(),
         };
-        let cpi_ctx = CpiContext::new(ctx.accounts.token_program.to_account_info(), cpi_accounts);
+        let seeds = &[
+            PARTNER_DEPOSIT_WALLET_SEED,
+            partner_id.as_ref(),
+            &[ctx.bumps.get("partner_deposit_wallet").copied().unwrap_or(0)],
+        ];
+        let signer_seeds = &[&seeds[..]];
+        let cpi_ctx = CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            cpi_accounts,
+            signer_seeds,
+        );
         token::transfer(cpi_ctx, amount)?;
 
         order_tracker.amount_in += amount;
@@ -728,6 +775,8 @@ pub mod zynk_protocol {
 pub const CONFIG_SEED: &[u8] = b"config";
 /// Seed for the global timelock PDA
 pub const TIMELOCK_SEED: &[u8] = b"timelock";
+/// Seed for partner deposit wallet PDA
+pub const PARTNER_DEPOSIT_WALLET_SEED: &[u8] = b"partner_deposit_wallet";
 
 #[derive(Accounts)]
 pub struct Null {}
@@ -749,6 +798,7 @@ pub struct Initialize<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(partner_id: [u8; 32])]
 pub struct CreateOrder<'info> {
     #[account(
         mut,
@@ -758,10 +808,16 @@ pub struct CreateOrder<'info> {
     pub config: Account<'info, Config>,
 
     // Tokens pulled in from
-    pub partner_deposit_wallet: Option<Signer<'info>>,
+    /// CHECK: Partner deposit wallet PDA - verified by seeds
+    #[account(
+        seeds = [PARTNER_DEPOSIT_WALLET_SEED, partner_id.as_ref()],
+        bump
+    )]
+    pub partner_deposit_wallet: UncheckedAccount<'info>,
     #[account(
         mut,
-        constraint = pdw_token_account.mint == beneficiary_token_account.mint @ CustomError::InvalidTokenMint
+        constraint = pdw_token_account.mint == beneficiary_token_account.mint @ CustomError::InvalidTokenMint,
+        constraint = pdw_token_account.owner == partner_deposit_wallet.key() @ CustomError::InvalidPdwAuthority
     )]
     pub pdw_token_account: Box<Account<'info, TokenAccount>>,
 
@@ -798,6 +854,7 @@ pub struct CreateOrder<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(partner_id: [u8; 32])]
 pub struct Replenish<'info> {
     #[account(
         mut,
@@ -807,10 +864,15 @@ pub struct Replenish<'info> {
     pub config: Account<'info, Config>,
 
     // Tokens pulled in from
-    pub partner_deposit_wallet: Signer<'info>,
+    /// CHECK: Partner deposit wallet PDA - verified by seeds
+    #[account(
+        seeds = [PARTNER_DEPOSIT_WALLET_SEED, partner_id.as_ref()],
+        bump
+    )]
+    pub partner_deposit_wallet: UncheckedAccount<'info>,
     #[account(
         mut,
-        constraint = pdw_token_account.owner == partner_deposit_wallet.key() @ CustomError::UnauthorizedSigner,
+        constraint = pdw_token_account.owner == partner_deposit_wallet.key() @ CustomError::InvalidPdwAuthority,
         constraint = pdw_token_account.mint == zow_token_account.mint @ CustomError::InvalidTokenMint
     )]
     pub pdw_token_account: Box<Account<'info, TokenAccount>>,
