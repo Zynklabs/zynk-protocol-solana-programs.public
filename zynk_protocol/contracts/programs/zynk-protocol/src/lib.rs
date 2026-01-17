@@ -116,7 +116,7 @@ impl TryFrom<u8> for TimelockAction {
     }
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct EventArg {
     pub key: String,
     pub value: String,
@@ -320,7 +320,7 @@ pub mod zynk_protocol {
         let seeds = &[
             PARTNER_DEPOSIT_WALLET_SEED,
             partner_id.as_ref(),
-            &[ctx.bumps.get("partner_deposit_wallet").copied().unwrap_or(0)],
+            &[ctx.bumps.partner_deposit_wallet],
         ];
         let signer_seeds = &[&seeds[..]];
         let cpi_ctx = CpiContext::new_with_signer(
@@ -491,7 +491,7 @@ pub mod zynk_protocol {
         let seeds = &[
             PARTNER_DEPOSIT_WALLET_SEED,
             partner_id.as_ref(),
-            &[ctx.bumps.get("partner_deposit_wallet").copied().unwrap_or(0)],
+            &[ctx.bumps.partner_deposit_wallet],
         ];
         let signer_seeds = &[&seeds[..]];
         let cpi_ctx = CpiContext::new_with_signer(
@@ -509,7 +509,7 @@ pub mod zynk_protocol {
             partner_deposit_wallet: ctx.accounts.partner_deposit_wallet.key(),
             amount,
             domain_separator: DOMAIN_SEPARATOR,
-            meta
+            meta: meta.clone()
         });
 
         // If close_order flag is true, perform order closure

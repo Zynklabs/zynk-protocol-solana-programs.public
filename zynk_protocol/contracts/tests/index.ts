@@ -28,13 +28,13 @@ const buildEd25519Ix = (msg: string, signer: Keypair) => {
 
 const DOMAIN_SEPARATOR = 1151111081099710
 
-enum TimelockAction {
-  TransferAdmin,
-  UpdateManager,
-  UpdateGuardian,
-  UpdateZynkOpWallet,
-  Unpause,
-}
+const TimelockAction = {
+  TransferAdmin: 0,
+  UpdateManager: 1,
+  UpdateGuardian: 2,
+  UpdateZynkOpWallet: 3,
+  Unpause: 4,
+} as const;
 
 const timelockDelays = {
   [TimelockAction.TransferAdmin]: 24 * 60 * 60,
