@@ -6,6 +6,7 @@ use anchor_lang::solana_program::{
     ed25519_program::ID as ED25519_ID,
     program_error::ProgramError
 };
+use std::str::FromStr;
 
 declare_id!("EMNqHAmpFnLsQdmoDbcDYJe9fny6Q42ALoNdH1Z5XZ3e");
 
@@ -166,6 +167,10 @@ pub enum CustomError {
     UnauthorizedSigner,
     #[msg("Invalid address: cannot use null address")]
     InvalidAddress,
+    #[msg("Invalid order key format")]
+    InvalidOrderKey,
+    #[msg("Beneficiary wallet mismatch: destination in order_key does not match beneficiary_token_account owner")]
+    BeneficiaryMismatch,
     #[msg("Contract is paused")]
     ContractPaused,
     #[msg("Nonce overflow")]
@@ -235,6 +240,31 @@ pub fn validate_address(address: &Pubkey) -> Result<()> {
     Ok(())
 }
 
+/// Extracts the destination wallet from order_key and validates it matches the beneficiary.
+/// order_key format: "{zynkPartnerId}::{transactionId}::{destinationWalletAddress}"
+pub fn validate_beneficiary_from_order_key(
+    order_key: &str,
+    beneficiary_owner: &Pubkey
+) -> Result<()> {
+    let parts: Vec<&str> = order_key.split("::").collect();
+    
+    // Ensure order_key has exactly 3 parts
+    require!(parts.len() == 3, CustomError::InvalidOrderKey);
+    
+    // Parse the destination wallet (third part)
+    let destination_wallet = Pubkey::from_str(parts[2])
+        .map_err(|_| CustomError::InvalidOrderKey)?;
+    
+    // Verify beneficiary_token_account.owner matches destination wallet
+    require_keys_eq!(
+        *beneficiary_owner,
+        destination_wallet,
+        CustomError::BeneficiaryMismatch
+    );
+    
+    Ok(())
+}
+
 /// Closes an account and transfers lamports to the given destination.
 /// Also zeroes out the account data to prevent reuse.
 pub fn close_account<'a>(from: impl ToAccountInfo<'a>, to: impl ToAccountInfo<'a>) -> Result<()> {
@@ -275,7 +305,8 @@ pub mod zynk_protocol {
     /// Create an order.
     /// This function:
     /// - Checks that the protocol isn't paused.
-    /// - Manager signs the transaction (validates beneficiary via order_key).
+    /// - Validates beneficiary_token_account.owner matches destination in order_key.
+    /// - Manager signs the transaction.
     /// - Increments the nonce.
     /// - Pulls in tokens from the pdw_token_account (owned by partner_deposit_wallet) to the zow_token_account.
     /// - Transfers tokens from the zow_token_account (owned by zynk_op_wallet) to the beneficiary_wallet.
@@ -285,13 +316,19 @@ pub mod zynk_protocol {
     /// order_key format: "{zynkPartnerId}::{transactionId}::{destinationWalletAddress}"
     pub fn pull_and_create_order(
         ctx: Context<CreateOrder>,
-        _order_key: String,
+        order_key: String,
         amount: u64,
         meta: Option<Vec<EventArg>>
     ) -> Result<()> {
         // Check if program is paused.
         let config = &mut ctx.accounts.config;
         require!(!config.paused, CustomError::ContractPaused);
+
+        // Validate beneficiary matches destination in order_key
+        validate_beneficiary_from_order_key(
+            &order_key,
+            &ctx.accounts.beneficiary_token_account.owner
+        )?;
 
         let partner_deposit_wallet = ctx.accounts.partner_deposit_wallet
             .as_ref()
@@ -353,7 +390,8 @@ pub mod zynk_protocol {
     /// Creates order and if needed, sends tokens from the zynk_op_wallet (operator) to the beneficiary_wallet.
     /// This function:
     /// - Checks that the protocol isn't paused.
-    /// - Manager signs the transaction (validates beneficiary via order_key).
+    /// - Validates beneficiary_token_account.owner matches destination in order_key.
+    /// - Manager signs the transaction.
     /// - Increments the nonce.
     /// - If amount is non-zero, transfers tokens from the zow_token_account (owned by zynk_op_wallet) to the beneficiary_wallet.
     /// - Records the order details in a new OrderTracker PDA derived from order_key.
@@ -362,13 +400,19 @@ pub mod zynk_protocol {
     /// order_key format: "{zynkPartnerId}::{transactionId}::{destinationWalletAddress}"
     pub fn create_order(
         ctx: Context<CreateOrder>,
-        _order_key: String,
+        order_key: String,
         amount: u64,
         meta: Option<Vec<EventArg>>
     ) -> Result<()> {        
         // Check if program is paused.
         let config = &mut ctx.accounts.config;
         require!(!config.paused, CustomError::ContractPaused);
+
+        // Validate beneficiary matches destination in order_key
+        validate_beneficiary_from_order_key(
+            &order_key,
+            &ctx.accounts.beneficiary_token_account.owner
+        )?;
 
         // Increment the nonce
         config.current_nonce = config
