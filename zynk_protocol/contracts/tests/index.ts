@@ -172,7 +172,7 @@ describe("zynk-protocol", () => {
   it("Initializes the protocol", async () => {
     await program.methods
       .initialize(zynkOpWallet.publicKey, guardian.publicKey, manager.publicKey)
-      .accounts({
+      .accountsPartial({
         config: configPDA,
         admin: admin.publicKey,
         systemProgram: SystemProgram.programId,
@@ -218,7 +218,7 @@ describe("zynk-protocol", () => {
         amount,
         null
       )
-      .accounts({
+      .accountsPartial({
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositWallet: partnerDepositWallet.publicKey,
@@ -285,7 +285,7 @@ describe("zynk-protocol", () => {
         amount,
         null
       )
-      .accounts({
+      .accountsPartial({
         config: configPDA,
         manager: manager.publicKey,
         pdwTokenAccount: partnerDepositTokenAccount,
@@ -367,7 +367,7 @@ describe("zynk-protocol", () => {
         amount,
         meta
       )
-      .accounts({
+      .accountsPartial({
         config: configPDA,
         manager: manager.publicKey,
         pdwTokenAccount: partnerDepositTokenAccount,
@@ -414,7 +414,7 @@ describe("zynk-protocol", () => {
         amount,
         null
       )
-      .accounts({
+      .accountsPartial({
         config: configPDA,
         manager: manager.publicKey,
         pdwTokenAccount: partnerDepositTokenAccount,
@@ -479,7 +479,7 @@ describe("zynk-protocol", () => {
 
     await program.methods
         .replenish(currentOrderTrackerId, currentBeneficiary, new anchor.BN(validity), amount, null)
-        .accounts({
+        .accountsPartial({
           config: configPDA,
           partnerDepositWallet: partnerDepositWallet.publicKey,
           pdwTokenAccount: partnerDepositTokenAccount,
@@ -493,7 +493,7 @@ describe("zynk-protocol", () => {
      try {
       await program.methods
         .closeOrder(currentOrderTrackerId, currentBeneficiary, null)
-        .accounts({
+        .accountsPartial({
           config: configPDA,
           manager: manager.publicKey,
           orderTracker: currentOrderTrackerPDA,
@@ -530,7 +530,7 @@ describe("zynk-protocol", () => {
 
     await program.methods
       .replenish(currentOrderTrackerId, currentBeneficiary, new anchor.BN(validity), amount, null)
-      .accounts({
+      .accountsPartial({
         config: configPDA,
         partnerDepositWallet: partnerDepositWallet.publicKey,
         pdwTokenAccount: partnerDepositTokenAccount,
@@ -575,7 +575,7 @@ describe("zynk-protocol", () => {
     try {
       await program.methods
         .replenish(currentOrderTrackerId, currentBeneficiary, new anchor.BN(pastTimestamp), amount, null)
-        .accounts({
+        .accountsPartial({
           config: configPDA,
           partnerDepositWallet: partnerDepositWallet.publicKey,
           pdwTokenAccount: partnerDepositTokenAccount,
@@ -604,7 +604,7 @@ describe("zynk-protocol", () => {
     try {
       await program.methods
         .replenish(currentOrderTrackerId, currentBeneficiary, new anchor.BN(validity), new anchor.BN(0), null)
-        .accounts({
+        .accountsPartial({
           config: configPDA,
           partnerDepositWallet: partnerDepositWallet.publicKey,
           pdwTokenAccount: partnerDepositTokenAccount,
@@ -641,7 +641,7 @@ describe("zynk-protocol", () => {
     // Second replenish operation
     await program.methods
       .replenish(currentOrderTrackerId, currentBeneficiary, new anchor.BN(validity), amount, null)
-      .accounts({
+      .accountsPartial({
         config: configPDA,
         partnerDepositWallet: partnerDepositWallet.publicKey,
         pdwTokenAccount: partnerDepositTokenAccount,
@@ -691,7 +691,7 @@ describe("zynk-protocol", () => {
           new anchor.BN(1000000),
           null
         )
-        .accounts({
+        .accountsPartial({
           config: configPDA,
           partnerDepositWallet: wrongSigner.publicKey,
           pdwTokenAccount: partnerDepositTokenAccount,
@@ -715,7 +715,7 @@ describe("zynk-protocol", () => {
     // Manager closes the order
     await program.methods
       .closeOrder(currentOrderTrackerId, currentBeneficiary, null)
-      .accounts({
+      .accountsPartial({
         config: configPDA,
         manager: manager.publicKey,
         orderTracker: currentOrderTrackerPDA,
@@ -758,7 +758,7 @@ describe("zynk-protocol", () => {
         amount,
         null
       )
-      .accounts({
+      .accountsPartial({
         config: configPDA,
         manager: manager.publicKey,
         pdwTokenAccount: partnerDepositTokenAccount,
@@ -783,7 +783,7 @@ describe("zynk-protocol", () => {
     try {
       await program.methods
         .closeOrder(newOrderTrackerId, newBeneficiary, null)
-        .accounts({
+        .accountsPartial({
           config: configPDA,
           manager: nonManager.publicKey,
           orderTracker: newOrderTrackerPDA,
@@ -806,7 +806,7 @@ describe("zynk-protocol", () => {
     try {
       await program.methods
         .closeOrder(currentOrderTrackerId, currentBeneficiary, null)
-        .accounts({
+        .accountsPartial({
           config: configPDA,
           manager: manager.publicKey,
           orderTracker: currentOrderTrackerPDA,
@@ -836,7 +836,7 @@ describe("zynk-protocol", () => {
           amount,
           null
         )
-        .accounts({
+        .accountsPartial({
           config: configPDA,
           partnerDepositWallet: partnerDepositWallet.publicKey,
           pdwTokenAccount: partnerDepositTokenAccount,
@@ -877,7 +877,7 @@ describe("zynk-protocol", () => {
         amount,
         null
       )
-      .accounts({
+      .accountsPartial({
         config: configPDA,
         manager: manager.publicKey,
         pdwTokenAccount: partnerDepositTokenAccount,
@@ -903,7 +903,7 @@ describe("zynk-protocol", () => {
         new anchor.BN(currentBalance.value.amount),
         null
       )
-      .accounts({
+      .accountsPartial({
         config: configPDA,
         partnerDepositWallet: partnerDepositWallet.publicKey,
         pdwTokenAccount: partnerDepositTokenAccount,
@@ -924,7 +924,7 @@ describe("zynk-protocol", () => {
           new anchor.BN(1000000),
           null
         )
-        .accounts({
+        .accountsPartial({
           config: configPDA,
           partnerDepositWallet: partnerDepositWallet.publicKey,
           pdwTokenAccount: partnerDepositTokenAccount,
@@ -947,7 +947,7 @@ describe("zynk-protocol", () => {
   it("Should be able to pause by manager", async () => {
     await program.methods
       .pause()
-      .accounts({
+      .accountsPartial({
         config: configPDA,
         authority: manager.publicKey
       })
@@ -961,7 +961,7 @@ describe("zynk-protocol", () => {
   it("Should be able to pause by admin", async () => {
     await program.methods
       .pause()
-      .accounts({
+      .accountsPartial({
         config: configPDA,
         authority: admin.publicKey
       })
@@ -975,7 +975,7 @@ describe("zynk-protocol", () => {
   it("Should be able to pause by guardian", async () => {
     await program.methods
       .pause()
-      .accounts({
+      .accountsPartial({
         config: configPDA,
         authority: guardian.publicKey
       })
@@ -990,7 +990,7 @@ describe("zynk-protocol", () => {
     try {
       await program.methods
         .pause()
-        .accounts({
+        .accountsPartial({
           config: configPDA,
           authority: partnerDepositWallet.publicKey
         })
@@ -1018,7 +1018,7 @@ describe("zynk-protocol", () => {
     try {
       await program.methods
         .requestTimelock(action, guardian.publicKey)
-        .accounts({
+        .accountsPartial({
           config: configPDA,
           timelock: timelockPDA,
           manager: guardian.publicKey
@@ -1047,7 +1047,7 @@ describe("zynk-protocol", () => {
 
     await program.methods
       .requestTimelock(action, guardian.publicKey)
-      .accounts({
+      .accountsPartial({
         config: configPDA,
         timelock: timelockPDA,
         manager: manager.publicKey
@@ -1074,7 +1074,7 @@ describe("zynk-protocol", () => {
     try {
       await program.methods
         .executeUnpause()
-        .accounts({
+        .accountsPartial({
           config: configPDA,
           timelock: timelockPDA,
           admin: admin.publicKey
@@ -1094,7 +1094,7 @@ describe("zynk-protocol", () => {
     try {
       await program.methods
         .ackTimelock()
-        .accounts({
+        .accountsPartial({
           config: configPDA,
           timelock: timelockPDA,
           guardian: admin.publicKey
@@ -1126,7 +1126,7 @@ describe("zynk-protocol", () => {
     ///// Request wrong timelock /////
     await program.methods
       .requestTimelock(action, guardian.publicKey)
-      .accounts({
+      .accountsPartial({
         config: configPDA,
         timelock: wrongTimelockPDA,
         manager: manager.publicKey
@@ -1137,7 +1137,7 @@ describe("zynk-protocol", () => {
     ///// Guardian ack for execution readiness /////
     await program.methods
         .ackTimelock()
-        .accounts({
+        .accountsPartial({
           config: configPDA,
           timelock: wrongTimelockPDA,
           guardian: guardian.publicKey
@@ -1153,7 +1153,7 @@ describe("zynk-protocol", () => {
        ///// Execute unpause with wrong timelock /////
       await program.methods
         .executeUnpause()
-        .accounts({
+        .accountsPartial({
           config: configPDA,
           timelock: wrongTimelockPDA,
           admin: admin.publicKey
@@ -1178,7 +1178,7 @@ describe("zynk-protocol", () => {
 
     await program.methods
         .ackTimelock()
-        .accounts({
+        .accountsPartial({
           config: configPDA,
           timelock: timelockPDA,
           guardian: guardian.publicKey
@@ -1191,7 +1191,7 @@ describe("zynk-protocol", () => {
 
     await program.methods
       .executeUnpause()
-      .accounts({
+      .accountsPartial({
         config: configPDA,
         timelock: timelockPDA,
         admin: admin.publicKey
@@ -1226,7 +1226,7 @@ describe("zynk-protocol", () => {
 
     await program.methods
       .requestTimelock(action, guardian.publicKey)
-      .accounts({
+      .accountsPartial({
         config: configPDA,
         timelock: timelockPDA,
         manager: manager.publicKey
@@ -1239,7 +1239,7 @@ describe("zynk-protocol", () => {
 
     await program.methods
         .ackTimelock()
-        .accounts({
+        .accountsPartial({
           config: configPDA,
           timelock: timelockPDA,
           guardian: guardian.publicKey
@@ -1252,7 +1252,7 @@ describe("zynk-protocol", () => {
 
     await program.methods
       .revokeTimelock()
-      .accounts({
+      .accountsPartial({
         config: configPDA,
         timelock: timelockPDA,
         admin: admin.publicKey
@@ -1285,7 +1285,7 @@ describe("zynk-protocol", () => {
     try {
       await program.methods
         .requestConsensus(action, guardian.publicKey)
-        .accounts({
+        .accountsPartial({
           config: configPDA,
           timelock: timelockPDA,
           manager: admin.publicKey,
@@ -1315,7 +1315,7 @@ describe("zynk-protocol", () => {
     try {
       await program.methods
         .requestConsensus(action, guardian.publicKey)
-        .accounts({
+        .accountsPartial({
           config: configPDA,
           timelock: timelockPDA,
           manager: manager.publicKey,
@@ -1345,7 +1345,7 @@ describe("zynk-protocol", () => {
 
     await program.methods
       .requestConsensus(action, guardian.publicKey)
-      .accounts({
+      .accountsPartial({
         config: configPDA,
         timelock: timelockPDA,
         manager: manager.publicKey,
@@ -1368,7 +1368,7 @@ describe("zynk-protocol", () => {
 
     await program.methods
       .executeConsensus()
-      .accounts({
+      .accountsPartial({
         config: configPDA,
         timelock: timelockPDA,
         guardian: guardian.publicKey,
@@ -1404,7 +1404,7 @@ describe("zynk-protocol", () => {
 
    await program.methods
       .requestTimelock(action, guardian.publicKey)
-      .accounts({
+      .accountsPartial({
         config: configPDA,
         timelock: timelockPDA,
         manager: manager.publicKey
@@ -1420,7 +1420,7 @@ describe("zynk-protocol", () => {
     try {
       await program.methods
         .executeConsensus()
-        .accounts({
+        .accountsPartial({
           config: configPDA,
           timelock: timelockPDA,
           guardian: guardian.publicKey,
