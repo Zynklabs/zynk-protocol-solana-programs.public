@@ -13,14 +13,13 @@ declare_id!("EMNqHAmpFnLsQdmoDbcDYJe9fny6Q42ALoNdH1Z5XZ3e");
 pub const DOMAIN_SEPARATOR: u64 = 1151111081099710;
 
 /// Stores the admin, zynk_op_wallet, the guardian, the manager,
-/// and current nonce for transfer operations along with the global paused flag.
+/// along with the global paused flag.
 #[account]
 pub struct Config {
     pub admin: Pubkey,
     pub manager: Pubkey,
     pub guardian: Pubkey,
     pub zynk_op_wallet: Pubkey,
-    pub current_nonce: u64,
     pub paused: bool,
 }
 
@@ -30,14 +29,12 @@ impl Config {
         32 + // manager
         32 + // guardian
         32 + // zynk_op_wallet
-        8  + // current_nonce
         1;   // paused
 }
 
 /// Tracks order details including the designated pdw_token_account
 #[account]
 pub struct OrderTracker {
-    pub order_id: u64,
     pub amount_out: u64,
     pub amount_in: u64,
     pub pdw_token_account: Pubkey,
@@ -45,7 +42,6 @@ pub struct OrderTracker {
 
 impl OrderTracker {
     pub const LEN: usize = 8  + // discriminator
-        8  + // order_id (u64)
         8  + // amount_out (u64)
         8  + // amount_in (u64)
         32; // pdw_token_account
@@ -125,7 +121,7 @@ pub struct EventArg {
 
 #[event]
 pub struct OrderCreation {
-    pub order_id: u64,
+    pub order_key: String,
     pub token: Pubkey,
     pub partner_deposit_wallet: Pubkey,
     pub beneficiary_wallet: Pubkey,
@@ -136,7 +132,7 @@ pub struct OrderCreation {
 
 #[event]
 pub struct OrderReplenish {
-    pub order_id: u64,
+    pub order_key: String,
     pub token: Pubkey,
     pub partner_deposit_wallet: Pubkey,
     pub amount: u64,
@@ -146,7 +142,7 @@ pub struct OrderReplenish {
 
 #[event]
 pub struct OrderClosure {
-    pub order_id: u64,
+    pub order_key: String,
     pub order_tracker: Pubkey,
     pub timestamp: i64,
     pub meta: Option<Vec<EventArg>>
@@ -173,8 +169,6 @@ pub enum CustomError {
     BeneficiaryMismatch,
     #[msg("Contract is paused")]
     ContractPaused,
-    #[msg("Nonce overflow")]
-    NonceOverflow,
     #[msg("Unauthorized admin")]
     UnauthorizedAdmin,
     #[msg("Unauthorized manager")]
@@ -295,7 +289,6 @@ pub mod zynk_protocol {
         config.guardian = guardian;
         config.manager = manager;
         config.paused = false;
-        config.current_nonce = 0;
         Ok(())
     }
 
@@ -307,7 +300,6 @@ pub mod zynk_protocol {
     /// - Checks that the protocol isn't paused.
     /// - Validates beneficiary_token_account.owner matches destination in order_key.
     /// - Manager signs the transaction.
-    /// - Increments the nonce.
     /// - Pulls in tokens from the pdw_token_account (owned by partner_deposit_wallet) to the zow_token_account.
     /// - Transfers tokens from the zow_token_account (owned by zynk_op_wallet) to the beneficiary_wallet.
     /// - Records the order details in a new OrderTracker PDA derived from order_key.
@@ -321,7 +313,7 @@ pub mod zynk_protocol {
         meta: Option<Vec<EventArg>>
     ) -> Result<()> {
         // Check if program is paused.
-        let config = &mut ctx.accounts.config;
+        let config = &ctx.accounts.config;
         require!(!config.paused, CustomError::ContractPaused);
 
         // Validate beneficiary matches destination in order_key
@@ -341,13 +333,6 @@ pub mod zynk_protocol {
             partner_deposit_wallet.key(),
             CustomError::UnauthorizedSigner
         );
-
-        // Increment the nonce
-        config.current_nonce = config
-            .current_nonce
-            .checked_add(1)
-            .ok_or(CustomError::NonceOverflow)?;
-        let order_id = config.current_nonce;
 
         // Perform token transfer from pdw_token_account to zow_token_account.
         let pull_accounts = Transfer {
@@ -369,13 +354,12 @@ pub mod zynk_protocol {
 
         // Store order details in the PDA.
         let order_tracker = &mut ctx.accounts.order_tracker;
-        order_tracker.order_id = order_id;
         order_tracker.pdw_token_account = pdw_token_account.key();
         order_tracker.amount_out = amount;
         order_tracker.amount_in = amount;
 
         emit!(OrderCreation {
-            order_id,
+            order_key,
             token: pdw_token_account.mint,
             partner_deposit_wallet: partner_deposit_wallet.key(),
             beneficiary_wallet: ctx.accounts.beneficiary_token_account.owner.key(),
@@ -392,7 +376,6 @@ pub mod zynk_protocol {
     /// - Checks that the protocol isn't paused.
     /// - Validates beneficiary_token_account.owner matches destination in order_key.
     /// - Manager signs the transaction.
-    /// - Increments the nonce.
     /// - If amount is non-zero, transfers tokens from the zow_token_account (owned by zynk_op_wallet) to the beneficiary_wallet.
     /// - Records the order details in a new OrderTracker PDA derived from order_key.
     /// - Emits a OrderCreation event.
@@ -405,7 +388,7 @@ pub mod zynk_protocol {
         meta: Option<Vec<EventArg>>
     ) -> Result<()> {        
         // Check if program is paused.
-        let config = &mut ctx.accounts.config;
+        let config = &ctx.accounts.config;
         require!(!config.paused, CustomError::ContractPaused);
 
         // Validate beneficiary matches destination in order_key
@@ -413,13 +396,6 @@ pub mod zynk_protocol {
             &order_key,
             &ctx.accounts.beneficiary_token_account.owner
         )?;
-
-        // Increment the nonce
-        config.current_nonce = config
-            .current_nonce
-            .checked_add(1)
-            .ok_or(CustomError::NonceOverflow)?;
-        let order_id = config.current_nonce;
 
         if amount != 0 {
             // Perform token transfer from zow_token_account to beneficiary_token_account.
@@ -436,12 +412,11 @@ pub mod zynk_protocol {
 
         // Store order details in the PDA.
         let order_tracker = &mut ctx.accounts.order_tracker;
-        order_tracker.order_id = order_id;
         order_tracker.pdw_token_account = pdw_token_account.key();
         order_tracker.amount_out = amount;
 
         emit!(OrderCreation {
-            order_id,
+            order_key,
             token: ctx.accounts.zow_token_account.mint,
             partner_deposit_wallet: pdw_token_account.owner.key(),
             beneficiary_wallet: ctx.accounts.beneficiary_token_account.owner.key(),
@@ -466,7 +441,7 @@ pub mod zynk_protocol {
     /// order_key format: "{zynkPartnerId}::{transactionId}::{destinationWalletAddress}"
     pub fn replenish(
         ctx: Context<Replenish>,
-        _order_key: String,
+        order_key: String,
         validity: i64,
         amount: u64,
         meta: Option<Vec<EventArg>>
@@ -494,7 +469,7 @@ pub mod zynk_protocol {
         order_tracker.amount_in += amount;
 
         emit!(OrderReplenish {
-            order_id: order_tracker.order_id,
+            order_key,
             token: ctx.accounts.pdw_token_account.mint,
             partner_deposit_wallet: ctx.accounts.partner_deposit_wallet.key(),
             amount,
@@ -517,7 +492,7 @@ pub mod zynk_protocol {
     /// order_key format: "{zynkPartnerId}::{transactionId}::{destinationWalletAddress}"
     pub fn close_order(
         ctx: Context<CloseOrder>, 
-        _order_key: String,
+        order_key: String,
         meta: Option<Vec<EventArg>>
     ) -> Result<()> {
         require!(
@@ -526,7 +501,7 @@ pub mod zynk_protocol {
         );
 
         emit!(OrderClosure {
-            order_id: ctx.accounts.order_tracker.order_id,
+            order_key,
             order_tracker: ctx.accounts.order_tracker.key(),
             timestamp: Clock::get()?.unix_timestamp,
             meta
