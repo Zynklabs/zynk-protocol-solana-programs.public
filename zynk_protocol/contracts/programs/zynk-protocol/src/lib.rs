@@ -369,6 +369,7 @@ pub mod zynk_protocol {
     /// - Emits a OrderCreation event.
     pub fn create_order(
         ctx: Context<CreateOrder>,
+        partner_id: [u8; 32],
         amount: u64,
         signature: [u8; 64],
         meta: Option<Vec<EventArg>>
@@ -832,7 +833,7 @@ pub struct CreateOrder<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(partner_id: [u8; 32], close_order: bool)]
+#[instruction(partner_id: [u8; 32])]
 pub struct Replenish<'info> {
     #[account(
         mut,
