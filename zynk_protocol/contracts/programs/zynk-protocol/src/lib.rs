@@ -197,6 +197,10 @@ pub enum CustomError {
 }
 
 
+/// Verifies an Ed25519 signature using the Solana Ed25519 program via sysvar instructions.
+/// This function checks that the previous instruction was an Ed25519 signature verification
+/// and validates the signer, message, and signature match the expected values.
+#[allow(dead_code)]
 pub fn verify_signature_syscall(
     ix_sysvar_account: &AccountInfo,
     signer_pubkey: &Pubkey,
@@ -224,7 +228,6 @@ pub fn verify_signature_syscall(
 
     Ok(())
 }
-
 
 /// Helper function to validate an address is not the null address
 pub fn validate_address(address: &Pubkey) -> Result<()> {
@@ -272,7 +275,7 @@ pub mod zynk_protocol {
     /// Create an order.
     /// This function:
     /// - Checks that the protocol isn't paused.
-    /// - Verifies manager-signed message to check if beneficiary is whitelisted
+    /// - Manager signs the transaction (validates beneficiary via order_key).
     /// - Increments the nonce.
     /// - Pulls in tokens from the pdw_token_account (owned by partner_deposit_wallet) to the zow_token_account.
     /// - Transfers tokens from the zow_token_account (owned by zynk_op_wallet) to the beneficiary_wallet.
@@ -284,7 +287,6 @@ pub mod zynk_protocol {
         ctx: Context<CreateOrder>,
         _order_key: String,
         amount: u64,
-        signature: [u8; 64],
         meta: Option<Vec<EventArg>>
     ) -> Result<()> {
         // Check if program is paused.
@@ -302,15 +304,6 @@ pub mod zynk_protocol {
             partner_deposit_wallet.key(),
             CustomError::UnauthorizedSigner
         );
-
-        let beneficiary_wallet = ctx.accounts.beneficiary_token_account.owner.key();
-        let message = format!("{}::{}", DOMAIN_SEPARATOR, beneficiary_wallet);
-        verify_signature_syscall(
-            &ctx.accounts.sysvar_instructions,
-            &config.manager,
-            message,
-            signature
-        )?;
 
         // Increment the nonce
         config.current_nonce = config
@@ -348,7 +341,7 @@ pub mod zynk_protocol {
             order_id,
             token: pdw_token_account.mint,
             partner_deposit_wallet: partner_deposit_wallet.key(),
-            beneficiary_wallet,
+            beneficiary_wallet: ctx.accounts.beneficiary_token_account.owner.key(),
             amount,
             domain_separator: DOMAIN_SEPARATOR,
             meta
@@ -360,7 +353,7 @@ pub mod zynk_protocol {
     /// Creates order and if needed, sends tokens from the zynk_op_wallet (operator) to the beneficiary_wallet.
     /// This function:
     /// - Checks that the protocol isn't paused.
-    /// - Verifies manager-signed message to check if beneficiary is whitelisted
+    /// - Manager signs the transaction (validates beneficiary via order_key).
     /// - Increments the nonce.
     /// - If amount is non-zero, transfers tokens from the zow_token_account (owned by zynk_op_wallet) to the beneficiary_wallet.
     /// - Records the order details in a new OrderTracker PDA derived from order_key.
@@ -371,21 +364,11 @@ pub mod zynk_protocol {
         ctx: Context<CreateOrder>,
         _order_key: String,
         amount: u64,
-        signature: [u8; 64],
         meta: Option<Vec<EventArg>>
     ) -> Result<()> {        
         // Check if program is paused.
         let config = &mut ctx.accounts.config;
         require!(!config.paused, CustomError::ContractPaused);
-
-        let beneficiary_wallet = ctx.accounts.beneficiary_token_account.owner.key();
-        let message = format!("{}::{}", DOMAIN_SEPARATOR, beneficiary_wallet);
-        verify_signature_syscall(
-            &ctx.accounts.sysvar_instructions,
-            &config.manager,
-            message,
-            signature
-        )?;
 
         // Increment the nonce
         config.current_nonce = config
@@ -747,8 +730,14 @@ pub struct CreateOrder<'info> {
         mut,
         seeds = [CONFIG_SEED],
         bump,
+        has_one = manager @ CustomError::UnauthorizedManager
     )]
     pub config: Account<'info, Config>,
+
+    /// Manager signs the transaction and pays for OrderTracker account creation.
+    /// This implicitly validates the beneficiary wallet embedded in order_key.
+    #[account(mut)]
+    pub manager: Signer<'info>,
 
     // Tokens pulled in from
     pub partner_deposit_wallet: Option<Signer<'info>>,
@@ -778,7 +767,7 @@ pub struct CreateOrder<'info> {
     /// Order tracker PDA derived from order_key: "{zynkPartnerId}::{transactionId}::{destinationWalletAddress}"
     #[account(
         init,
-        payer = zynk_op_wallet,
+        payer = manager,
         space = OrderTracker::LEN,
         seeds = [ORDER_TRACKER_SEED, order_key.as_bytes()],
         bump
@@ -787,10 +776,6 @@ pub struct CreateOrder<'info> {
 
     pub system_program: Program<'info, System>,
     pub token_program: Program<'info, Token>,
-
-    /// CHECK: This is the Sysvar Instructions account used for ed25519 signature verification
-    #[account(address = anchor_lang::solana_program::sysvar::instructions::ID)]
-    pub sysvar_instructions: AccountInfo<'info>,
 }
 
 #[derive(Accounts)]
