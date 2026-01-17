@@ -293,24 +293,6 @@ pub mod zynk_protocol {
 
         let partner_deposit_wallet = &ctx.accounts.partner_deposit_wallet;
         let pdw_token_account = &ctx.accounts.pdw_token_account;
-
-        require_keys_eq!(
-            pdw_token_account.owner,
-            partner_deposit_wallet.key(),
-            CustomError::InvalidPdwAuthority
-        );
-
-        require_keys_eq!(
-            pdw_token_account.mint,
-            ctx.accounts.zow_token_account.mint,
-            CustomError::InvalidTokenMint
-        );
-        
-        require_keys_eq!(
-            ctx.accounts.zow_token_account.mint,
-            ctx.accounts.beneficiary_token_account.mint,
-            CustomError::InvalidTokenMint
-        );
         
         let beneficiary_wallet = ctx.accounts.beneficiary_token_account.owner.key();
         let message = format!("{}::{}", DOMAIN_SEPARATOR, beneficiary_wallet);
@@ -446,18 +428,20 @@ pub mod zynk_protocol {
     /// Replenishes tokens by transferring them from the partner_deposit_wallet
     /// to the zynk_op_wallet.
     /// This function:
-    /// - Checks that the protocol isn’t paused.
+    /// - Checks that the protocol isn't paused.
     /// - Verifies the order_id matches.
     /// - Checks if validity is in future.
     /// - Transfers tokens from the pdw_token_account (owned by partner_deposit_wallet) to the zow_token_account (owned by zynk_op_wallet).
     /// - Records amount_in in the dedicated OrderTracker account.
     /// - Emits a Replenish event.
+    /// - Optionally closes the order if close_order flag is true (requires manager authorization and amount_in >= amount_out).
     pub fn replenish(
         ctx: Context<Replenish>,
         partner_id: [u8; 32],
         order_id: u64,
         validity: i64,
         amount: u64,
+        close_order: bool,
         meta: Option<Vec<EventArg>>
     ) -> Result<()> {
         // Check if program is paused.
@@ -528,39 +512,32 @@ pub mod zynk_protocol {
             meta
         });
 
-        Ok(())
-    }
+        // If close_order flag is true, perform order closure
+        if close_order {
+            // Verify manager authorization
+            require_keys_eq!(
+                ctx.accounts.manager.key(),
+                ctx.accounts.config.manager,
+                CustomError::UnauthorizedManager
+            );
 
-    /// Closes the order account and emits closure events.
-    /// Only callable by manager.
-    /// This function:
-    /// - Verify the order_id matches.
-    /// - Checks if order_tracker's amount_in is greater than or equal to the order_tracker's amount_out.
-    /// - Emits a OrderClosure event.
-    /// - Transfers lamports to manager
-    /// - Clears the account data
-    pub fn close_order(
-        ctx: Context<CloseOrder>, 
-        order_id: u64,
-        meta: Option<Vec<EventArg>>
-    ) -> Result<()> {
-        // Verify that the order_id matches.
-        require!(
-            ctx.accounts.order_tracker.order_id == order_id,
-            CustomError::InvalidOrderId
-        );
+            // Check if order_tracker's amount_in is greater than or equal to the order_tracker's amount_out
+            require!(
+                order_tracker.amount_in >= order_tracker.amount_out,
+                CustomError::DeficientOrder
+            );
 
-        require!(
-            ctx.accounts.order_tracker.amount_in >= ctx.accounts.order_tracker.amount_out,
-            CustomError::DeficientOrder
-        );
+            // Emit OrderClosure event
+            emit!(OrderClosure {
+                order_id,
+                order_tracker: order_tracker.key(),
+                timestamp: Clock::get()?.unix_timestamp,
+                meta
+            });
 
-        emit!(OrderClosure {
-            order_id,
-            order_tracker: ctx.accounts.order_tracker.key(),
-            timestamp: Clock::get()?.unix_timestamp,
-            meta
-        });
+            // Close the order_tracker account (transfer lamports to manager and clear data)
+            close_account(order_tracker, &ctx.accounts.manager)?;
+        }
 
         Ok(())
     }
@@ -816,6 +793,7 @@ pub struct CreateOrder<'info> {
     pub partner_deposit_wallet: UncheckedAccount<'info>,
     #[account(
         mut,
+        constraint = pdw_token_account.mint == zow_token_account.mint @ CustomError::InvalidTokenMint,
         constraint = pdw_token_account.mint == beneficiary_token_account.mint @ CustomError::InvalidTokenMint,
         constraint = pdw_token_account.owner == partner_deposit_wallet.key() @ CustomError::InvalidPdwAuthority
     )]
@@ -854,7 +832,7 @@ pub struct CreateOrder<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(partner_id: [u8; 32])]
+#[instruction(partner_id: [u8; 32], close_order: bool)]
 pub struct Replenish<'info> {
     #[account(
         mut,
@@ -890,26 +868,10 @@ pub struct Replenish<'info> {
     )]
     pub order_tracker: Account<'info, OrderTracker>,
 
-    pub token_program: Program<'info, Token>,
-}
-
-#[derive(Accounts)]
-pub struct CloseOrder<'info> {
-    #[account(
-        mut,
-        seeds = [CONFIG_SEED],
-        bump,
-        has_one = manager @ CustomError::UnauthorizedManager
-    )]
-    pub config: Account<'info, Config>,
     #[account(mut)]
     pub manager: Signer<'info>,
-    #[account(
-        mut,
-        close = manager
-    )]
-    pub order_tracker: Account<'info, OrderTracker>,
 
+    pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
 }
 
