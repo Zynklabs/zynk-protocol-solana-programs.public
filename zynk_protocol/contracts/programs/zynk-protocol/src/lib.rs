@@ -12,14 +12,13 @@ declare_id!("EMNqHAmpFnLsQdmoDbcDYJe9fny6Q42ALoNdH1Z5XZ3e");
 pub const DOMAIN_SEPARATOR: u64 = 1151111081099710;
 
 /// Stores the admin, zynk_op_wallet, the guardian, the manager,
-/// and current nonce for transfer operations along with the global paused flag.
+/// along with the global paused flag.
 #[account]
 pub struct Config {
     pub admin: Pubkey,
     pub manager: Pubkey,
     pub guardian: Pubkey,
     pub zynk_op_wallet: Pubkey,
-    pub current_nonce: u64,
     pub paused: bool,
 }
 
@@ -29,14 +28,12 @@ impl Config {
         32 + // manager
         32 + // guardian
         32 + // zynk_op_wallet
-        8  + // current_nonce
         1;   // paused
 }
 
 /// Tracks order details including the designated pdw_token_account
 #[account]
 pub struct OrderTracker {
-    pub order_id: u64,
     pub amount_out: u64,
     pub amount_in: u64,
     pub pdw_token_account: Pubkey,
@@ -44,7 +41,6 @@ pub struct OrderTracker {
 
 impl OrderTracker {
     pub const LEN: usize = 8  + // discriminator
-        8  + // order_id (u64)
         8  + // amount_out (u64)
         8  + // amount_in (u64)
         32; // pdw_token_account
@@ -124,10 +120,10 @@ pub struct EventArg {
 
 #[event]
 pub struct OrderCreation {
-    pub order_id: u64,
+    pub order_tracker_id: String,
+    pub beneficiary: Pubkey,
     pub token: Pubkey,
     pub partner_deposit_wallet: Pubkey,
-    pub beneficiary_wallet: Pubkey,
     pub amount: u64,
     pub domain_separator: u64,
     pub meta: Option<Vec<EventArg>>
@@ -135,7 +131,8 @@ pub struct OrderCreation {
 
 #[event]
 pub struct OrderReplenish {
-    pub order_id: u64,
+    pub order_tracker_id: String,
+    pub beneficiary: Pubkey,
     pub token: Pubkey,
     pub partner_deposit_wallet: Pubkey,
     pub amount: u64,
@@ -145,7 +142,8 @@ pub struct OrderReplenish {
 
 #[event]
 pub struct OrderClosure {
-    pub order_id: u64,
+    pub order_tracker_id: String,
+    pub beneficiary: Pubkey,
     pub order_tracker: Pubkey,
     pub timestamp: i64,
     pub meta: Option<Vec<EventArg>>
@@ -166,10 +164,10 @@ pub enum CustomError {
     UnauthorizedSigner,
     #[msg("Invalid address: cannot use null address")]
     InvalidAddress,
+    #[msg("Beneficiary mismatch: token account owner differs from provided beneficiary")]
+    BeneficiaryMismatch,
     #[msg("Contract is paused")]
     ContractPaused,
-    #[msg("Nonce overflow")]
-    NonceOverflow,
     #[msg("Unauthorized admin")]
     UnauthorizedAdmin,
     #[msg("Unauthorized manager")]
@@ -197,6 +195,10 @@ pub enum CustomError {
 }
 
 
+/// Verifies an Ed25519 signature using the Solana Ed25519 program via sysvar instructions.
+/// This function checks that the previous instruction was an Ed25519 signature verification
+/// and validates the signer, message, and signature match the expected values.
+#[allow(dead_code)]
 pub fn verify_signature_syscall(
     ix_sysvar_account: &AccountInfo,
     signer_pubkey: &Pubkey,
@@ -225,10 +227,22 @@ pub fn verify_signature_syscall(
     Ok(())
 }
 
-
 /// Helper function to validate an address is not the null address
 pub fn validate_address(address: &Pubkey) -> Result<()> {
     require!(*address != Pubkey::default(), CustomError::InvalidAddress);
+    Ok(())
+}
+
+/// Validates that the provided beneficiary matches the beneficiary_token_account owner.
+pub fn validate_beneficiary(
+    beneficiary: &Pubkey,
+    beneficiary_token_account_owner: &Pubkey
+) -> Result<()> {
+    require_keys_eq!(
+        *beneficiary,
+        *beneficiary_token_account_owner,
+        CustomError::BeneficiaryMismatch
+    );
     Ok(())
 }
 
@@ -262,7 +276,6 @@ pub mod zynk_protocol {
         config.guardian = guardian;
         config.manager = manager;
         config.paused = false;
-        config.current_nonce = 0;
         Ok(())
     }
 
@@ -271,22 +284,31 @@ pub mod zynk_protocol {
     /// Sends tokens from the zynk_op_wallet (operator) to the beneficiary_wallet.
     /// Create an order.
     /// This function:
-    /// - Checks that the protocol isn’t paused.
-    /// - Verifies manager-signed message to check if beneficiary is whitelisted
-    /// - Increments the nonce (to derive a unique, nonzero order ID).
+    /// - Checks that the protocol isn't paused.
+    /// - Validates beneficiary matches beneficiary_token_account.owner.
+    /// - Manager signs the transaction.
     /// - Pulls in tokens from the pdw_token_account (owned by partner_deposit_wallet) to the zow_token_account.
     /// - Transfers tokens from the zow_token_account (owned by zynk_op_wallet) to the beneficiary_wallet.
-    /// - Records the order details (order_id, partner_deposit_wallet, amount_out and amount_in) in a new OrderTracker account.
+    /// - Records the order details in a new OrderTracker PDA derived from beneficiary + order_tracker_id.
     /// - Emits a OrderCreation event.
+    ///
+    /// Note: order_tracker_id must be exactly 32 bytes (hashed off-chain).
     pub fn pull_and_create_order(
         ctx: Context<CreateOrder>,
+        order_tracker_id: String,
+        beneficiary: Pubkey,
         amount: u64,
-        signature: [u8; 64],
         meta: Option<Vec<EventArg>>
     ) -> Result<()> {
         // Check if program is paused.
-        let config = &mut ctx.accounts.config;
+        let config = &ctx.accounts.config;
         require!(!config.paused, CustomError::ContractPaused);
+
+        // Validate beneficiary matches beneficiary_token_account owner
+        validate_beneficiary(
+            &beneficiary,
+            &ctx.accounts.beneficiary_token_account.owner
+        )?;
 
         let partner_deposit_wallet = ctx.accounts.partner_deposit_wallet
             .as_ref()
@@ -299,22 +321,6 @@ pub mod zynk_protocol {
             partner_deposit_wallet.key(),
             CustomError::UnauthorizedSigner
         );
-
-        let beneficiary_wallet = ctx.accounts.beneficiary_token_account.owner.key();
-        let message = format!("{}::{}", DOMAIN_SEPARATOR, beneficiary_wallet);
-        verify_signature_syscall(
-            &ctx.accounts.sysvar_instructions,
-            &config.manager,
-            message,
-            signature
-        )?;
-
-        // Increment the nonce first, then use it as the order ID.
-        config.current_nonce = config
-            .current_nonce
-            .checked_add(1)
-            .ok_or(CustomError::NonceOverflow)?;
-        let nonce = config.current_nonce;
 
         // Perform token transfer from pdw_token_account to zow_token_account.
         let pull_accounts = Transfer {
@@ -334,18 +340,17 @@ pub mod zynk_protocol {
         let cpi_ctx = CpiContext::new(ctx.accounts.token_program.to_account_info(), send_accounts);
         token::transfer(cpi_ctx, amount)?;
 
-        // Store order details with the new (nonzero) order ID.
+        // Store order details in the PDA.
         let order_tracker = &mut ctx.accounts.order_tracker;
-        order_tracker.order_id = nonce;
         order_tracker.pdw_token_account = pdw_token_account.key();
         order_tracker.amount_out = amount;
         order_tracker.amount_in = amount;
 
         emit!(OrderCreation {
-            order_id: nonce,
+            order_tracker_id,
+            beneficiary,
             token: pdw_token_account.mint,
             partner_deposit_wallet: partner_deposit_wallet.key(),
-            beneficiary_wallet,
             amount,
             domain_separator: DOMAIN_SEPARATOR,
             meta
@@ -356,37 +361,30 @@ pub mod zynk_protocol {
 
     /// Creates order and if needed, sends tokens from the zynk_op_wallet (operator) to the beneficiary_wallet.
     /// This function:
-    /// - Checks that the protocol isn’t paused.
-    /// - Verifies manager-signed message to check if beneficiary is whitelisted
-    /// - Increments the nonce (to derive a unique, nonzero order ID).
+    /// - Checks that the protocol isn't paused.
+    /// - Validates beneficiary matches beneficiary_token_account.owner.
+    /// - Manager signs the transaction.
     /// - If amount is non-zero, transfers tokens from the zow_token_account (owned by zynk_op_wallet) to the beneficiary_wallet.
-    /// - Records the order details (order_id, pdw_token_account and amount_out) in a new OrderTracker account.
+    /// - Records the order details in a new OrderTracker PDA derived from beneficiary + order_tracker_id.
     /// - Emits a OrderCreation event.
+    ///
+    /// Note: order_tracker_id must be exactly 32 bytes (hashed off-chain).
     pub fn create_order(
         ctx: Context<CreateOrder>,
+        order_tracker_id: String,
+        beneficiary: Pubkey,
         amount: u64,
-        signature: [u8; 64],
         meta: Option<Vec<EventArg>>
     ) -> Result<()> {        
         // Check if program is paused.
-        let config = &mut ctx.accounts.config;
+        let config = &ctx.accounts.config;
         require!(!config.paused, CustomError::ContractPaused);
 
-        let beneficiary_wallet = ctx.accounts.beneficiary_token_account.owner.key();
-        let message = format!("{}::{}", DOMAIN_SEPARATOR, beneficiary_wallet);
-        verify_signature_syscall(
-            &ctx.accounts.sysvar_instructions,
-            &config.manager,
-            message,
-            signature
+        // Validate beneficiary matches beneficiary_token_account owner
+        validate_beneficiary(
+            &beneficiary,
+            &ctx.accounts.beneficiary_token_account.owner
         )?;
-
-        // Increment the nonce first, then use it as the order ID.
-        config.current_nonce = config
-            .current_nonce
-            .checked_add(1)
-            .ok_or(CustomError::NonceOverflow)?;
-        let nonce = config.current_nonce;
 
         if amount != 0 {
             // Perform token transfer from zow_token_account to beneficiary_token_account.
@@ -401,17 +399,16 @@ pub mod zynk_protocol {
 
         let pdw_token_account = &ctx.accounts.pdw_token_account;
 
-        // Store order details with the new (nonzero) order ID.
+        // Store order details in the PDA.
         let order_tracker = &mut ctx.accounts.order_tracker;
-        order_tracker.order_id = nonce;
         order_tracker.pdw_token_account = pdw_token_account.key();
         order_tracker.amount_out = amount;
 
         emit!(OrderCreation {
-            order_id: nonce,
+            order_tracker_id,
+            beneficiary,
             token: ctx.accounts.zow_token_account.mint,
             partner_deposit_wallet: pdw_token_account.owner.key(),
-            beneficiary_wallet: ctx.accounts.beneficiary_token_account.owner.key(),
             amount,
             domain_separator: DOMAIN_SEPARATOR,
             meta
@@ -423,15 +420,16 @@ pub mod zynk_protocol {
     /// Replenishes tokens by transferring them from the partner_deposit_wallet
     /// to the zynk_op_wallet.
     /// This function:
-    /// - Checks that the protocol isn’t paused.
-    /// - Verifies the order_id matches.
+    /// - Checks that the protocol isn't paused.
+    /// - Verifies order via PDA seeds derived from beneficiary + order_tracker_id (in account constraints).
     /// - Checks if validity is in future.
     /// - Transfers tokens from the pdw_token_account (owned by partner_deposit_wallet) to the zow_token_account (owned by zynk_op_wallet).
-    /// - Records amount_in in the dedicated OrderTracker account.
+    /// - Records amount_in in the dedicated OrderTracker PDA.
     /// - Emits a Replenish event.
     pub fn replenish(
         ctx: Context<Replenish>,
-        order_id: u64,
+        order_tracker_id: String,
+        beneficiary: Pubkey,
         validity: i64,
         amount: u64,
         meta: Option<Vec<EventArg>>
@@ -439,27 +437,12 @@ pub mod zynk_protocol {
         // Check if program is paused.
         require!(!ctx.accounts.config.paused, CustomError::ContractPaused);
 
-        let order_tracker = &mut ctx.accounts.order_tracker;
-
-        // Verify the order_id matches.
-        require!(
-            order_tracker.order_id == order_id,
-            CustomError::InvalidOrderId
-        );
-
         // Validate that validity is in future
         let now = Clock::get()?.unix_timestamp;
         require!(validity > now, CustomError::ValidityMustBeFuture);
 
         // Validate amount is positive
         require!(amount > 0, CustomError::AmountMustBePositive);
-
-        let pdw_token_account = ctx.accounts.pdw_token_account.key();
-        // Verify that the pdw_token_account is authorized by comparing it with the stored pdw_token_account.
-        require!(
-            pdw_token_account == order_tracker.pdw_token_account,
-            CustomError::UnauthorizedSigner
-        );
 
         // Perform token transfer from pdw_token_account to zow_token_account.
         let cpi_accounts = Transfer {
@@ -470,10 +453,12 @@ pub mod zynk_protocol {
         let cpi_ctx = CpiContext::new(ctx.accounts.token_program.to_account_info(), cpi_accounts);
         token::transfer(cpi_ctx, amount)?;
 
+        let order_tracker = &mut ctx.accounts.order_tracker;
         order_tracker.amount_in += amount;
 
         emit!(OrderReplenish {
-            order_id,
+            order_tracker_id,
+            beneficiary,
             token: ctx.accounts.pdw_token_account.mint,
             partner_deposit_wallet: ctx.accounts.partner_deposit_wallet.key(),
             amount,
@@ -487,29 +472,25 @@ pub mod zynk_protocol {
     /// Closes the order account and emits closure events.
     /// Only callable by manager.
     /// This function:
-    /// - Verify the order_id matches.
+    /// - Verifies order via PDA seeds derived from beneficiary + order_tracker_id (in account constraints).
     /// - Checks if order_tracker's amount_in is greater than or equal to the order_tracker's amount_out.
     /// - Emits a OrderClosure event.
     /// - Transfers lamports to manager
     /// - Clears the account data
     pub fn close_order(
         ctx: Context<CloseOrder>, 
-        order_id: u64,
+        order_tracker_id: String,
+        beneficiary: Pubkey,
         meta: Option<Vec<EventArg>>
     ) -> Result<()> {
-        // Verify that the order_id matches.
-        require!(
-            ctx.accounts.order_tracker.order_id == order_id,
-            CustomError::InvalidOrderId
-        );
-
         require!(
             ctx.accounts.order_tracker.amount_in >= ctx.accounts.order_tracker.amount_out,
             CustomError::DeficientOrder
         );
 
         emit!(OrderClosure {
-            order_id,
+            order_tracker_id,
+            beneficiary,
             order_tracker: ctx.accounts.order_tracker.key(),
             timestamp: Clock::get()?.unix_timestamp,
             meta
@@ -728,6 +709,8 @@ pub mod zynk_protocol {
 pub const CONFIG_SEED: &[u8] = b"config";
 /// Seed for the global timelock PDA
 pub const TIMELOCK_SEED: &[u8] = b"timelock";
+/// Seed for order tracker PDAs
+pub const ORDER_TRACKER_SEED: &[u8] = b"order_tracker";
 
 #[derive(Accounts)]
 pub struct Null {}
@@ -749,13 +732,19 @@ pub struct Initialize<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(order_tracker_id: String, beneficiary: Pubkey)]
 pub struct CreateOrder<'info> {
     #[account(
         mut,
         seeds = [CONFIG_SEED],
         bump,
+        has_one = manager @ CustomError::UnauthorizedManager
     )]
     pub config: Account<'info, Config>,
+
+    /// Manager signs the transaction and pays for OrderTracker account creation.
+    #[account(mut)]
+    pub manager: Signer<'info>,
 
     // Tokens pulled in from
     pub partner_deposit_wallet: Option<Signer<'info>>,
@@ -782,22 +771,22 @@ pub struct CreateOrder<'info> {
     #[account(mut)]
     pub beneficiary_token_account: Box<Account<'info, TokenAccount>>,
     
+    /// Order tracker PDA derived from beneficiary + order_tracker_id
     #[account(
         init,
-        payer = zynk_op_wallet,
-        space = OrderTracker::LEN
+        payer = manager,
+        space = OrderTracker::LEN,
+        seeds = [ORDER_TRACKER_SEED, beneficiary.as_ref(), order_tracker_id.as_bytes()],
+        bump
     )]
     pub order_tracker: Account<'info, OrderTracker>,
 
     pub system_program: Program<'info, System>,
     pub token_program: Program<'info, Token>,
-
-    /// CHECK: This is the Sysvar Instructions account used for ed25519 signature verification
-    #[account(address = anchor_lang::solana_program::sysvar::instructions::ID)]
-    pub sysvar_instructions: AccountInfo<'info>,
 }
 
 #[derive(Accounts)]
+#[instruction(order_tracker_id: String, beneficiary: Pubkey)]
 pub struct Replenish<'info> {
     #[account(
         mut,
@@ -822,8 +811,11 @@ pub struct Replenish<'info> {
     )]
     pub zow_token_account: Box<Account<'info, TokenAccount>>,
 
+    /// Order tracker PDA derived from beneficiary + order_tracker_id
     #[account(
         mut,
+        seeds = [ORDER_TRACKER_SEED, beneficiary.as_ref(), order_tracker_id.as_bytes()],
+        bump,
         constraint = order_tracker.pdw_token_account == pdw_token_account.key() @ CustomError::UnauthorizedSigner
     )]
     pub order_tracker: Account<'info, OrderTracker>,
@@ -832,6 +824,7 @@ pub struct Replenish<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(order_tracker_id: String, beneficiary: Pubkey)]
 pub struct CloseOrder<'info> {
     #[account(
         mut,
@@ -842,8 +835,11 @@ pub struct CloseOrder<'info> {
     pub config: Account<'info, Config>,
     #[account(mut)]
     pub manager: Signer<'info>,
+    /// Order tracker PDA derived from beneficiary + order_tracker_id
     #[account(
         mut,
+        seeds = [ORDER_TRACKER_SEED, beneficiary.as_ref(), order_tracker_id.as_bytes()],
+        bump,
         close = manager
     )]
     pub order_tracker: Account<'info, OrderTracker>,

@@ -1,6 +1,6 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
-import { PublicKey, Keypair, SystemProgram, Ed25519Program, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
+import { PublicKey, Keypair, SystemProgram } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,
   createMint,
@@ -9,32 +9,54 @@ import {
 } from "@solana/spl-token";
 import { ZynkProtocol } from "../target/types/zynk_protocol";
 import { assert, expect } from "chai";
-import { TextEncoder } from "util";
-import nacl from 'tweetnacl';
+import { createHash, randomUUID } from "crypto";
 
+// Helper to generate a random 6-digit number
+const randomSixDigits = (): string => {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+};
 
-const buildEd25519Ix = (msg: string, signer: Keypair) => {
-  const message = new TextEncoder().encode(msg);
-  const signature = nacl.sign.detached(message, signer.secretKey);
+// Helper to generate order key in format: zp_{random_6_digits}::txn_{uuidv4}
+const generateOrderKey = (): string => {
+  const zynkPartnerId = `zp_${randomSixDigits()}`;
+  const transactionId = `txn_${randomUUID()}`;
+  return `${zynkPartnerId}::${transactionId}`;
+};
 
-  const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
-    publicKey: signer.publicKey.toBuffer(),
-    message,
-    signature,
-  });
+// Helper to generate a unique order tracker ID (max 32 bytes)
+// Takes the order key and hashes it to get a 32-character hex string
+const generateOrderTrackerId = (): string => {
+  const orderKey = generateOrderKey();
+  const hash = createHash('sha256').update(orderKey).digest('hex');
+  // Take first 32 characters (16 bytes) to stay under seed limit
+  return hash.substring(0, 32);
+};
 
-  return { ed25519Ix, signature }
-}
+// Helper to derive order tracker PDA
+const deriveOrderTrackerPDA = (
+  programId: PublicKey,
+  beneficiary: PublicKey,
+  orderTrackerId: string
+): [PublicKey, number] => {
+  return PublicKey.findProgramAddressSync(
+    [
+      Buffer.from("order_tracker"),
+      beneficiary.toBuffer(),
+      Buffer.from(orderTrackerId),
+    ],
+    programId
+  );
+};
 
 const DOMAIN_SEPARATOR = 1151111081099710
 
-enum TimelockAction {
-  TransferAdmin,
-  UpdateManager,
-  UpdateGuardian,
-  UpdateZynkOpWallet,
-  Unpause,
-}
+const TimelockAction = {
+  TransferAdmin: 0,
+  UpdateManager: 1,
+  UpdateGuardian: 2,
+  UpdateZynkOpWallet: 3,
+  Unpause: 4,
+} as const;
 
 const timelockDelays = {
   [TimelockAction.TransferAdmin]: 24 * 60 * 60,
@@ -72,8 +94,10 @@ describe("zynk-protocol", () => {
   let partnerDepositTokenAccount: PublicKey;
 
   // Track order details between tests
-  let orderTracker: Keypair;
-  let orderId: anchor.BN;
+  let currentOrderTrackerId: string;
+  let currentOrderTrackerPDA: PublicKey;
+  let currentBeneficiary: PublicKey;
+  let orderCounter = 0; // To generate unique order IDs
 
   let timelockPDA: PublicKey;
 
@@ -148,7 +172,7 @@ describe("zynk-protocol", () => {
   it("Initializes the protocol", async () => {
     await program.methods
       .initialize(zynkOpWallet.publicKey, guardian.publicKey, manager.publicKey)
-      .accounts({
+      .accountsPartial({
         config: configPDA,
         admin: admin.publicKey,
         systemProgram: SystemProgram.programId,
@@ -163,12 +187,20 @@ describe("zynk-protocol", () => {
     assert.ok(configAccount.guardian.equals(guardian.publicKey));
     assert.ok(configAccount.zynkOpWallet.equals(zynkOpWallet.publicKey));
     assert.equal(configAccount.paused, false);
-    assert.equal(configAccount.currentNonce.toNumber(), 0);
   });
 
   it("Pulls tokens from partner_deposit_wallet to zynkOpWallet and sends tokens from zynkOpWallet to partner_operational_wallet", async () => {
     const amount = new anchor.BN(100000000000);
-    orderTracker = Keypair.generate();
+    
+    // Generate unique order tracker ID and derive PDA
+    orderCounter++;
+    currentOrderTrackerId = generateOrderTrackerId();
+    currentBeneficiary = partnerOperationalWallet.publicKey;
+    [currentOrderTrackerPDA] = deriveOrderTrackerPDA(
+      program.programId,
+      currentBeneficiary,
+      currentOrderTrackerId
+    );
 
     const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
       partnerDepositTokenAccount
@@ -179,29 +211,26 @@ describe("zynk-protocol", () => {
       partnerOperationalTokenAccount
     );
 
-    const message = `${DOMAIN_SEPARATOR}::${partnerOperationalWallet.publicKey.toBase58()}`
-    const { ed25519Ix, signature } = buildEd25519Ix(message, manager)
-    
     await program.methods
       .pullAndCreateOrder(
+        currentOrderTrackerId,
+        currentBeneficiary,
         amount,
-        Buffer.from(signature).toJSON().data,
         null
       )
-      .accounts({
+      .accountsPartial({
         config: configPDA,
+        manager: manager.publicKey,
         partnerDepositWallet: partnerDepositWallet.publicKey,
         pdwTokenAccount: partnerDepositTokenAccount,
         zynkOpWallet: zynkOpWallet.publicKey,
         zowTokenAccount: zynkOpTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
-        orderTracker: orderTracker.publicKey,
+        orderTracker: currentOrderTrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY,
       })
-      .preInstructions([ed25519Ix])
-      .signers([orderTracker, zynkOpWallet, partnerDepositWallet])
+      .signers([manager, zynkOpWallet, partnerDepositWallet])
       .rpc();
     
     // Verify token pull
@@ -217,11 +246,8 @@ describe("zynk-protocol", () => {
     assert.equal(+destBalance_postTx.value.amount - +destBalance_preTx.value.amount, +amount)
 
     // Verify OrderTracker stores correct partner deposit wallet
-    const orderTrackerAccount = await program.account.orderTracker.fetch(orderTracker.publicKey);
+    const orderTrackerAccount = await program.account.orderTracker.fetch(currentOrderTrackerPDA);
     assert.equal(orderTrackerAccount.pdwTokenAccount.toBase58(), partnerDepositTokenAccount.toBase58())
-
-    orderId = orderTrackerAccount.orderId
-    assert.ok(orderId.toNumber() > 0);
 
     const orderAmountIn = orderTrackerAccount.amountIn
     const orderAmountOut = orderTrackerAccount.amountOut
@@ -232,7 +258,16 @@ describe("zynk-protocol", () => {
 
   it("Creates order without transferring tokens, in case of zero amount", async () => {
     const amount = new anchor.BN(0);
-    orderTracker = Keypair.generate();
+    
+    // Generate unique order tracker ID and derive PDA
+    orderCounter++;
+    currentOrderTrackerId = generateOrderTrackerId();
+    currentBeneficiary = partnerOperationalWallet.publicKey;
+    [currentOrderTrackerPDA] = deriveOrderTrackerPDA(
+      program.programId,
+      currentBeneficiary,
+      currentOrderTrackerId
+    );
 
     const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
       zynkOpTokenAccount
@@ -243,28 +278,25 @@ describe("zynk-protocol", () => {
       partnerOperationalTokenAccount
     );
 
-    const message = `${DOMAIN_SEPARATOR}::${partnerOperationalWallet.publicKey.toBase58()}`
-    const { ed25519Ix, signature } = buildEd25519Ix(message, manager)
-
     await program.methods
       .createOrder(
+        currentOrderTrackerId,
+        currentBeneficiary,
         amount,
-        Buffer.from(signature).toJSON().data,
         null
       )
-      .accounts({
+      .accountsPartial({
         config: configPDA,
+        manager: manager.publicKey,
         pdwTokenAccount: partnerDepositTokenAccount,
         zynkOpWallet: zynkOpWallet.publicKey,
         zowTokenAccount: zynkOpTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
-        orderTracker: orderTracker.publicKey,
+        orderTracker: currentOrderTrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY,
       })
-      .preInstructions([ed25519Ix])
-      .signers([orderTracker, zynkOpWallet])
+      .signers([manager, zynkOpWallet])
       .rpc();
 
     // Verify token pull
@@ -280,11 +312,8 @@ describe("zynk-protocol", () => {
     assert.equal(+destBalance_postTx.value.amount - +destBalance_preTx.value.amount, 0)
 
     // Verify OrderTracker stores correct details
-    const orderTrackerAccount = await program.account.orderTracker.fetch(orderTracker.publicKey);
+    const orderTrackerAccount = await program.account.orderTracker.fetch(currentOrderTrackerPDA);
     assert.equal(orderTrackerAccount.pdwTokenAccount.toBase58(), partnerDepositTokenAccount.toBase58())
-
-    orderId = orderTrackerAccount.orderId;
-    assert.ok(orderId.toNumber() > 0);
 
     const orderAmountIn = orderTrackerAccount.amountIn
     const orderAmountOut = orderTrackerAccount.amountOut
@@ -293,61 +322,63 @@ describe("zynk-protocol", () => {
   });
 
   it("Should emit OrderCreation event with correct meta", async () => {
-    const prevOrderTrackerAccount = await program.account.orderTracker.fetch(orderTracker.publicKey);
-    assert.equal(prevOrderTrackerAccount.pdwTokenAccount.toBase58(), partnerDepositTokenAccount.toBase58())
-    const prevOrderId = prevOrderTrackerAccount.orderId;
-
     const amount = new anchor.BN(0);
     const meta = [
       { key: "txType", value: "0" },
       { key: "txAmount", value: "100000000000" }
     ];
 
+    // Generate unique order tracker ID and derive PDA
+    orderCounter++;
+    const tempOrderTrackerId = generateOrderTrackerId();
+    const tempBeneficiary = partnerOperationalWallet.publicKey;
+    const [tempOrderTrackerPDA] = deriveOrderTrackerPDA(
+      program.programId,
+      tempBeneficiary,
+      tempOrderTrackerId
+    );
+
     const listener = program.addEventListener("orderCreation", (event, _slot) => {
-      if (event.orderId.toNumber() !== prevOrderId.toNumber() + 1) return
+      if (event.orderTrackerId !== tempOrderTrackerId) return;
 
       try {
-        assert.equal(event.token.toBase58(), tokenMint.toBase58())
-        assert.equal(event.partnerDepositWallet.toBase58(), partnerDepositWallet.publicKey.toBase58())
-        assert.equal(event.beneficiaryWallet.toBase58(), partnerOperationalWallet.publicKey.toBase58())
-        assert.equal(event.amount.toNumber(), amount.toNumber())
-        assert.equal(event.domainSeparator.toNumber(), DOMAIN_SEPARATOR)
+        assert.equal(event.orderTrackerId, tempOrderTrackerId);
+        assert.equal(event.beneficiary.toBase58(), tempBeneficiary.toBase58());
+        assert.equal(event.token.toBase58(), tokenMint.toBase58());
+        assert.equal(event.partnerDepositWallet.toBase58(), partnerDepositWallet.publicKey.toBase58());
+        assert.equal(event.amount.toNumber(), amount.toNumber());
+        assert.equal(event.domainSeparator.toNumber(), DOMAIN_SEPARATOR);
 
         assert.ok(event.meta, "Meta should be present");
         assert.lengthOf(event.meta, meta.length, `Meta should have ${meta.length} entries`);
         meta.forEach((item, idx) => {
           assert.strictEqual(event.meta[idx].key, item.key);
           assert.strictEqual(event.meta[idx].value, item.value);
-        })
+        });
       } catch (err) {
         throw err;
       }
     });
 
-    const message = `${DOMAIN_SEPARATOR}::${partnerOperationalWallet.publicKey.toBase58()}`
-    const { ed25519Ix, signature } = buildEd25519Ix(message, manager)
-
-    const tempOrderTracker = Keypair.generate();
-
     await program.methods
       .createOrder(
+        tempOrderTrackerId,
+        tempBeneficiary,
         amount,
-        Buffer.from(signature).toJSON().data,
         meta
       )
-      .accounts({
+      .accountsPartial({
         config: configPDA,
+        manager: manager.publicKey,
         pdwTokenAccount: partnerDepositTokenAccount,
         zynkOpWallet: zynkOpWallet.publicKey,
         zowTokenAccount: zynkOpTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
-        orderTracker: tempOrderTracker.publicKey,
+        orderTracker: tempOrderTrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY,
       })
-      .preInstructions([ed25519Ix])
-      .signers([tempOrderTracker, zynkOpWallet])
+      .signers([manager, zynkOpWallet])
       .rpc();
 
     await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -356,7 +387,16 @@ describe("zynk-protocol", () => {
 
   it("Sends tokens from zynkOpWallet to partner_operational_wallet", async () => {
     const amount = new anchor.BN(100000000000);
-    orderTracker = Keypair.generate();
+    
+    // Generate unique order tracker ID and derive PDA
+    orderCounter++;
+    currentOrderTrackerId = generateOrderTrackerId();
+    currentBeneficiary = partnerOperationalWallet.publicKey;
+    [currentOrderTrackerPDA] = deriveOrderTrackerPDA(
+      program.programId,
+      currentBeneficiary,
+      currentOrderTrackerId
+    );
 
     const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
       zynkOpTokenAccount
@@ -367,28 +407,25 @@ describe("zynk-protocol", () => {
       partnerOperationalTokenAccount
     );
 
-    const message = `${DOMAIN_SEPARATOR}::${partnerOperationalWallet.publicKey.toBase58()}`
-    const { ed25519Ix, signature } = buildEd25519Ix(message, manager)
-
     await program.methods
       .createOrder(
+        currentOrderTrackerId,
+        currentBeneficiary,
         amount,
-        Buffer.from(signature).toJSON().data,
         null
       )
-      .accounts({
+      .accountsPartial({
         config: configPDA,
+        manager: manager.publicKey,
         pdwTokenAccount: partnerDepositTokenAccount,
         zynkOpWallet: zynkOpWallet.publicKey,
         zowTokenAccount: zynkOpTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
-        orderTracker: orderTracker.publicKey,
+        orderTracker: currentOrderTrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY,
       })
-      .preInstructions([ed25519Ix])
-      .signers([orderTracker, zynkOpWallet])
+      .signers([manager, zynkOpWallet])
       .rpc();
 
     // Verify token pull
@@ -404,11 +441,8 @@ describe("zynk-protocol", () => {
     assert.equal(+destBalance_postTx.value.amount - +destBalance_preTx.value.amount, +amount)
 
     // Verify OrderTracker stores correct details
-    const orderTrackerAccount = await program.account.orderTracker.fetch(orderTracker.publicKey);
+    const orderTrackerAccount = await program.account.orderTracker.fetch(currentOrderTrackerPDA);
     assert.equal(orderTrackerAccount.pdwTokenAccount.toBase58(), partnerDepositTokenAccount.toBase58())
-
-    orderId = orderTrackerAccount.orderId;
-    assert.ok(orderId.toNumber() > 0);
 
     const orderAmountIn = orderTrackerAccount.amountIn
     const orderAmountOut = orderTrackerAccount.amountOut
@@ -419,11 +453,11 @@ describe("zynk-protocol", () => {
   it("Should fail closing order with zero amount_in", async () => {
     try {
       await program.methods
-        .closeOrder(orderId, null)
+        .closeOrder(currentOrderTrackerId, currentBeneficiary, null)
         .accounts({
           config: configPDA,
           manager: manager.publicKey,
-          orderTracker: orderTracker.publicKey,
+          orderTracker: currentOrderTrackerPDA,
           systemProgram: SystemProgram.programId,
         })
         .signers([manager])
@@ -444,13 +478,13 @@ describe("zynk-protocol", () => {
     const validity = now + 3600;
 
     await program.methods
-        .replenish(orderId, new anchor.BN(validity), amount, null)
-        .accounts({
+        .replenish(currentOrderTrackerId, currentBeneficiary, new anchor.BN(validity), amount, null)
+        .accountsPartial({
           config: configPDA,
           partnerDepositWallet: partnerDepositWallet.publicKey,
           pdwTokenAccount: partnerDepositTokenAccount,
           zowTokenAccount: zynkOpTokenAccount,
-          orderTracker: orderTracker.publicKey,
+          orderTracker: currentOrderTrackerPDA,
           tokenProgram: TOKEN_PROGRAM_ID,
         })
         .signers([partnerDepositWallet])
@@ -458,11 +492,11 @@ describe("zynk-protocol", () => {
 
      try {
       await program.methods
-        .closeOrder(orderId, null)
-        .accounts({
+        .closeOrder(currentOrderTrackerId, currentBeneficiary, null)
+        .accountsPartial({
           config: configPDA,
           manager: manager.publicKey,
-          orderTracker: orderTracker.publicKey,
+          orderTracker: currentOrderTrackerPDA,
           systemProgram: SystemProgram.programId,
         })
         .signers([manager])
@@ -491,17 +525,17 @@ describe("zynk-protocol", () => {
       zynkOpTokenAccount
     );
 
-    let orderTrackerAccount = await program.account.orderTracker.fetch(orderTracker.publicKey);
+    let orderTrackerAccount = await program.account.orderTracker.fetch(currentOrderTrackerPDA);
     const orderAmountIn_preTx = orderTrackerAccount.amountIn
 
     await program.methods
-      .replenish(orderId, new anchor.BN(validity), amount, null)
-      .accounts({
+      .replenish(currentOrderTrackerId, currentBeneficiary, new anchor.BN(validity), amount, null)
+      .accountsPartial({
         config: configPDA,
         partnerDepositWallet: partnerDepositWallet.publicKey,
         pdwTokenAccount: partnerDepositTokenAccount,
         zowTokenAccount: zynkOpTokenAccount,
-        orderTracker: orderTracker.publicKey,
+        orderTracker: currentOrderTrackerPDA,
         tokenProgram: TOKEN_PROGRAM_ID,
       })
       .signers([partnerDepositWallet])
@@ -521,14 +555,14 @@ describe("zynk-protocol", () => {
 
     // Verify that orderTracker is still active
     const orderTrackerInfo = await provider.connection.getAccountInfo(
-      orderTracker.publicKey
+      currentOrderTrackerPDA
     );
     assert.isNotNull(
       orderTrackerInfo,
       "OrderTracker should still be active after replenish"
     );
 
-    orderTrackerAccount = await program.account.orderTracker.fetch(orderTracker.publicKey);
+    orderTrackerAccount = await program.account.orderTracker.fetch(currentOrderTrackerPDA);
 
     const orderAmountIn_postTx = orderTrackerAccount.amountIn
     assert.equal(orderAmountIn_postTx.toNumber() - orderAmountIn_preTx.toNumber(), amount.toNumber());
@@ -540,13 +574,13 @@ describe("zynk-protocol", () => {
 
     try {
       await program.methods
-        .replenish(orderId, new anchor.BN(pastTimestamp), amount, null)
-        .accounts({
+        .replenish(currentOrderTrackerId, currentBeneficiary, new anchor.BN(pastTimestamp), amount, null)
+        .accountsPartial({
           config: configPDA,
           partnerDepositWallet: partnerDepositWallet.publicKey,
           pdwTokenAccount: partnerDepositTokenAccount,
           zowTokenAccount: zynkOpTokenAccount,
-          orderTracker: orderTracker.publicKey,
+          orderTracker: currentOrderTrackerPDA,
           tokenProgram: TOKEN_PROGRAM_ID,
         })
         .signers([partnerDepositWallet])
@@ -569,13 +603,13 @@ describe("zynk-protocol", () => {
 
     try {
       await program.methods
-        .replenish(orderId, new anchor.BN(validity), new anchor.BN(0), null)
-        .accounts({
+        .replenish(currentOrderTrackerId, currentBeneficiary, new anchor.BN(validity), new anchor.BN(0), null)
+        .accountsPartial({
           config: configPDA,
           partnerDepositWallet: partnerDepositWallet.publicKey,
           pdwTokenAccount: partnerDepositTokenAccount,
           zowTokenAccount: zynkOpTokenAccount,
-          orderTracker: orderTracker.publicKey,
+          orderTracker: currentOrderTrackerPDA,
           tokenProgram: TOKEN_PROGRAM_ID,
         })
         .signers([partnerDepositWallet])
@@ -606,13 +640,13 @@ describe("zynk-protocol", () => {
 
     // Second replenish operation
     await program.methods
-      .replenish(orderId, new anchor.BN(validity), amount, null)
-      .accounts({
+      .replenish(currentOrderTrackerId, currentBeneficiary, new anchor.BN(validity), amount, null)
+      .accountsPartial({
         config: configPDA,
         partnerDepositWallet: partnerDepositWallet.publicKey,
         pdwTokenAccount: partnerDepositTokenAccount,
         zowTokenAccount: zynkOpTokenAccount,
-        orderTracker: orderTracker.publicKey,
+        orderTracker: currentOrderTrackerPDA,
         tokenProgram: TOKEN_PROGRAM_ID,
       })
       .signers([partnerDepositWallet])
@@ -632,7 +666,7 @@ describe("zynk-protocol", () => {
 
     // Verify that orderTracker is still active
     const orderTrackerInfo = await provider.connection.getAccountInfo(
-      orderTracker.publicKey
+      currentOrderTrackerPDA
     );
     assert.isNotNull(
       orderTrackerInfo,
@@ -651,17 +685,18 @@ describe("zynk-protocol", () => {
     try {
       await program.methods
         .replenish(
-          orderId,
+          currentOrderTrackerId,
+          currentBeneficiary,
           new anchor.BN(Math.floor(Date.now() / 1000) + 3600),
           new anchor.BN(1000000),
           null
         )
-        .accounts({
+        .accountsPartial({
           config: configPDA,
           partnerDepositWallet: wrongSigner.publicKey,
           pdwTokenAccount: partnerDepositTokenAccount,
           zowTokenAccount: zynkOpTokenAccount,
-          orderTracker: orderTracker.publicKey,
+          orderTracker: currentOrderTrackerPDA,
           tokenProgram: TOKEN_PROGRAM_ID,
         })
         .signers([wrongSigner])
@@ -677,13 +712,13 @@ describe("zynk-protocol", () => {
   });
 
   it("Should be able close the order by manager", async () => {
-    // Admin closes the order
+    // Manager closes the order
     await program.methods
-      .closeOrder(orderId, null)
-      .accounts({
+      .closeOrder(currentOrderTrackerId, currentBeneficiary, null)
+      .accountsPartial({
         config: configPDA,
         manager: manager.publicKey,
-        orderTracker: orderTracker.publicKey,
+        orderTracker: currentOrderTrackerPDA,
         systemProgram: anchor.web3.SystemProgram.programId,
       })
       .signers([manager])
@@ -691,7 +726,7 @@ describe("zynk-protocol", () => {
 
     // Verify order is closed
     try {
-      await program.account.orderTracker.fetch(orderTracker.publicKey);
+      await program.account.orderTracker.fetch(currentOrderTrackerPDA);
       assert.fail("Expected order to be closed");
     } catch (error) {
       assert.include(
@@ -706,31 +741,35 @@ describe("zynk-protocol", () => {
     const amount = new anchor.BN(100000000000);
 
     // Create a new order since previous one is closed
-    const newOrderTracker = Keypair.generate();
-
-    const message = `${DOMAIN_SEPARATOR}::${partnerOperationalWallet.publicKey.toBase58()}`
-    const { ed25519Ix, signature } = buildEd25519Ix(message, manager)
+    orderCounter++;
+    const newOrderTrackerId = generateOrderTrackerId();
+    const newBeneficiary = partnerOperationalWallet.publicKey;
+    const [newOrderTrackerPDA] = deriveOrderTrackerPDA(
+      program.programId,
+      newBeneficiary,
+      newOrderTrackerId
+    );
 
     // Initialize new order
     await program.methods
       .createOrder(
+        newOrderTrackerId,
+        newBeneficiary,
         amount,
-        Buffer.from(signature).toJSON().data,
         null
       )
-      .accounts({
+      .accountsPartial({
         config: configPDA,
+        manager: manager.publicKey,
         pdwTokenAccount: partnerDepositTokenAccount,
         zynkOpWallet: zynkOpWallet.publicKey,
         zowTokenAccount: zynkOpTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
-        orderTracker: newOrderTracker.publicKey,
+        orderTracker: newOrderTrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY,
       })
-      .preInstructions([ed25519Ix])
-      .signers([newOrderTracker, zynkOpWallet])
+      .signers([manager, zynkOpWallet])
       .rpc();
 
     // Create a new keypair for non-admin and fund it
@@ -743,11 +782,11 @@ describe("zynk-protocol", () => {
 
     try {
       await program.methods
-        .closeOrder(orderId, null)
-        .accounts({
+        .closeOrder(newOrderTrackerId, newBeneficiary, null)
+        .accountsPartial({
           config: configPDA,
           manager: nonManager.publicKey,
-          orderTracker: newOrderTracker.publicKey,
+          orderTracker: newOrderTrackerPDA,
           systemProgram: SystemProgram.programId,
         })
         .signers([nonManager])
@@ -763,14 +802,14 @@ describe("zynk-protocol", () => {
   });
 
   it("Should fail when trying to close an already closed order", async () => {
-    // Attempt to close the already closed order
+    // Attempt to close the already closed order (currentOrderTrackerPDA was closed earlier)
     try {
       await program.methods
-        .closeOrder(orderId, null)
-        .accounts({
+        .closeOrder(currentOrderTrackerId, currentBeneficiary, null)
+        .accountsPartial({
           config: configPDA,
           manager: manager.publicKey,
-          orderTracker: orderTracker.publicKey,
+          orderTracker: currentOrderTrackerPDA,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
         .signers([manager])
@@ -791,17 +830,18 @@ describe("zynk-protocol", () => {
     try {
       await program.methods
         .replenish(
-          orderId,
+          currentOrderTrackerId,
+          currentBeneficiary,
           new anchor.BN(Math.floor(Date.now() / 1000) + 3600),
           amount,
           null
         )
-        .accounts({
+        .accountsPartial({
           config: configPDA,
           partnerDepositWallet: partnerDepositWallet.publicKey,
           pdwTokenAccount: partnerDepositTokenAccount,
           zowTokenAccount: zynkOpTokenAccount,
-          orderTracker: orderTracker.publicKey,
+          orderTracker: currentOrderTrackerPDA,
           tokenProgram: TOKEN_PROGRAM_ID,
         })
         .signers([partnerDepositWallet])
@@ -818,37 +858,38 @@ describe("zynk-protocol", () => {
 
   it("Should fail when deposit wallet has insufficient balance", async () => {
     const amount = new anchor.BN(100000000000);
+    
     // Create a new order since previous one is closed
-    const newOrderTracker = Keypair.generate();
-
-    const message = `${DOMAIN_SEPARATOR}::${partnerOperationalWallet.publicKey.toBase58()}`
-    const { ed25519Ix, signature } = buildEd25519Ix(message, manager)
+    orderCounter++;
+    const newOrderTrackerId = generateOrderTrackerId();
+    const newBeneficiary = partnerOperationalWallet.publicKey;
+    const [newOrderTrackerPDA] = deriveOrderTrackerPDA(
+      program.programId,
+      newBeneficiary,
+      newOrderTrackerId
+    );
     
     // Initialize new order
     await program.methods
       .createOrder(
+        newOrderTrackerId,
+        newBeneficiary,
         amount,
-        Buffer.from(signature).toJSON().data,
         null
       )
-      .accounts({
+      .accountsPartial({
         config: configPDA,
+        manager: manager.publicKey,
         pdwTokenAccount: partnerDepositTokenAccount,
         zynkOpWallet: zynkOpWallet.publicKey,
         zowTokenAccount: zynkOpTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
-        orderTracker: newOrderTracker.publicKey,
+        orderTracker: newOrderTrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY,
       })
-      .preInstructions([ed25519Ix])
-      .signers([newOrderTracker, zynkOpWallet])
+      .signers([manager, zynkOpWallet])
       .rpc();
-
-    // Get the order ID from the new order tracker
-    const orderTrackerAccount = await program.account.orderTracker.fetch(newOrderTracker.publicKey);
-    const newOrderId = orderTrackerAccount.orderId;
 
     // First drain the deposit wallet by replenishing the maximum amount
     const currentBalance = await provider.connection.getTokenAccountBalance(
@@ -856,17 +897,18 @@ describe("zynk-protocol", () => {
     );
     await program.methods
       .replenish(
-        newOrderId,
+        newOrderTrackerId,
+        newBeneficiary,
         new anchor.BN(Math.floor(Date.now() / 1000) + 3600),
         new anchor.BN(currentBalance.value.amount),
         null
       )
-      .accounts({
+      .accountsPartial({
         config: configPDA,
         partnerDepositWallet: partnerDepositWallet.publicKey,
         pdwTokenAccount: partnerDepositTokenAccount,
         zowTokenAccount: zynkOpTokenAccount,
-        orderTracker: newOrderTracker.publicKey,
+        orderTracker: newOrderTrackerPDA,
         tokenProgram: TOKEN_PROGRAM_ID,
       })
       .signers([partnerDepositWallet])
@@ -876,17 +918,18 @@ describe("zynk-protocol", () => {
     try {
       await program.methods
         .replenish(
-          newOrderId,
+          newOrderTrackerId,
+          newBeneficiary,
           new anchor.BN(Math.floor(Date.now() / 1000) + 3600),
           new anchor.BN(1000000),
           null
         )
-        .accounts({
+        .accountsPartial({
           config: configPDA,
           partnerDepositWallet: partnerDepositWallet.publicKey,
           pdwTokenAccount: partnerDepositTokenAccount,
           zowTokenAccount: zynkOpTokenAccount,
-          orderTracker: newOrderTracker.publicKey,
+          orderTracker: newOrderTrackerPDA,
           tokenProgram: TOKEN_PROGRAM_ID,
         })
         .signers([partnerDepositWallet])
@@ -904,7 +947,7 @@ describe("zynk-protocol", () => {
   it("Should be able to pause by manager", async () => {
     await program.methods
       .pause()
-      .accounts({
+      .accountsPartial({
         config: configPDA,
         authority: manager.publicKey
       })
@@ -918,7 +961,7 @@ describe("zynk-protocol", () => {
   it("Should be able to pause by admin", async () => {
     await program.methods
       .pause()
-      .accounts({
+      .accountsPartial({
         config: configPDA,
         authority: admin.publicKey
       })
@@ -932,7 +975,7 @@ describe("zynk-protocol", () => {
   it("Should be able to pause by guardian", async () => {
     await program.methods
       .pause()
-      .accounts({
+      .accountsPartial({
         config: configPDA,
         authority: guardian.publicKey
       })
@@ -947,7 +990,7 @@ describe("zynk-protocol", () => {
     try {
       await program.methods
         .pause()
-        .accounts({
+        .accountsPartial({
           config: configPDA,
           authority: partnerDepositWallet.publicKey
         })
@@ -975,7 +1018,7 @@ describe("zynk-protocol", () => {
     try {
       await program.methods
         .requestTimelock(action, guardian.publicKey)
-        .accounts({
+        .accountsPartial({
           config: configPDA,
           timelock: timelockPDA,
           manager: guardian.publicKey
@@ -1004,7 +1047,7 @@ describe("zynk-protocol", () => {
 
     await program.methods
       .requestTimelock(action, guardian.publicKey)
-      .accounts({
+      .accountsPartial({
         config: configPDA,
         timelock: timelockPDA,
         manager: manager.publicKey
@@ -1031,7 +1074,7 @@ describe("zynk-protocol", () => {
     try {
       await program.methods
         .executeUnpause()
-        .accounts({
+        .accountsPartial({
           config: configPDA,
           timelock: timelockPDA,
           admin: admin.publicKey
@@ -1051,7 +1094,7 @@ describe("zynk-protocol", () => {
     try {
       await program.methods
         .ackTimelock()
-        .accounts({
+        .accountsPartial({
           config: configPDA,
           timelock: timelockPDA,
           guardian: admin.publicKey
@@ -1083,7 +1126,7 @@ describe("zynk-protocol", () => {
     ///// Request wrong timelock /////
     await program.methods
       .requestTimelock(action, guardian.publicKey)
-      .accounts({
+      .accountsPartial({
         config: configPDA,
         timelock: wrongTimelockPDA,
         manager: manager.publicKey
@@ -1094,7 +1137,7 @@ describe("zynk-protocol", () => {
     ///// Guardian ack for execution readiness /////
     await program.methods
         .ackTimelock()
-        .accounts({
+        .accountsPartial({
           config: configPDA,
           timelock: wrongTimelockPDA,
           guardian: guardian.publicKey
@@ -1110,7 +1153,7 @@ describe("zynk-protocol", () => {
        ///// Execute unpause with wrong timelock /////
       await program.methods
         .executeUnpause()
-        .accounts({
+        .accountsPartial({
           config: configPDA,
           timelock: wrongTimelockPDA,
           admin: admin.publicKey
@@ -1135,7 +1178,7 @@ describe("zynk-protocol", () => {
 
     await program.methods
         .ackTimelock()
-        .accounts({
+        .accountsPartial({
           config: configPDA,
           timelock: timelockPDA,
           guardian: guardian.publicKey
@@ -1148,7 +1191,7 @@ describe("zynk-protocol", () => {
 
     await program.methods
       .executeUnpause()
-      .accounts({
+      .accountsPartial({
         config: configPDA,
         timelock: timelockPDA,
         admin: admin.publicKey
@@ -1183,7 +1226,7 @@ describe("zynk-protocol", () => {
 
     await program.methods
       .requestTimelock(action, guardian.publicKey)
-      .accounts({
+      .accountsPartial({
         config: configPDA,
         timelock: timelockPDA,
         manager: manager.publicKey
@@ -1196,7 +1239,7 @@ describe("zynk-protocol", () => {
 
     await program.methods
         .ackTimelock()
-        .accounts({
+        .accountsPartial({
           config: configPDA,
           timelock: timelockPDA,
           guardian: guardian.publicKey
@@ -1209,7 +1252,7 @@ describe("zynk-protocol", () => {
 
     await program.methods
       .revokeTimelock()
-      .accounts({
+      .accountsPartial({
         config: configPDA,
         timelock: timelockPDA,
         admin: admin.publicKey
@@ -1242,7 +1285,7 @@ describe("zynk-protocol", () => {
     try {
       await program.methods
         .requestConsensus(action, guardian.publicKey)
-        .accounts({
+        .accountsPartial({
           config: configPDA,
           timelock: timelockPDA,
           manager: admin.publicKey,
@@ -1272,7 +1315,7 @@ describe("zynk-protocol", () => {
     try {
       await program.methods
         .requestConsensus(action, guardian.publicKey)
-        .accounts({
+        .accountsPartial({
           config: configPDA,
           timelock: timelockPDA,
           manager: manager.publicKey,
@@ -1302,7 +1345,7 @@ describe("zynk-protocol", () => {
 
     await program.methods
       .requestConsensus(action, guardian.publicKey)
-      .accounts({
+      .accountsPartial({
         config: configPDA,
         timelock: timelockPDA,
         manager: manager.publicKey,
@@ -1325,7 +1368,7 @@ describe("zynk-protocol", () => {
 
     await program.methods
       .executeConsensus()
-      .accounts({
+      .accountsPartial({
         config: configPDA,
         timelock: timelockPDA,
         guardian: guardian.publicKey,
@@ -1361,7 +1404,7 @@ describe("zynk-protocol", () => {
 
    await program.methods
       .requestTimelock(action, guardian.publicKey)
-      .accounts({
+      .accountsPartial({
         config: configPDA,
         timelock: timelockPDA,
         manager: manager.publicKey
@@ -1377,7 +1420,7 @@ describe("zynk-protocol", () => {
     try {
       await program.methods
         .executeConsensus()
-        .accounts({
+        .accountsPartial({
           config: configPDA,
           timelock: timelockPDA,
           guardian: guardian.publicKey,
