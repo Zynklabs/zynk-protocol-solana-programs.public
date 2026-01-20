@@ -45,8 +45,8 @@ impl OrderTracker {
     pub const LEN: usize = 8  + // discriminator
         32 + // order_id
         32 + // partner_id
-        8  + // amount_out
         8  + // amount_in
+        8  + // amount_out
         32 + // beneficiary_wallet
         32;  // partner_deposit_vault
 }
@@ -476,7 +476,7 @@ pub mod zynk_protocol {
             amount,
             order_closed: close_order,
             domain_separator: DOMAIN_SEPARATOR,
-            meta: meta.clone()
+            meta
         });
 
         Ok(())
