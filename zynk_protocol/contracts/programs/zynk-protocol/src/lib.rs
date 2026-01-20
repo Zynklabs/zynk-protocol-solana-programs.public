@@ -263,7 +263,7 @@ pub fn validate_address(address: &Pubkey) -> Result<()> {
 
 /// Closes an account and transfers lamports to the given destination.
 /// Also zeroes out the account data to prevent reuse.
-pub fn close_account<'a>(from: impl ToAccountInfo<'a>, to: impl ToAccountInfo<'a>) -> Result<()> {
+pub fn close_account<'a, 'b>(from: impl ToAccountInfo<'a>, to: impl ToAccountInfo<'b>) -> Result<()> {
     let from = from.to_account_info();
     let to = to.to_account_info();
 
@@ -588,15 +588,34 @@ pub mod zynk_protocol {
         require!(!ctx.accounts.config.paused, CustomError::ContractPaused);
 
         let config = &mut ctx.accounts.config;
-        let admin = &mut ctx.accounts.admin;
 
         let remaining_accounts = ctx.remaining_accounts;
+        let admin_account_info = &ctx.accounts.admin.to_account_info();
 
-        for account in remaining_accounts {
-            let data = account.data.borrow();
-            require!(account.owner == ctx.program_id, ErrorCode::ConstraintOwner);
-            require!(data.len() == OrderTracker::LEN, ErrorCode::AccountDiscriminatorMismatch);
-            require!(&data[0..8] == OrderTracker::DISCRIMINATOR, ErrorCode::AccountDiscriminatorMismatch);
+        for account_info in remaining_accounts {
+            let order_id: [u8; 32];
+            let amount_in: u64;
+            
+            {
+                let data = account_info.data.borrow();
+                require!(account_info.owner == ctx.program_id, ErrorCode::ConstraintOwner);
+                require!(data.len() == OrderTracker::LEN, ErrorCode::AccountDiscriminatorMismatch);
+                require!(&data[0..8] == OrderTracker::DISCRIMINATOR, ErrorCode::AccountDiscriminatorMismatch);
+                
+                // Deserialize the account data to get OrderTracker fields
+                let order_tracker = OrderTracker::try_deserialize(&mut &data[..])?;
+                order_id = order_tracker.order_id;
+                amount_in = order_tracker.amount_in;
+            } // Borrow dropped here
+            
+            close_account(account_info, admin_account_info)?;
+
+            emit!(DanglingOrderClosure {
+                order_id,
+                amount: amount_in,
+                domain_separator: DOMAIN_SEPARATOR,
+                meta: meta.clone()
+            });
         }
 
         Ok(())
