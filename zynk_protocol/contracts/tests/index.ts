@@ -782,6 +782,7 @@ describe("zynk-protocol", () => {
         .rpc();
       assert.fail("Expected replenish to fail with zero amount");
     } catch (error) {
+      console.log(error);
       assert.include(
         error.message,
         "DeficientOrder",
@@ -2179,6 +2180,863 @@ describe("zynk-protocol", () => {
       );
     }
   });
+
+  it("Should be able to create dangling order created by create order function, pull and create order function or zero amount order created by create_order function", async () => {
+    const amount = new anchor.BN(50000000000); // 50 tokens
+    const zeroAmount = new anchor.BN(0);
+
+    // Create 2 orders using create_order (non-zero amount)
+    const order1Id = generateOrderId();
+    const order1TrackerPDA = deriveOrderTrackerPDA(order1Id);
+    
+    const order2Id = generateOrderId();
+    const order2TrackerPDA = deriveOrderTrackerPDA(order2Id);
+
+    // Ensure zynkOpTokenAccount has enough tokens
+    const zynkOpBalance = await provider.connection.getTokenAccountBalance(zynkOpTokenAccount);
+    if (+zynkOpBalance.value.amount < +amount.mul(new anchor.BN(2))) {
+      await mintTo(
+        provider.connection,
+        admin,
+        tokenMint,
+        zynkOpTokenAccount,
+        admin.publicKey,
+        amount.mul(new anchor.BN(2)).toNumber()
+      );
+    }
+
+    // Create first order using create_order
+    await program.methods
+      .createOrder(
+        Array.from(partnerId),
+        Array.from(order1Id),
+        amount,
+        null
+      )
+      .accounts({
+        config: configPDA,
+        manager: manager.publicKey,
+        pdvTokenAccount: partnerDepositTokenAccount,
+        zynkOpWallet: zynkOpWallet.publicKey,
+        zowTokenAccount: zynkOpTokenAccount,
+        beneficiaryTokenAccount: partnerOperationalTokenAccount,
+        orderTracker: order1TrackerPDA,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([manager, zynkOpWallet])
+      .rpc();
+
+    // Create second order using create_order
+    await program.methods
+      .createOrder(
+        Array.from(partnerId),
+        Array.from(order2Id),
+        amount,
+        null
+      )
+      .accounts({
+        config: configPDA,
+        manager: manager.publicKey,
+        pdvTokenAccount: partnerDepositTokenAccount,
+        zynkOpWallet: zynkOpWallet.publicKey,
+        zowTokenAccount: zynkOpTokenAccount,
+        beneficiaryTokenAccount: partnerOperationalTokenAccount,
+        orderTracker: order2TrackerPDA,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([manager, zynkOpWallet])
+      .rpc();
+
+    // Create 2 orders using pull_and_create_order
+    const order3Id = generateOrderId();
+    const order3TrackerPDA = deriveOrderTrackerPDA(order3Id);
+    
+    const order4Id = generateOrderId();
+    const order4TrackerPDA = deriveOrderTrackerPDA(order4Id);
+
+    // Ensure partnerDepositTokenAccount has enough tokens
+    const pdvBalance = await provider.connection.getTokenAccountBalance(partnerDepositTokenAccount);
+    if (+pdvBalance.value.amount < +amount.mul(new anchor.BN(2))) {
+      await mintTo(
+        provider.connection,
+        admin,
+        tokenMint,
+        partnerDepositTokenAccount,
+        admin.publicKey,
+        amount.mul(new anchor.BN(2)).toNumber()
+      );
+    }
+
+    // Create third order using pull_and_create_order
+    await program.methods
+      .pullAndCreateOrder(
+        Array.from(partnerId),
+        Array.from(order3Id),
+        amount,
+        null
+      )
+      .accounts({
+        config: configPDA,
+        manager: manager.publicKey,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: partnerDepositTokenAccount,
+        zynkOpWallet: zynkOpWallet.publicKey,
+        zowTokenAccount: zynkOpTokenAccount,
+        beneficiaryTokenAccount: partnerOperationalTokenAccount,
+        orderTracker: order3TrackerPDA,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([manager, zynkOpWallet])
+      .rpc();
+
+    // Create fourth order using pull_and_create_order
+    await program.methods
+      .pullAndCreateOrder(
+        Array.from(partnerId),
+        Array.from(order4Id),
+        amount,
+        null
+      )
+      .accounts({
+        config: configPDA,
+        manager: manager.publicKey,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: partnerDepositTokenAccount,
+        zynkOpWallet: zynkOpWallet.publicKey,
+        zowTokenAccount: zynkOpTokenAccount,
+        beneficiaryTokenAccount: partnerOperationalTokenAccount,
+        orderTracker: order4TrackerPDA,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([manager, zynkOpWallet])
+      .rpc();
+
+    // Create 2 orders using create_order with zero amount
+    const order5Id = generateOrderId();
+    const order5TrackerPDA = deriveOrderTrackerPDA(order5Id);
+    
+    const order6Id = generateOrderId();
+    const order6TrackerPDA = deriveOrderTrackerPDA(order6Id);
+
+    // Create fifth order using create_order with zero amount
+    await program.methods
+      .createOrder(
+        Array.from(partnerId),
+        Array.from(order5Id),
+        zeroAmount,
+        null
+      )
+      .accounts({
+        config: configPDA,
+        manager: manager.publicKey,
+        pdvTokenAccount: partnerDepositTokenAccount,
+        zynkOpWallet: zynkOpWallet.publicKey,
+        zowTokenAccount: zynkOpTokenAccount,
+        beneficiaryTokenAccount: partnerOperationalTokenAccount,
+        orderTracker: order5TrackerPDA,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([manager, zynkOpWallet])
+      .rpc();
+
+    // Create sixth order using create_order with zero amount
+    await program.methods
+      .createOrder(
+        Array.from(partnerId),
+        Array.from(order6Id),
+        zeroAmount,
+        null
+      )
+      .accounts({
+        config: configPDA,
+        manager: manager.publicKey,
+        pdvTokenAccount: partnerDepositTokenAccount,
+        zynkOpWallet: zynkOpWallet.publicKey,
+        zowTokenAccount: zynkOpTokenAccount,
+        beneficiaryTokenAccount: partnerOperationalTokenAccount,
+        orderTracker: order6TrackerPDA,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([manager, zynkOpWallet])
+      .rpc();
+
+    // Verify all order trackers exist
+    const order1Account = await program.account.orderTracker.fetch(order1TrackerPDA);
+    const order2Account = await program.account.orderTracker.fetch(order2TrackerPDA);
+    const order3Account = await program.account.orderTracker.fetch(order3TrackerPDA);
+    const order4Account = await program.account.orderTracker.fetch(order4TrackerPDA);
+    const order5Account = await program.account.orderTracker.fetch(order5TrackerPDA);
+    const order6Account = await program.account.orderTracker.fetch(order6TrackerPDA);
+
+    assert.isNotNull(order1Account, "Order 1 tracker should exist");
+    assert.isNotNull(order2Account, "Order 2 tracker should exist");
+    assert.isNotNull(order3Account, "Order 3 tracker should exist");
+    assert.isNotNull(order4Account, "Order 4 tracker should exist");
+    assert.isNotNull(order5Account, "Order 5 tracker should exist");
+    assert.isNotNull(order6Account, "Order 6 tracker should exist");
+
+    // Get lamports in each order tracker account before closing
+    const order1Info = await provider.connection.getAccountInfo(order1TrackerPDA);
+    const order2Info = await provider.connection.getAccountInfo(order2TrackerPDA);
+    const order3Info = await provider.connection.getAccountInfo(order3TrackerPDA);
+    const order4Info = await provider.connection.getAccountInfo(order4TrackerPDA);
+    const order5Info = await provider.connection.getAccountInfo(order5TrackerPDA);
+    const order6Info = await provider.connection.getAccountInfo(order6TrackerPDA);
+
+    const totalLamportsToTransfer = 
+      (order1Info?.lamports || 0) +
+      (order2Info?.lamports || 0) +
+      (order3Info?.lamports || 0) +
+      (order4Info?.lamports || 0) +
+      (order5Info?.lamports || 0) +
+      (order6Info?.lamports || 0);
+
+    // Get admin balance before closing
+    const adminBalanceBefore = await provider.connection.getBalance(admin.publicKey);
+
+    // Call closeDanglingOrders with all 6 order tracker PDAs in remaining_accounts
+    // Note: accounts must be writable to be closed
+    await program.methods
+      .closeDanglingOrders(null)
+      .accounts({
+        config: configPDA,
+        admin: admin.publicKey,
+      })
+      .remainingAccounts([
+        {
+          pubkey: order1TrackerPDA,
+          isSigner: false,
+          isWritable: true,
+        },
+        {
+          pubkey: order2TrackerPDA,
+          isSigner: false,
+          isWritable: true,
+        },
+        {
+          pubkey: order3TrackerPDA,
+          isSigner: false,
+          isWritable: true,
+        },
+        {
+          pubkey: order4TrackerPDA,
+          isSigner: false,
+          isWritable: true,
+        },
+        {
+          pubkey: order5TrackerPDA,
+          isSigner: false,
+          isWritable: true,
+        },
+        {
+          pubkey: order6TrackerPDA,
+          isSigner: false,
+          isWritable: true,
+        },
+      ])
+      .signers([admin])
+      .rpc();
+
+    // Verify all order tracker accounts are closed
+    try {
+      await program.account.orderTracker.fetch(order1TrackerPDA);
+      assert.fail("Expected order 1 tracker to be closed");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "Account does not exist",
+        "Expected order 1 tracker account to be closed"
+      );
+    }
+
+    try {
+      await program.account.orderTracker.fetch(order2TrackerPDA);
+      assert.fail("Expected order 2 tracker to be closed");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "Account does not exist",
+        "Expected order 2 tracker account to be closed"
+      );
+    }
+
+    try {
+      await program.account.orderTracker.fetch(order3TrackerPDA);
+      assert.fail("Expected order 3 tracker to be closed");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "Account does not exist",
+        "Expected order 3 tracker account to be closed"
+      );
+    }
+
+    try {
+      await program.account.orderTracker.fetch(order4TrackerPDA);
+      assert.fail("Expected order 4 tracker to be closed");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "Account does not exist",
+        "Expected order 4 tracker account to be closed"
+      );
+    }
+
+    try {
+      await program.account.orderTracker.fetch(order5TrackerPDA);
+      assert.fail("Expected order 5 tracker to be closed");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "Account does not exist",
+        "Expected order 5 tracker account to be closed"
+      );
+    }
+
+    try {
+      await program.account.orderTracker.fetch(order6TrackerPDA);
+      assert.fail("Expected order 6 tracker to be closed");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "Account does not exist",
+        "Expected order 6 tracker account to be closed"
+      );
+    }
+
+    // Verify admin balance increased by the lamports from closed accounts
+    const adminBalanceAfter = await provider.connection.getBalance(admin.publicKey);
+    assert.equal(
+      adminBalanceAfter - adminBalanceBefore,
+      totalLamportsToTransfer,
+      "Admin balance should increase by the total lamports from closed accounts"
+    );
+  });
+
+  it("SadPath: Should fail the function if one order is already closed", async () => {
+    const amount = new anchor.BN(50000000000); // 50 tokens
+
+    // Create 2 orders
+    const order1Id = generateOrderId();
+    const order1TrackerPDA = deriveOrderTrackerPDA(order1Id);
+    
+    const order2Id = generateOrderId();
+    const order2TrackerPDA = deriveOrderTrackerPDA(order2Id);
+
+    // Ensure zynkOpTokenAccount has enough tokens
+    const zynkOpBalance = await provider.connection.getTokenAccountBalance(zynkOpTokenAccount);
+    if (+zynkOpBalance.value.amount < +amount.mul(new anchor.BN(2))) {
+      await mintTo(
+        provider.connection,
+        admin,
+        tokenMint,
+        zynkOpTokenAccount,
+        admin.publicKey,
+        amount.mul(new anchor.BN(2)).toNumber()
+      );
+    }
+
+    // Create first order
+    await program.methods
+      .createOrder(
+        Array.from(partnerId),
+        Array.from(order1Id),
+        amount,
+        null
+      )
+      .accounts({
+        config: configPDA,
+        manager: manager.publicKey,
+        pdvTokenAccount: partnerDepositTokenAccount,
+        zynkOpWallet: zynkOpWallet.publicKey,
+        zowTokenAccount: zynkOpTokenAccount,
+        beneficiaryTokenAccount: partnerOperationalTokenAccount,
+        orderTracker: order1TrackerPDA,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([manager, zynkOpWallet])
+      .rpc();
+
+    // Create second order
+    await program.methods
+      .createOrder(
+        Array.from(partnerId),
+        Array.from(order2Id),
+        amount,
+        null
+      )
+      .accounts({
+        config: configPDA,
+        manager: manager.publicKey,
+        pdvTokenAccount: partnerDepositTokenAccount,
+        zynkOpWallet: zynkOpWallet.publicKey,
+        zowTokenAccount: zynkOpTokenAccount,
+        beneficiaryTokenAccount: partnerOperationalTokenAccount,
+        orderTracker: order2TrackerPDA,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([manager, zynkOpWallet])
+      .rpc();
+
+    // Close the first order using closeDanglingOrders
+    await program.methods
+      .closeDanglingOrders(null)
+      .accounts({
+        config: configPDA,
+        admin: admin.publicKey,
+      })
+      .remainingAccounts([
+        {
+          pubkey: order1TrackerPDA,
+          isSigner: false,
+          isWritable: true,
+        },
+      ])
+      .signers([admin])
+      .rpc();
+
+    // Verify first order is closed
+    try {
+      await program.account.orderTracker.fetch(order1TrackerPDA);
+      assert.fail("Expected order 1 to be closed");
+    } catch (error) {
+      assert.include(error.message, "Account does not exist");
+    }
+
+    // Try to close both orders (one already closed, one still open) - should fail
+    try {
+      await program.methods
+        .closeDanglingOrders(null)
+        .accounts({
+          config: configPDA,
+          admin: admin.publicKey,
+        })
+        .remainingAccounts([
+          {
+            pubkey: order1TrackerPDA, // Already closed
+            isSigner: false,
+            isWritable: true,
+          },
+          {
+            pubkey: order2TrackerPDA, // Still open
+            isSigner: false,
+            isWritable: true,
+          },
+        ])
+        .signers([admin])
+        .rpc();
+      assert.fail("Expected closeDanglingOrders to fail when one order is already closed");
+    } catch (error) {
+      // Should fail because order1TrackerPDA is already closed and can't be deserialized
+      // The account doesn't exist anymore, so it might fail at transaction level or when trying to deserialize
+      assert.ok(
+        error.message.includes("Account does not exist") || 
+        error.message.includes("AccountDiscriminatorMismatch") || 
+        error.message.includes("ConstraintOwner") ||
+        error.message.includes("InvalidAccountData"),
+        `Expected error when trying to close already closed account. Got: ${error.message}`
+      );
+    }
+  });
+
+  it("SadPath: Should fail if guardian, manager or any other wallet than admin is calling the function", async () => {
+    const amount = new anchor.BN(50000000000); // 50 tokens
+
+    // Create an order
+    const orderId = generateOrderId();
+    const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
+
+    // Ensure zynkOpTokenAccount has enough tokens
+    const zynkOpBalance = await provider.connection.getTokenAccountBalance(zynkOpTokenAccount);
+    if (+zynkOpBalance.value.amount < +amount) {
+      await mintTo(
+        provider.connection,
+        admin,
+        tokenMint,
+        zynkOpTokenAccount,
+        admin.publicKey,
+        amount.toNumber()
+      );
+    }
+
+    // Create order
+    await program.methods
+      .createOrder(
+        Array.from(partnerId),
+        Array.from(orderId),
+        amount,
+        null
+      )
+      .accounts({
+        config: configPDA,
+        manager: manager.publicKey,
+        pdvTokenAccount: partnerDepositTokenAccount,
+        zynkOpWallet: zynkOpWallet.publicKey,
+        zowTokenAccount: zynkOpTokenAccount,
+        beneficiaryTokenAccount: partnerOperationalTokenAccount,
+        orderTracker: orderTrackerPDA,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([manager, zynkOpWallet])
+      .rpc();
+
+    // Try with manager - should fail
+    try {
+      await program.methods
+        .closeDanglingOrders(null)
+        .accounts({
+          config: configPDA,
+          admin: manager.publicKey, // Wrong signer
+        })
+        .remainingAccounts([
+          {
+            pubkey: orderTrackerPDA,
+            isSigner: false,
+            isWritable: true,
+          },
+        ])
+        .signers([manager])
+        .rpc();
+      assert.fail("Expected closeDanglingOrders to fail when manager calls it");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "UnauthorizedAdmin",
+        "Expected UnauthorizedAdmin error when manager calls closeDanglingOrders"
+      );
+    }
+
+    // Try with guardian - should fail
+    try {
+      await program.methods
+        .closeDanglingOrders(null)
+        .accounts({
+          config: configPDA,
+          admin: guardian.publicKey, // Wrong signer
+        })
+        .remainingAccounts([
+          {
+            pubkey: orderTrackerPDA,
+            isSigner: false,
+            isWritable: true,
+          },
+        ])
+        .signers([guardian])
+        .rpc();
+      assert.fail("Expected closeDanglingOrders to fail when guardian calls it");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "UnauthorizedAdmin",
+        "Expected UnauthorizedAdmin error when guardian calls closeDanglingOrders"
+      );
+    }
+
+    // Try with a random wallet - should fail
+    const randomWallet = Keypair.generate();
+    const airdropSig = await provider.connection.requestAirdrop(
+      randomWallet.publicKey,
+      1000000000
+    );
+    await provider.connection.confirmTransaction(airdropSig, 'confirmed');
+
+    try {
+      await program.methods
+        .closeDanglingOrders(null)
+        .accounts({
+          config: configPDA,
+          admin: randomWallet.publicKey, // Wrong signer
+        })
+        .remainingAccounts([
+          {
+            pubkey: orderTrackerPDA,
+            isSigner: false,
+            isWritable: true,
+          },
+        ])
+        .signers([randomWallet])
+        .rpc();
+      assert.fail("Expected closeDanglingOrders to fail when random wallet calls it");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "UnauthorizedAdmin",
+        "Expected UnauthorizedAdmin error when random wallet calls closeDanglingOrders"
+      );
+    }
+  });
+
+  it("SadPath: Should fail if contract is paused", async () => {
+    const amount = new anchor.BN(50000000000); // 50 tokens
+
+    // Create an order
+    const orderId = generateOrderId();
+    const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
+
+    // Ensure zynkOpTokenAccount has enough tokens
+    const zynkOpBalance = await provider.connection.getTokenAccountBalance(zynkOpTokenAccount);
+    if (+zynkOpBalance.value.amount < +amount) {
+      await mintTo(
+        provider.connection,
+        admin,
+        tokenMint,
+        zynkOpTokenAccount,
+        admin.publicKey,
+        amount.toNumber()
+      );
+    }
+
+    // Create order
+    await program.methods
+      .createOrder(
+        Array.from(partnerId),
+        Array.from(orderId),
+        amount,
+        null
+      )
+      .accounts({
+        config: configPDA,
+        manager: manager.publicKey,
+        pdvTokenAccount: partnerDepositTokenAccount,
+        zynkOpWallet: zynkOpWallet.publicKey,
+        zowTokenAccount: zynkOpTokenAccount,
+        beneficiaryTokenAccount: partnerOperationalTokenAccount,
+        orderTracker: orderTrackerPDA,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([manager, zynkOpWallet])
+      .rpc();
+
+    // Pause the contract
+    await program.methods
+      .pause()
+      .accounts({
+        config: configPDA,
+        authority: admin.publicKey,
+      })
+      .signers([admin])
+      .rpc();
+
+    // Try to close dangling orders while paused - should fail
+    try {
+      await program.methods
+        .closeDanglingOrders(null)
+        .accounts({
+          config: configPDA,
+          admin: admin.publicKey,
+        })
+        .remainingAccounts([
+          {
+            pubkey: orderTrackerPDA,
+            isSigner: false,
+            isWritable: true,
+          },
+        ])
+        .signers([admin])
+        .rpc();
+      assert.fail("Expected closeDanglingOrders to fail when contract is paused");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "ContractPaused",
+        "Expected ContractPaused error when contract is paused"
+      );
+    }
+
+    // Unpause for other tests using executeUnpause with timelock
+    const action = TimelockAction.Unpause;
+    const [timelockPDA] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("timelock"),
+        Buffer.from([action]),
+      ],
+      program.programId
+    );
+
+    // Create timelock request
+    await program.methods
+      .requestTimelock(action, null)
+      .accounts({
+        config: configPDA,
+        timelock: timelockPDA,
+        manager: manager.publicKey
+      })
+      .signers([manager])
+      .rpc();
+
+    // Guardian acks the timelock to allow immediate execution
+    await program.methods
+      .ackTimelock()
+      .accounts({
+        config: configPDA,
+        timelock: timelockPDA,
+        guardian: guardian.publicKey
+      })
+      .signers([guardian])
+      .rpc();
+
+    // Execute unpause
+    await program.methods
+      .executeUnpause()
+      .accounts({
+        config: configPDA,
+        timelock: timelockPDA,
+        admin: admin.publicKey
+      })
+      .signers([admin])
+      .rpc();
+  });
+
+  it("SadPath: Should fail if one of the PDA account is config and not the OrderTracker", async () => {
+    const amount = new anchor.BN(50000000000); // 50 tokens
+
+    // Create an order
+    const orderId = generateOrderId();
+    const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
+
+    // Ensure zynkOpTokenAccount has enough tokens
+    const zynkOpBalance = await provider.connection.getTokenAccountBalance(zynkOpTokenAccount);
+    if (+zynkOpBalance.value.amount < +amount) {
+      await mintTo(
+        provider.connection,
+        admin,
+        tokenMint,
+        zynkOpTokenAccount,
+        admin.publicKey,
+        amount.toNumber()
+      );
+    }
+
+    // Create order
+    await program.methods
+      .createOrder(
+        Array.from(partnerId),
+        Array.from(orderId),
+        amount,
+        null
+      )
+      .accounts({
+        config: configPDA,
+        manager: manager.publicKey,
+        pdvTokenAccount: partnerDepositTokenAccount,
+        zynkOpWallet: zynkOpWallet.publicKey,
+        zowTokenAccount: zynkOpTokenAccount,
+        beneficiaryTokenAccount: partnerOperationalTokenAccount,
+        orderTracker: orderTrackerPDA,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([manager, zynkOpWallet])
+      .rpc();
+
+    // Try to close with config PDA instead of order tracker - should fail
+    try {
+      await program.methods
+        .closeDanglingOrders(null)
+        .accounts({
+          config: configPDA,
+          admin: admin.publicKey,
+        })
+        .remainingAccounts([
+          {
+            pubkey: configPDA, // Config PDA instead of OrderTracker
+            isSigner: false,
+            isWritable: true,
+          },
+        ])
+        .signers([admin])
+        .rpc();
+      assert.fail("Expected closeDanglingOrders to fail when config PDA is passed instead of OrderTracker");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "AccountDiscriminatorMismatch",
+        "Expected AccountDiscriminatorMismatch error when config PDA is passed"
+      );
+    }
+  });
+
+  it("SadPath: Should fail if one of the PDA account is partner deposit vault and not the Order tracker", async () => {
+    const amount = new anchor.BN(50000000000); // 50 tokens
+
+    // Create an order
+    const orderId = generateOrderId();
+    const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
+
+    // Ensure zynkOpTokenAccount has enough tokens
+    const zynkOpBalance = await provider.connection.getTokenAccountBalance(zynkOpTokenAccount);
+    if (+zynkOpBalance.value.amount < +amount) {
+      await mintTo(
+        provider.connection,
+        admin,
+        tokenMint,
+        zynkOpTokenAccount,
+        admin.publicKey,
+        amount.toNumber()
+      );
+    }
+
+    // Create order
+    await program.methods
+      .createOrder(
+        Array.from(partnerId),
+        Array.from(orderId),
+        amount,
+        null
+      )
+      .accounts({
+        config: configPDA,
+        manager: manager.publicKey,
+        pdvTokenAccount: partnerDepositTokenAccount,
+        zynkOpWallet: zynkOpWallet.publicKey,
+        zowTokenAccount: zynkOpTokenAccount,
+        beneficiaryTokenAccount: partnerOperationalTokenAccount,
+        orderTracker: orderTrackerPDA,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([manager, zynkOpWallet])
+      .rpc();
+
+    // Try to close with partner deposit vault PDA instead of order tracker - should fail
+    try {
+      await program.methods
+        .closeDanglingOrders(null)
+        .accounts({
+          config: configPDA,
+          admin: admin.publicKey,
+        })
+        .remainingAccounts([
+          {
+            pubkey: partnerDepositVaultPDA, // Partner deposit vault PDA instead of OrderTracker
+            isSigner: false,
+            isWritable: true,
+          },
+        ])
+        .signers([admin])
+        .rpc();
+      assert.fail("Expected closeDanglingOrders to fail when partner deposit vault PDA is passed instead of OrderTracker");
+    } catch (error) {
+      // The partner deposit vault is not owned by the program, so it should fail with ConstraintOwner
+      // Or if it's owned but wrong discriminator, it should fail with AccountDiscriminatorMismatch
+      assert.ok(
+        error.message.includes("AccountDiscriminatorMismatch") || 
+        error.message.includes("ConstraintOwner"),
+        `Expected AccountDiscriminatorMismatch or ConstraintOwner error when partner deposit vault PDA is passed instead of OrderTracker. Got: ${error.message}`
+      );
+    }
+  });
+
 
   it("Should be able to pause by manager", async () => {
     await program.methods
