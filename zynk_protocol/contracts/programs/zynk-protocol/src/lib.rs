@@ -1,4 +1,5 @@
 use anchor_lang::prelude::*;
+use anchor_lang::error::ErrorCode;
 use anchor_spl::token::{self, Token, TokenAccount, Transfer};
 use anchor_lang::solana_program::{
     pubkey::Pubkey,
@@ -152,6 +153,14 @@ pub struct OrderReplenish {
     pub meta: Option<Vec<EventArg>>
 }
 
+
+#[event]
+pub struct DanglingOrderClosure {
+    pub order_id: [u8; 32],
+    pub amount: u64,
+    pub domain_separator: u64,
+    pub meta: Option<Vec<EventArg>>
+}
 #[event]
 pub struct Attestation {
     pub order_id: [u8; 32],
@@ -479,7 +488,7 @@ pub mod zynk_protocol {
     
             order_tracker.amount_in += amount;
         } else {
-            require!(order_tracker.amount_out >= order_tracker.amount_in, CustomError::DeficientOrder);
+            require!(order_tracker.amount_out <= order_tracker.amount_in, CustomError::DeficientOrder);
         }
         
         // If close_order flag is true, perform order closure
@@ -569,6 +578,26 @@ pub mod zynk_protocol {
             domain_separator: DOMAIN_SEPARATOR,
             meta
         });
+
+        Ok(())
+    }
+
+    pub fn close_dangling_orders(ctx: Context<CloseDanglingOrders>, meta: Option<Vec<EventArg>>) -> Result<()> {
+
+        // Check if program is paused.
+        require!(!ctx.accounts.config.paused, CustomError::ContractPaused);
+
+        let config = &mut ctx.accounts.config;
+        let admin = &mut ctx.accounts.admin;
+
+        let remaining_accounts = ctx.remaining_accounts;
+
+        for account in remaining_accounts {
+            let data = account.data.borrow();
+            require!(account.owner == ctx.program_id, ErrorCode::ConstraintOwner);
+            require!(data.len() == OrderTracker::LEN, ErrorCode::AccountDiscriminatorMismatch);
+            require!(&data[0..8] == OrderTracker::DISCRIMINATOR, ErrorCode::AccountDiscriminatorMismatch);
+        }
 
         Ok(())
     }
@@ -919,6 +948,20 @@ pub struct Replenish<'info> {
     pub system_program: Program<'info, System>,
 }
 
+
+#[derive(Accounts)]
+pub struct CloseDanglingOrders<'info> {
+    #[account(
+        mut,
+        seeds = [CONFIG_SEED],
+        bump,
+        has_one = admin @ CustomError::UnauthorizedAdmin
+    )]
+    pub config: Account<'info, Config>,
+
+    #[account(mut)]
+    pub admin: Signer<'info>,
+}
 #[derive(Accounts)]
 #[instruction(order_id: [u8; 32])]
 pub struct AttestOrder<'info> {
