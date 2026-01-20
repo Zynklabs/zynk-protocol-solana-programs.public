@@ -90,9 +90,16 @@ describe("zynk-protocol", () => {
 
   // Token accounts
   let tokenMint: PublicKey;
+  let tokenMint2: PublicKey;
+
   let zynkOpTokenAccount: PublicKey;
+  let zynkOpTokenAccount2: PublicKey;
+
   let partnerOperationalTokenAccount: PublicKey;
+  let partnerOperationalTokenAccount2: PublicKey;
+
   let partnerDepositTokenAccount: PublicKey;
+  let partnerDepositTokenAccount2: PublicKey;
   
   let timelockPDA: PublicKey;
 
@@ -130,7 +137,7 @@ describe("zynk-protocol", () => {
       await provider.connection.confirmTransaction(tx, 'confirmed');
     }
     
-    // Create test token (using admin as mint authority)
+    // Create test tokens (using admin as mint authority)
     tokenMint = await createMint(
       provider.connection,
       admin,
@@ -139,7 +146,14 @@ describe("zynk-protocol", () => {
       9 // 9 decimals like SOL
     );
 
-    // Create token accounts for all wallets
+    tokenMint2 = await createMint(
+      provider.connection,
+      admin,
+      admin.publicKey,
+      null,
+      9
+    );
+    // Create token accounts for all wallets (tokenMint)
     zynkOpTokenAccount = await createAccount(
       provider.connection,
       zynkOpWallet,
@@ -164,8 +178,34 @@ describe("zynk-protocol", () => {
       ASSOCIATED_TOKEN_PROGRAM_ID,
       true // allowOwnerOffCurve
     )
+
+    // Create token accounts for tokenMint2
+    zynkOpTokenAccount2 = await createAccount(
+      provider.connection,
+      zynkOpWallet,
+      tokenMint2,
+      zynkOpWallet.publicKey
+    );
+
+    partnerOperationalTokenAccount2 = await createAccount(
+      provider.connection,
+      partnerOperationalWallet,
+      tokenMint2,
+      partnerOperationalWallet.publicKey
+    );
     
-    // Mint tokens to zynkOpWallet and partnerDepositVault
+    partnerDepositTokenAccount2 = await createAssociatedTokenAccount(
+      provider.connection,
+      partnerOperationalWallet,
+      tokenMint2,
+      partnerDepositVaultPDA,
+      { commitment: "confirmed" },
+      TOKEN_PROGRAM_ID,
+      ASSOCIATED_TOKEN_PROGRAM_ID,
+      true // allowOwnerOffCurve
+    )
+
+    // Mint tokens to zynkOpWallet and partnerDepositVault (tokenMint)
     await mintTo(
       provider.connection,
       admin,
@@ -183,12 +223,80 @@ describe("zynk-protocol", () => {
       admin.publicKey,
       10000000000000 // Initial supply for partner deposit
     );
+
+    // Mint tokens to zynkOpWallet and partnerDepositVault (tokenMint2)
+    await mintTo(
+      provider.connection,
+      admin,
+      tokenMint2,
+      zynkOpTokenAccount2,
+      admin.publicKey,
+      10000000000000 // Initial supply for zynk operator
+    );
+
+    await mintTo(
+      provider.connection,
+      admin,
+      tokenMint2,
+      partnerDepositTokenAccount2,
+      admin.publicKey,
+      10000000000000 // Initial supply for partner deposit
+    );
   });
 
-  it("Initializes the protocol", async () => {
-    const whitelistedTokenMints: PublicKey[] = [tokenMint];
+  it("Should fail to initialize with empty whitelisted token mints vector", async () => {
+    const whitelistedTokenMints: PublicKey[] = [];
+    
+    try {
+      await program.methods
+        .initialize(zynkOpWallet.publicKey, whitelistedTokenMints, guardian.publicKey, manager.publicKey)
+        .accounts({
+          config: configPDA,
+          admin: admin.publicKey,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([admin])
+        .rpc();
+      assert.fail("Expected initialize to fail with empty token mints vector");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "EmptyWhitelistedTokenMints",
+        "Expected EmptyWhitelistedTokenMints error"
+      );
+    }
+  });
+
+  it("Should fail to initialize with invalid token mint address in vector", async () => {
+    // Create a vector with a null/default PublicKey (invalid address)
+    const invalidTokenMint = PublicKey.default;
+    const whitelistedTokenMints: PublicKey[] = [invalidTokenMint];
+    
+    try {
+      await program.methods
+        .initialize(zynkOpWallet.publicKey, whitelistedTokenMints, guardian.publicKey, manager.publicKey)
+        .accounts({
+          config: configPDA,
+          admin: admin.publicKey,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([admin])
+        .rpc();
+      assert.fail("Expected initialize to fail with invalid token mint address");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "InvalidAddress",
+        "Expected InvalidAddress error"
+      );
+    }
+  });
+
+  it("Initializes the protocol with multiple token addresses", async () => {
+    const whitelistedTokenMints: PublicKey[] = [tokenMint, tokenMint2];
+    
     await program.methods
-      .initialize(zynkOpWallet.publicKey,whitelistedTokenMints, guardian.publicKey, manager.publicKey)
+      .initialize(zynkOpWallet.publicKey, whitelistedTokenMints, guardian.publicKey, manager.publicKey)
       .accounts({
         config: configPDA,
         admin: admin.publicKey,
@@ -204,6 +312,11 @@ describe("zynk-protocol", () => {
     assert.ok(configAccount.guardian.equals(guardian.publicKey));
     assert.ok(configAccount.zynkOpWallet.equals(zynkOpWallet.publicKey));
     assert.equal(configAccount.paused, false);
+    
+    // Verify all token mints are stored correctly
+    assert.equal(configAccount.whitelistedTokenMints.length, 2, "Should have 2 token mints");
+    assert.ok(configAccount.whitelistedTokenMints[0].equals(tokenMint), "First token mint should match");
+    assert.ok(configAccount.whitelistedTokenMints[1].equals(tokenMint2), "Second token mint should match");
   });
 
   it("Pulls tokens from partner_deposit_vault to zynkOpWallet and sends tokens from zynkOpWallet to partner_operational_wallet", async () => {
