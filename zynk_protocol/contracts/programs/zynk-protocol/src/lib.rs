@@ -209,7 +209,9 @@ pub enum CustomError {
     #[msg("Invalid action")]
     InvalidAction,
     #[msg("Invalid partner deposit vault authority")]
-    InvalidPdvAuthority
+    InvalidPdvAuthority,
+    #[msg("Whitelisted token mints must be non-empty")]
+    EmptyWhitelistedTokenMints
 }
 
 
@@ -280,9 +282,10 @@ pub mod zynk_protocol {
         config.zynk_op_wallet = zynk_op_wallet;
         config.guardian = guardian;
         config.manager = manager;
-        // for token_mint in whitelisted_token_mints.iter() {
-        //     validate_address(token_mint)?;
-        // }
+        require!(whitelisted_token_mints.len() > 0, CustomError::EmptyWhitelistedTokenMints);
+        for token_mint in whitelisted_token_mints.iter() {
+            validate_address(token_mint)?;
+        }
         config.whitelisted_token_mints = whitelisted_token_mints;
         config.paused = false;
 
@@ -476,7 +479,7 @@ pub mod zynk_protocol {
     
             order_tracker.amount_in += amount;
         } else {
-            require!(order_tracker.amount_out == 0, CustomError::DeficientOrder);
+            require!(order_tracker.amount_out >= order_tracker.amount_in, CustomError::DeficientOrder);
         }
         
         // If close_order flag is true, perform order closure

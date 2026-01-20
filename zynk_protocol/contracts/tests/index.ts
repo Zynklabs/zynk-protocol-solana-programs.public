@@ -1103,6 +1103,336 @@ describe("zynk-protocol", () => {
     }
   });
 
+  it("User can create and replenish/close order with same mint token", async () => {
+    const amount = new anchor.BN(100000000000);
+    const orderId = generateOrderId();
+    const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
+    const now = Math.floor(Date.now() / 1000);
+    const validity = now + 3600;
+
+    // Mint tokens to partnerDepositTokenAccount for this test
+    await mintTo(
+      provider.connection,
+      admin,
+      tokenMint,
+      partnerDepositTokenAccount,
+      admin.publicKey,
+      10000000000000 // Mint sufficient tokens for the test
+    );
+
+    // Create order with tokenMint
+    await program.methods
+      .createOrder(
+        Array.from(partnerId),
+        Array.from(orderId),
+        amount,
+        null
+      )
+      .accounts({
+        config: configPDA,
+        manager: manager.publicKey,
+        pdvTokenAccount: partnerDepositTokenAccount,
+        zynkOpWallet: zynkOpWallet.publicKey,
+        zowTokenAccount: zynkOpTokenAccount,
+        beneficiaryTokenAccount: partnerOperationalTokenAccount,
+        orderTracker: orderTrackerPDA,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([manager, zynkOpWallet])
+      .rpc();
+
+    // Verify order was created
+    let orderTrackerAccount = await program.account.orderTracker.fetch(orderTrackerPDA);
+    assert.equal(orderTrackerAccount.amountOut.toNumber(), amount.toNumber());
+    assert.equal(orderTrackerAccount.amountIn.toNumber(), 0);
+
+    // Ensure partnerDepositTokenAccount has sufficient balance for replenish
+    const balanceBeforeReplenish = await provider.connection.getTokenAccountBalance(
+      partnerDepositTokenAccount
+    );
+    if (+balanceBeforeReplenish.value.amount < +amount) {
+      // Mint additional tokens if needed
+      await mintTo(
+        provider.connection,
+        admin,
+        tokenMint,
+        partnerDepositTokenAccount,
+        admin.publicKey,
+        +amount - +balanceBeforeReplenish.value.amount + 1000000000 // Add extra buffer
+      );
+    }
+
+    // Replenish and close order with same tokenMint
+    await program.methods
+      .replenish(
+        Array.from(orderId),
+        new anchor.BN(validity),
+        amount,
+        true, // close_order = true
+        null
+      )
+      .accounts({
+        config: configPDA,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: partnerDepositTokenAccount,
+        zowTokenAccount: zynkOpTokenAccount,
+        orderTracker: orderTrackerPDA,
+        manager: manager.publicKey,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([manager])
+      .rpc();
+
+    // Verify order is closed
+    try {
+      await program.account.orderTracker.fetch(orderTrackerPDA);
+      assert.fail("Expected order to be closed");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "Account does not exist",
+        "Expected account to be closed"
+      );
+    }
+  });
+
+  it("User can create order with first token and close order with second token", async () => {
+    const amount = new anchor.BN(100000000000);
+    const orderId = generateOrderId();
+    const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
+    const now = Math.floor(Date.now() / 1000);
+    const validity = now + 3600;
+
+    // Create order with tokenMint (first token)
+    await program.methods
+      .createOrder(
+        Array.from(partnerId),
+        Array.from(orderId),
+        amount,
+        null
+      )
+      .accounts({
+        config: configPDA,
+        manager: manager.publicKey,
+        pdvTokenAccount: partnerDepositTokenAccount,
+        zynkOpWallet: zynkOpWallet.publicKey,
+        zowTokenAccount: zynkOpTokenAccount,
+        beneficiaryTokenAccount: partnerOperationalTokenAccount,
+        orderTracker: orderTrackerPDA,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([manager, zynkOpWallet])
+      .rpc();
+
+    // Verify order was created
+    let orderTrackerAccount = await program.account.orderTracker.fetch(orderTrackerPDA);
+    assert.equal(orderTrackerAccount.amountOut.toNumber(), amount.toNumber());
+    assert.equal(orderTrackerAccount.amountIn.toNumber(), 0);
+
+    // Ensure partnerDepositTokenAccount2 has sufficient balance for replenish
+    const balanceBeforeReplenish2 = await provider.connection.getTokenAccountBalance(
+      partnerDepositTokenAccount2
+    );
+    if (+balanceBeforeReplenish2.value.amount < +amount) {
+      // Mint additional tokens if needed
+      await mintTo(
+        provider.connection,
+        admin,
+        tokenMint2,
+        partnerDepositTokenAccount2,
+        admin.publicKey,
+        +amount - +balanceBeforeReplenish2.value.amount + 1000000000 // Add extra buffer
+      );
+    }
+
+    // Close order with tokenMint2 (second token)
+    await program.methods
+      .replenish(
+        Array.from(orderId),
+        new anchor.BN(validity),
+        amount,
+        true, // close_order = true
+        null
+      )
+      .accounts({
+        config: configPDA,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: partnerDepositTokenAccount2, // Using tokenMint2
+        zowTokenAccount: zynkOpTokenAccount2, // Using tokenMint2
+        orderTracker: orderTrackerPDA,
+        manager: manager.publicKey,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([manager])
+      .rpc();
+
+    // Verify order is closed
+    try {
+      await program.account.orderTracker.fetch(orderTrackerPDA);
+      assert.fail("Expected order to be closed");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "Account does not exist",
+        "Expected account to be closed"
+      );
+    }
+  });
+
+  it("User is able to pull and create order and close order with same mint token", async () => {
+    const amount = new anchor.BN(100000000000);
+    const orderId = generateOrderId();
+    const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
+    const now = Math.floor(Date.now() / 1000);
+    const validity = now + 3600;
+
+    const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
+      partnerDepositTokenAccount
+    );
+    expect(+sourceBalance_preTx.value.amount).to.be.gte(+amount);
+
+    // Pull and create order with tokenMint
+    await program.methods
+      .pullAndCreateOrder(
+        Array.from(partnerId),
+        Array.from(orderId),
+        amount,
+        null
+      )
+      .accounts({
+        config: configPDA,
+        manager: manager.publicKey,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: partnerDepositTokenAccount,
+        zynkOpWallet: zynkOpWallet.publicKey,
+        zowTokenAccount: zynkOpTokenAccount,
+        beneficiaryTokenAccount: partnerOperationalTokenAccount,
+        orderTracker: orderTrackerPDA,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([manager, zynkOpWallet])
+      .rpc();
+
+    // Verify order was created
+    let orderTrackerAccount = await program.account.orderTracker.fetch(orderTrackerPDA);
+    assert.equal(orderTrackerAccount.amountOut.toNumber(), amount.toNumber());
+    assert.equal(orderTrackerAccount.amountIn.toNumber(), amount.toNumber()); // amount_in equals amount_out after pull
+
+    // Close order with same tokenMint (no additional replenish needed since amount_in already equals amount_out)
+    await program.methods
+      .replenish(
+        Array.from(orderId),
+        new anchor.BN(validity),
+        new anchor.BN(0), // No additional amount needed
+        true, // close_order = true
+        null
+      )
+      .accounts({
+        config: configPDA,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: partnerDepositTokenAccount,
+        zowTokenAccount: zynkOpTokenAccount,
+        orderTracker: orderTrackerPDA,
+        manager: manager.publicKey,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([manager])
+      .rpc();
+
+    // Verify order is closed
+    try {
+      await program.account.orderTracker.fetch(orderTrackerPDA);
+      assert.fail("Expected order to be closed");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "Account does not exist",
+        "Expected account to be closed"
+      );
+    }
+  });
+
+  it("User is able to pull and create order with one mint token and close order with different mint token (Both valid)", async () => {
+    const amount = new anchor.BN(100000000000);
+    const orderId = generateOrderId();
+    const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
+    const now = Math.floor(Date.now() / 1000);
+    const validity = now + 3600;
+
+    const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
+      partnerDepositTokenAccount
+    );
+    expect(+sourceBalance_preTx.value.amount).to.be.gte(+amount);
+
+    // Pull and create order with tokenMint
+    await program.methods
+      .pullAndCreateOrder(
+        Array.from(partnerId),
+        Array.from(orderId),
+        amount,
+        null
+      )
+      .accounts({
+        config: configPDA,
+        manager: manager.publicKey,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: partnerDepositTokenAccount, // Using tokenMint
+        zynkOpWallet: zynkOpWallet.publicKey,
+        zowTokenAccount: zynkOpTokenAccount, // Using tokenMint
+        beneficiaryTokenAccount: partnerOperationalTokenAccount, // Using tokenMint
+        orderTracker: orderTrackerPDA,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([manager, zynkOpWallet])
+      .rpc();
+
+    // Verify order was created
+    let orderTrackerAccount = await program.account.orderTracker.fetch(orderTrackerPDA);
+    assert.equal(orderTrackerAccount.amountOut.toNumber(), amount.toNumber());
+    assert.equal(orderTrackerAccount.amountIn.toNumber(), amount.toNumber()); // amount_in equals amount_out after pull
+
+    // Close order with tokenMint2 (different mint token)
+    await program.methods
+      .replenish(
+        Array.from(orderId),
+        new anchor.BN(validity),
+        new anchor.BN(0), // No additional amount needed since amount_in already equals amount_out
+        true, // close_order = true
+        null
+      )
+      .accounts({
+        config: configPDA,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: partnerDepositTokenAccount2, // Using tokenMint2
+        zowTokenAccount: zynkOpTokenAccount2, // Using tokenMint2
+        orderTracker: orderTrackerPDA,
+        manager: manager.publicKey,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([manager])
+      .rpc();
+
+    // Verify order is closed
+    try {
+      await program.account.orderTracker.fetch(orderTrackerPDA);
+      assert.fail("Expected order to be closed");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "Account does not exist",
+        "Expected account to be closed"
+      );
+    }
+  });
+
   it("Should be able to pause by manager", async () => {
     await program.methods
       .pause()
