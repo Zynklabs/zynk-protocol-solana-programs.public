@@ -91,15 +91,19 @@ describe("zynk-protocol", () => {
   // Token accounts
   let tokenMint: PublicKey;
   let tokenMint2: PublicKey;
+  let invalidTokenMint: PublicKey; // Token not in whitelist
 
   let zynkOpTokenAccount: PublicKey;
   let zynkOpTokenAccount2: PublicKey;
+  let zynkOpTokenAccountInvalid: PublicKey;
 
   let partnerOperationalTokenAccount: PublicKey;
   let partnerOperationalTokenAccount2: PublicKey;
+  let partnerOperationalTokenAccountInvalid: PublicKey;
 
   let partnerDepositTokenAccount: PublicKey;
   let partnerDepositTokenAccount2: PublicKey;
+  let partnerDepositTokenAccountInvalid: PublicKey;
   
   let timelockPDA: PublicKey;
 
@@ -153,6 +157,16 @@ describe("zynk-protocol", () => {
       null,
       9
     );
+
+    // Create invalid token mint (not in whitelist)
+    invalidTokenMint = await createMint(
+      provider.connection,
+      admin,
+      admin.publicKey,
+      null,
+      9
+    );
+
     // Create token accounts for all wallets (tokenMint)
     zynkOpTokenAccount = await createAccount(
       provider.connection,
@@ -205,6 +219,32 @@ describe("zynk-protocol", () => {
       true // allowOwnerOffCurve
     )
 
+    // Create token accounts for invalid token (not in whitelist)
+    zynkOpTokenAccountInvalid = await createAccount(
+      provider.connection,
+      zynkOpWallet,
+      invalidTokenMint,
+      zynkOpWallet.publicKey
+    );
+
+    partnerOperationalTokenAccountInvalid = await createAccount(
+      provider.connection,
+      partnerOperationalWallet,
+      invalidTokenMint,
+      partnerOperationalWallet.publicKey
+    );
+    
+    partnerDepositTokenAccountInvalid = await createAssociatedTokenAccount(
+      provider.connection,
+      partnerOperationalWallet,
+      invalidTokenMint,
+      partnerDepositVaultPDA,
+      { commitment: "confirmed" },
+      TOKEN_PROGRAM_ID,
+      ASSOCIATED_TOKEN_PROGRAM_ID,
+      true // allowOwnerOffCurve
+    )
+
     // Mint tokens to zynkOpWallet and partnerDepositVault (tokenMint)
     await mintTo(
       provider.connection,
@@ -239,6 +279,25 @@ describe("zynk-protocol", () => {
       admin,
       tokenMint2,
       partnerDepositTokenAccount2,
+      admin.publicKey,
+      10000000000000 // Initial supply for partner deposit
+    );
+
+    // Mint tokens to zynkOpWallet and partnerDepositVault (invalidTokenMint)
+    await mintTo(
+      provider.connection,
+      admin,
+      invalidTokenMint,
+      zynkOpTokenAccountInvalid,
+      admin.publicKey,
+      10000000000000 // Initial supply for zynk operator
+    );
+
+    await mintTo(
+      provider.connection,
+      admin,
+      invalidTokenMint,
+      partnerDepositTokenAccountInvalid,
       admin.publicKey,
       10000000000000 // Initial supply for partner deposit
     );
@@ -1429,6 +1488,694 @@ describe("zynk-protocol", () => {
         error.message,
         "Account does not exist",
         "Expected account to be closed"
+      );
+    }
+  });
+
+  it("User should not be able to create order with invalid mint token", async () => {
+    const amount = new anchor.BN(100000000000);
+    const orderId = generateOrderId();
+    const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
+
+    try {
+      await program.methods
+        .createOrder(
+          Array.from(partnerId),
+          Array.from(orderId),
+          amount,
+          null
+        )
+        .accounts({
+          config: configPDA,
+          manager: manager.publicKey,
+          pdvTokenAccount: partnerDepositTokenAccountInvalid, // Using invalid token
+          zynkOpWallet: zynkOpWallet.publicKey,
+          zowTokenAccount: zynkOpTokenAccountInvalid, // Using invalid token
+          beneficiaryTokenAccount: partnerOperationalTokenAccountInvalid, // Using invalid token
+          orderTracker: orderTrackerPDA,
+          systemProgram: SystemProgram.programId,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([manager, zynkOpWallet])
+        .rpc();
+      assert.fail("Expected create order to fail with invalid mint token");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "InvalidTokenMint",
+        "Expected InvalidTokenMint error"
+      );
+    }
+  });
+
+  it("User should not be able to create order with valid mint token but pdv and zow mint tokens are different (Both valid)", async () => {
+    const amount = new anchor.BN(100000000000);
+    const orderId = generateOrderId();
+    const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
+
+    try {
+      await program.methods
+        .createOrder(
+          Array.from(partnerId),
+          Array.from(orderId),
+          amount,
+          null
+        )
+        .accounts({
+          config: configPDA,
+          manager: manager.publicKey,
+          pdvTokenAccount: partnerDepositTokenAccount, // Using tokenMint
+          zynkOpWallet: zynkOpWallet.publicKey,
+          zowTokenAccount: zynkOpTokenAccount2, // Using tokenMint2 (different from pdv)
+          beneficiaryTokenAccount: partnerOperationalTokenAccount2, // Using tokenMint2
+          orderTracker: orderTrackerPDA,
+          systemProgram: SystemProgram.programId,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([manager, zynkOpWallet])
+        .rpc();
+      assert.fail("Expected create order to fail when pdv and zow mint tokens are different");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "InvalidTokenMint",
+        "Expected InvalidTokenMint error when pdv and zow mints differ"
+      );
+    }
+  });
+
+  it("User should not be able to pull and create order with invalid mint token", async () => {
+    const amount = new anchor.BN(100000000000);
+    const orderId = generateOrderId();
+    const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
+
+    try {
+      await program.methods
+        .pullAndCreateOrder(
+          Array.from(partnerId),
+          Array.from(orderId),
+          amount,
+          null
+        )
+        .accounts({
+          config: configPDA,
+          manager: manager.publicKey,
+          partnerDepositVault: partnerDepositVaultPDA,
+          pdvTokenAccount: partnerDepositTokenAccountInvalid, // Using invalid token
+          zynkOpWallet: zynkOpWallet.publicKey,
+          zowTokenAccount: zynkOpTokenAccountInvalid, // Using invalid token
+          beneficiaryTokenAccount: partnerOperationalTokenAccountInvalid, // Using invalid token
+          orderTracker: orderTrackerPDA,
+          systemProgram: SystemProgram.programId,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([manager, zynkOpWallet])
+        .rpc();
+      assert.fail("Expected pull and create order to fail with invalid mint token");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "InvalidTokenMint",
+        "Expected InvalidTokenMint error"
+      );
+    }
+  });
+
+  it("User should not be able to pull and create order with valid mint token but pdv and zow mint tokens are different (Both valid)", async () => {
+    const amount = new anchor.BN(100000000000);
+    const orderId = generateOrderId();
+    const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
+
+    try {
+      await program.methods
+        .pullAndCreateOrder(
+          Array.from(partnerId),
+          Array.from(orderId),
+          amount,
+          null
+        )
+        .accounts({
+          config: configPDA,
+          manager: manager.publicKey,
+          partnerDepositVault: partnerDepositVaultPDA,
+          pdvTokenAccount: partnerDepositTokenAccount, // Using tokenMint
+          zynkOpWallet: zynkOpWallet.publicKey,
+          zowTokenAccount: zynkOpTokenAccount2, // Using tokenMint2 (different from pdv)
+          beneficiaryTokenAccount: partnerOperationalTokenAccount2, // Using tokenMint2
+          orderTracker: orderTrackerPDA,
+          systemProgram: SystemProgram.programId,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([manager, zynkOpWallet])
+        .rpc();
+      assert.fail("Expected pull and create order to fail when pdv and zow mint tokens are different");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "InvalidTokenMint",
+        "Expected InvalidTokenMint error when pdv and zow mints differ"
+      );
+    }
+  });
+
+  it("User should not be able to close order with invalid mint token (Order created by CreateOrder method)", async () => {
+    const amount = new anchor.BN(100000000000);
+    const orderId = generateOrderId();
+    const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
+    const now = Math.floor(Date.now() / 1000);
+    const validity = now + 3600;
+
+    // Create order correctly with valid tokenMint
+    await program.methods
+      .createOrder(
+        Array.from(partnerId),
+        Array.from(orderId),
+        amount,
+        null
+      )
+      .accounts({
+        config: configPDA,
+        manager: manager.publicKey,
+        pdvTokenAccount: partnerDepositTokenAccount,
+        zynkOpWallet: zynkOpWallet.publicKey,
+        zowTokenAccount: zynkOpTokenAccount,
+        beneficiaryTokenAccount: partnerOperationalTokenAccount,
+        orderTracker: orderTrackerPDA,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([manager, zynkOpWallet])
+      .rpc();
+
+    // Verify order was created
+    let orderTrackerAccount = await program.account.orderTracker.fetch(orderTrackerPDA);
+    assert.equal(orderTrackerAccount.amountOut.toNumber(), amount.toNumber());
+
+    // Ensure partnerDepositTokenAccountInvalid has sufficient balance
+    const balanceInvalid = await provider.connection.getTokenAccountBalance(
+      partnerDepositTokenAccountInvalid
+    );
+    if (+balanceInvalid.value.amount < +amount) {
+      await mintTo(
+        provider.connection,
+        admin,
+        invalidTokenMint,
+        partnerDepositTokenAccountInvalid,
+        admin.publicKey,
+        +amount - +balanceInvalid.value.amount + 1000000000
+      );
+    }
+
+    // Try to close order with invalid mint token (should fail)
+    try {
+      await program.methods
+        .replenish(
+          Array.from(orderId),
+          new anchor.BN(validity),
+          amount,
+          true, // close_order = true
+          null
+        )
+        .accounts({
+          config: configPDA,
+          partnerDepositVault: partnerDepositVaultPDA,
+          pdvTokenAccount: partnerDepositTokenAccountInvalid, // Using invalid token
+          zowTokenAccount: zynkOpTokenAccountInvalid, // Using invalid token
+          orderTracker: orderTrackerPDA,
+          manager: manager.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([manager])
+        .rpc();
+      assert.fail("Expected close order to fail with invalid mint token");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "InvalidTokenMint",
+        "Expected InvalidTokenMint error when closing with invalid mint token"
+      );
+    }
+  });
+
+  it("User should not be able to close order with valid mint token but pdv and zow mint tokens are different (Both valid) (Order created by CreateOrder method)", async () => {
+    const amount = new anchor.BN(100000000000);
+    const orderId = generateOrderId();
+    const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
+    const now = Math.floor(Date.now() / 1000);
+    const validity = now + 3600;
+
+    // Create order correctly with tokenMint
+    await program.methods
+      .createOrder(
+        Array.from(partnerId),
+        Array.from(orderId),
+        amount,
+        null
+      )
+      .accounts({
+        config: configPDA,
+        manager: manager.publicKey,
+        pdvTokenAccount: partnerDepositTokenAccount, // Using tokenMint
+        zynkOpWallet: zynkOpWallet.publicKey,
+        zowTokenAccount: zynkOpTokenAccount, // Using tokenMint
+        beneficiaryTokenAccount: partnerOperationalTokenAccount, // Using tokenMint
+        orderTracker: orderTrackerPDA,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([manager, zynkOpWallet])
+      .rpc();
+
+    // Verify order was created
+    let orderTrackerAccount = await program.account.orderTracker.fetch(orderTrackerPDA);
+    assert.equal(orderTrackerAccount.amountOut.toNumber(), amount.toNumber());
+
+    // Ensure partnerDepositTokenAccount2 has sufficient balance
+    const balance2 = await provider.connection.getTokenAccountBalance(
+      partnerDepositTokenAccount2
+    );
+    if (+balance2.value.amount < +amount) {
+      await mintTo(
+        provider.connection,
+        admin,
+        tokenMint2,
+        partnerDepositTokenAccount2,
+        admin.publicKey,
+        +amount - +balance2.value.amount + 1000000000
+      );
+    }
+
+    // Try to close order with mismatched tokens (pdv=tokenMint2, zow=tokenMint) - should fail
+    try {
+      await program.methods
+        .replenish(
+          Array.from(orderId),
+          new anchor.BN(validity),
+          amount,
+          true, // close_order = true
+          null
+        )
+        .accounts({
+          config: configPDA,
+          partnerDepositVault: partnerDepositVaultPDA,
+          pdvTokenAccount: partnerDepositTokenAccount2, // Using tokenMint2
+          zowTokenAccount: zynkOpTokenAccount, // Using tokenMint (different from pdv)
+          orderTracker: orderTrackerPDA,
+          manager: manager.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([manager])
+        .rpc();
+      assert.fail("Expected close order to fail when pdv and zow mint tokens are different");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "InvalidTokenMint",
+        "Expected InvalidTokenMint error when pdv and zow mints differ"
+      );
+    }
+  });
+
+  it("User should not be able to close order with invalid mint token (Order created by PullAndCreateOrder method)", async () => {
+    const amount = new anchor.BN(100000000000);
+    const orderId = generateOrderId();
+    const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
+    const now = Math.floor(Date.now() / 1000);
+    const validity = now + 3600;
+
+    // Ensure partnerDepositTokenAccount has sufficient balance
+    const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
+      partnerDepositTokenAccount
+    );
+    if (+sourceBalance_preTx.value.amount < +amount) {
+      await mintTo(
+        provider.connection,
+        admin,
+        tokenMint,
+        partnerDepositTokenAccount,
+        admin.publicKey,
+        +amount - +sourceBalance_preTx.value.amount + 1000000000
+      );
+    }
+
+    // Pull and create order correctly with valid tokenMint
+    await program.methods
+      .pullAndCreateOrder(
+        Array.from(partnerId),
+        Array.from(orderId),
+        amount,
+        null
+      )
+      .accounts({
+        config: configPDA,
+        manager: manager.publicKey,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: partnerDepositTokenAccount,
+        zynkOpWallet: zynkOpWallet.publicKey,
+        zowTokenAccount: zynkOpTokenAccount,
+        beneficiaryTokenAccount: partnerOperationalTokenAccount,
+        orderTracker: orderTrackerPDA,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([manager, zynkOpWallet])
+      .rpc();
+
+    // Verify order was created
+    let orderTrackerAccount = await program.account.orderTracker.fetch(orderTrackerPDA);
+    assert.equal(orderTrackerAccount.amountOut.toNumber(), amount.toNumber());
+    assert.equal(orderTrackerAccount.amountIn.toNumber(), amount.toNumber());
+
+    // Ensure partnerDepositTokenAccountInvalid has sufficient balance
+    const balanceInvalid = await provider.connection.getTokenAccountBalance(
+      partnerDepositTokenAccountInvalid
+    );
+    if (+balanceInvalid.value.amount < +amount) {
+      await mintTo(
+        provider.connection,
+        admin,
+        invalidTokenMint,
+        partnerDepositTokenAccountInvalid,
+        admin.publicKey,
+        +amount - +balanceInvalid.value.amount + 1000000000
+      );
+    }
+
+    // Try to close order with invalid mint token (should fail)
+    try {
+      await program.methods
+        .replenish(
+          Array.from(orderId),
+          new anchor.BN(validity),
+          new anchor.BN(0), // No additional amount needed since amount_in already equals amount_out
+          true, // close_order = true
+          null
+        )
+        .accounts({
+          config: configPDA,
+          partnerDepositVault: partnerDepositVaultPDA,
+          pdvTokenAccount: partnerDepositTokenAccountInvalid, // Using invalid token
+          zowTokenAccount: zynkOpTokenAccountInvalid, // Using invalid token
+          orderTracker: orderTrackerPDA,
+          manager: manager.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([manager])
+        .rpc();
+      assert.fail("Expected close order to fail with invalid mint token");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "InvalidTokenMint",
+        "Expected InvalidTokenMint error when closing with invalid mint token"
+      );
+    }
+  });
+
+  it("User should not be able to close order with valid mint token but pdv and zow mint tokens are different (Both valid) (Order created by PullAndCreateOrder method)", async () => {
+    const amount = new anchor.BN(100000000000);
+    const orderId = generateOrderId();
+    const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
+    const now = Math.floor(Date.now() / 1000);
+    const validity = now + 3600;
+
+    // Ensure partnerDepositTokenAccount has sufficient balance
+    const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
+      partnerDepositTokenAccount
+    );
+    if (+sourceBalance_preTx.value.amount < +amount) {
+      await mintTo(
+        provider.connection,
+        admin,
+        tokenMint,
+        partnerDepositTokenAccount,
+        admin.publicKey,
+        +amount - +sourceBalance_preTx.value.amount + 1000000000
+      );
+    }
+
+    // Pull and create order correctly with tokenMint
+    await program.methods
+      .pullAndCreateOrder(
+        Array.from(partnerId),
+        Array.from(orderId),
+        amount,
+        null
+      )
+      .accounts({
+        config: configPDA,
+        manager: manager.publicKey,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: partnerDepositTokenAccount, // Using tokenMint
+        zynkOpWallet: zynkOpWallet.publicKey,
+        zowTokenAccount: zynkOpTokenAccount, // Using tokenMint
+        beneficiaryTokenAccount: partnerOperationalTokenAccount, // Using tokenMint
+        orderTracker: orderTrackerPDA,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([manager, zynkOpWallet])
+      .rpc();
+
+    // Verify order was created
+    let orderTrackerAccount = await program.account.orderTracker.fetch(orderTrackerPDA);
+    assert.equal(orderTrackerAccount.amountOut.toNumber(), amount.toNumber());
+    assert.equal(orderTrackerAccount.amountIn.toNumber(), amount.toNumber());
+
+    // Ensure partnerDepositTokenAccount2 has sufficient balance
+    const balance2 = await provider.connection.getTokenAccountBalance(
+      partnerDepositTokenAccount2
+    );
+    if (+balance2.value.amount < +amount) {
+      await mintTo(
+        provider.connection,
+        admin,
+        tokenMint2,
+        partnerDepositTokenAccount2,
+        admin.publicKey,
+        +amount - +balance2.value.amount + 1000000000
+      );
+    }
+
+    // Try to close order with mismatched tokens (pdv=tokenMint2, zow=tokenMint) - should fail
+    try {
+      await program.methods
+        .replenish(
+          Array.from(orderId),
+          new anchor.BN(validity),
+          new anchor.BN(0), // No additional amount needed since amount_in already equals amount_out
+          true, // close_order = true
+          null
+        )
+        .accounts({
+          config: configPDA,
+          partnerDepositVault: partnerDepositVaultPDA,
+          pdvTokenAccount: partnerDepositTokenAccount2, // Using tokenMint2
+          zowTokenAccount: zynkOpTokenAccount, // Using tokenMint (different from pdv)
+          orderTracker: orderTrackerPDA,
+          manager: manager.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([manager])
+        .rpc();
+      assert.fail("Expected close order to fail when pdv and zow mint tokens are different");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "InvalidTokenMint",
+        "Expected InvalidTokenMint error when pdv and zow mints differ"
+      );
+    }
+  });
+
+
+  it("Should be able to partially replenish order with different mint token that one order is created with", async () => {
+    const amount = new anchor.BN(100000000000);
+    const replenishAmount = new anchor.BN(50000000000); // Partial replenish
+    const orderId = generateOrderId();
+    const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
+    const now = Math.floor(Date.now() / 1000);
+    const validity = now + 3600;
+
+    // Create order with tokenMint
+    await program.methods
+      .createOrder(
+        Array.from(partnerId),
+        Array.from(orderId),
+        amount,
+        null
+      )
+      .accounts({
+        config: configPDA,
+        manager: manager.publicKey,
+        pdvTokenAccount: partnerDepositTokenAccount,
+        zynkOpWallet: zynkOpWallet.publicKey,
+        zowTokenAccount: zynkOpTokenAccount,
+        beneficiaryTokenAccount: partnerOperationalTokenAccount,
+        orderTracker: orderTrackerPDA,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([manager, zynkOpWallet])
+      .rpc();
+
+    // Verify order was created
+    let orderTrackerAccount = await program.account.orderTracker.fetch(orderTrackerPDA);
+    assert.equal(orderTrackerAccount.amountOut.toNumber(), amount.toNumber());
+    assert.equal(orderTrackerAccount.amountIn.toNumber(), 0);
+
+    // Ensure partnerDepositTokenAccount2 has sufficient balance for replenish
+    const balance2_preTx = await provider.connection.getTokenAccountBalance(
+      partnerDepositTokenAccount2
+    );
+    if (+balance2_preTx.value.amount < +replenishAmount) {
+      await mintTo(
+        provider.connection,
+        admin,
+        tokenMint2,
+        partnerDepositTokenAccount2,
+        admin.publicKey,
+        +replenishAmount - +balance2_preTx.value.amount + 1000000000
+      );
+    }
+
+    const zowBalance2_preTx = await provider.connection.getTokenAccountBalance(
+      zynkOpTokenAccount2
+    );
+
+    // Partially replenish with tokenMint2 (different mint token, but both valid)
+    await program.methods
+      .replenish(
+        Array.from(orderId),
+        new anchor.BN(validity),
+        replenishAmount,
+        false, // close_order = false (partial replenish)
+        null
+      )
+      .accounts({
+        config: configPDA,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: partnerDepositTokenAccount2, // Using tokenMint2
+        zowTokenAccount: zynkOpTokenAccount2, // Using tokenMint2
+        orderTracker: orderTrackerPDA,
+        manager: manager.publicKey,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([manager])
+      .rpc();
+
+    // Verify order tracker is still active
+    const orderTrackerInfo = await provider.connection.getAccountInfo(
+      orderTrackerPDA
+    );
+    assert.isNotNull(
+      orderTrackerInfo,
+      "OrderTracker should still be active after partial replenish"
+    );
+
+    // Verify amount_in increased
+    orderTrackerAccount = await program.account.orderTracker.fetch(orderTrackerPDA);
+    assert.equal(
+      orderTrackerAccount.amountIn.toNumber(),
+      replenishAmount.toNumber(),
+      "amount_in should equal replenish amount"
+    );
+
+    // Verify token transfer occurred
+    const zowBalance2_postTx = await provider.connection.getTokenAccountBalance(
+      zynkOpTokenAccount2
+    );
+    assert.equal(
+      +zowBalance2_postTx.value.amount - +zowBalance2_preTx.value.amount,
+      +replenishAmount,
+      "Tokens should be transferred to zowTokenAccount2"
+    );
+  });
+
+
+  it("Should not be able to partially replenish order with valid mint token but pdv and zow mint tokens are different", async () => {
+    const amount = new anchor.BN(100000000000);
+    const replenishAmount = new anchor.BN(50000000000);
+    const orderId = generateOrderId();
+    const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
+    const now = Math.floor(Date.now() / 1000);
+    const validity = now + 3600;
+
+    // Create order with tokenMint
+    await program.methods
+      .createOrder(
+        Array.from(partnerId),
+        Array.from(orderId),
+        amount,
+        null
+      )
+      .accounts({
+        config: configPDA,
+        manager: manager.publicKey,
+        pdvTokenAccount: partnerDepositTokenAccount,
+        zynkOpWallet: zynkOpWallet.publicKey,
+        zowTokenAccount: zynkOpTokenAccount,
+        beneficiaryTokenAccount: partnerOperationalTokenAccount,
+        orderTracker: orderTrackerPDA,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([manager, zynkOpWallet])
+      .rpc();
+
+    // Verify order was created
+    let orderTrackerAccount = await program.account.orderTracker.fetch(orderTrackerPDA);
+    assert.equal(orderTrackerAccount.amountOut.toNumber(), amount.toNumber());
+    assert.equal(orderTrackerAccount.amountIn.toNumber(), 0);
+
+    // Ensure partnerDepositTokenAccount2 has sufficient balance
+    const balance2 = await provider.connection.getTokenAccountBalance(
+      partnerDepositTokenAccount2
+    );
+    if (+balance2.value.amount < +replenishAmount) {
+      await mintTo(
+        provider.connection,
+        admin,
+        tokenMint2,
+        partnerDepositTokenAccount2,
+        admin.publicKey,
+        +replenishAmount - +balance2.value.amount + 1000000000
+      );
+    }
+
+    // Try to partially replenish with mismatched tokens (pdv=tokenMint2, zow=tokenMint) - should fail
+    try {
+      await program.methods
+        .replenish(
+          Array.from(orderId),
+          new anchor.BN(validity),
+          replenishAmount,
+          false, // close_order = false (partial replenish)
+          null
+        )
+        .accounts({
+          config: configPDA,
+          partnerDepositVault: partnerDepositVaultPDA,
+          pdvTokenAccount: partnerDepositTokenAccount2, // Using tokenMint2
+          zowTokenAccount: zynkOpTokenAccount, // Using tokenMint (different from pdv)
+          orderTracker: orderTrackerPDA,
+          manager: manager.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([manager])
+        .rpc();
+      assert.fail("Expected partial replenish to fail when pdv and zow mint tokens are different");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "InvalidTokenMint",
+        "Expected InvalidTokenMint error when pdv and zow mints differ"
       );
     }
   });
