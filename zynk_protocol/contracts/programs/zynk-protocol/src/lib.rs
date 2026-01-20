@@ -20,16 +20,20 @@ pub struct Config {
     pub manager: Pubkey,
     pub guardian: Pubkey,
     pub zynk_op_wallet: Pubkey,
+    pub whitelisted_token_mints: Vec<Pubkey>,
     pub paused: bool,
 }
 
 impl Config {
-    pub const LEN: usize = 8  + // discriminator
+    pub fn space(n: u32) -> usize {
+        return 8  + // discriminator
         32 + // admin
         32 + // manager
         32 + // guardian
         32 + // zynk_op_wallet
+        4 + (32 * n as usize) + // whitelisted_token_mints
         1;   // paused
+    }
 }
 
 #[account]
@@ -267,6 +271,7 @@ pub mod zynk_protocol {
     pub fn initialize(
         ctx: Context<Initialize>,
         zynk_op_wallet: Pubkey,
+        whitelisted_token_mints: Vec<Pubkey>,
         guardian: Pubkey,
         manager: Pubkey,
     ) -> Result<()> {
@@ -275,7 +280,13 @@ pub mod zynk_protocol {
         config.zynk_op_wallet = zynk_op_wallet;
         config.guardian = guardian;
         config.manager = manager;
+        // for token_mint in whitelisted_token_mints.iter() {
+        //     validate_address(token_mint)?;
+        // }
+        config.whitelisted_token_mints = whitelisted_token_mints;
         config.paused = false;
+
+        
         Ok(())
     }
 
@@ -778,11 +789,12 @@ pub const PARTNER_DEPOSIT_VAULT_SEED: &[u8] = b"partner_deposit_vault";
 pub struct Null {}
 
 #[derive(Accounts)]
+#[instruction(zynk_op_wallet: Pubkey, whitelisted_token_mints: Vec<Pubkey>, guardian: Pubkey, manager: Pubkey)]
 pub struct Initialize<'info> {
     #[account(
         init,
         payer = admin,
-        space = Config::LEN,
+        space = Config::space(whitelisted_token_mints.len() as u32),
         seeds = [CONFIG_SEED],
         bump
     )]
@@ -830,8 +842,9 @@ pub struct CreateOrder<'info> {
     #[account(
         mut,
         constraint = zow_token_account.owner == config.zynk_op_wallet @ CustomError::UnauthorizedSigner,
-        constraint = zow_token_account.mint == beneficiary_token_account.mint @ CustomError::InvalidTokenMint
+        constraint = zow_token_account.mint == beneficiary_token_account.mint @ CustomError::InvalidTokenMint,
         // add constraint here to check whitelisted token mints only
+        constraint = config.whitelisted_token_mints.contains(&zow_token_account.mint) @ CustomError::InvalidTokenMint
     )]
     pub zow_token_account: Box<Account<'info, TokenAccount>>,
     
@@ -893,8 +906,9 @@ pub struct Replenish<'info> {
     // Tokens pulled in to
     #[account(
         mut,
-        constraint = zow_token_account.owner == config.zynk_op_wallet @ CustomError::InvalidTokenMint
+        constraint = zow_token_account.owner == config.zynk_op_wallet @ CustomError::InvalidTokenMint,
         // add constraint here to check whitelisted token mints only
+        constraint = config.whitelisted_token_mints.contains(&zow_token_account.mint) @ CustomError::InvalidTokenMint
     )]
     pub zow_token_account: Box<Account<'info, TokenAccount>>,
 

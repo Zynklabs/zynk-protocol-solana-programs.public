@@ -186,8 +186,9 @@ describe("zynk-protocol", () => {
   });
 
   it("Initializes the protocol", async () => {
+    const whitelistedTokenMints: PublicKey[] = [tokenMint];
     await program.methods
-      .initialize(zynkOpWallet.publicKey, guardian.publicKey, manager.publicKey)
+      .initialize(zynkOpWallet.publicKey,whitelistedTokenMints, guardian.publicKey, manager.publicKey)
       .accounts({
         config: configPDA,
         admin: admin.publicKey,
