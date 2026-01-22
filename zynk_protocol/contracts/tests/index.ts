@@ -2181,7 +2181,7 @@ describe("zynk-protocol", () => {
     }
   });
 
-  it("Should be able to create dangling order created by create order function, pull and create order function or zero amount order created by create_order function", async () => {
+  it("Should be able to create order tracker created by create order function, pull and create order function or zero amount order created by create_order function", async () => {
     const amount = new anchor.BN(50000000000); // 50 tokens
     const zeroAmount = new anchor.BN(0);
 
@@ -2400,10 +2400,10 @@ describe("zynk-protocol", () => {
     // Get admin balance before closing
     const adminBalanceBefore = await provider.connection.getBalance(admin.publicKey);
 
-    // Call closeDanglingOrders with all 6 order tracker PDAs in remaining_accounts
+    // Call closeOrderTrackers with all 6 order tracker PDAs in remaining_accounts
     // Note: accounts must be writable to be closed
     await program.methods
-      .closeDanglingOrders(null)
+      .closeOrderTrackers(null)
       .accounts({
         config: configPDA,
         admin: admin.publicKey,
@@ -2586,9 +2586,9 @@ describe("zynk-protocol", () => {
       .signers([manager, zynkOpWallet])
       .rpc();
 
-    // Close the first order using closeDanglingOrders
+    // Close the first order using closeOrderTrackers
     await program.methods
-      .closeDanglingOrders(null)
+      .closeOrderTrackers(null)
       .accounts({
         config: configPDA,
         admin: admin.publicKey,
@@ -2614,7 +2614,7 @@ describe("zynk-protocol", () => {
     // Try to close both orders (one already closed, one still open) - should fail
     try {
       await program.methods
-        .closeDanglingOrders(null)
+        .closeOrderTrackers(null)
         .accounts({
           config: configPDA,
           admin: admin.publicKey,
@@ -2633,7 +2633,7 @@ describe("zynk-protocol", () => {
         ])
         .signers([admin])
         .rpc();
-      assert.fail("Expected closeDanglingOrders to fail when one order is already closed");
+      assert.fail("Expected closeOrderTrackers to fail when one order is already closed");
     } catch (error) {
       // Should fail because order1TrackerPDA is already closed and can't be deserialized
       // The account doesn't exist anymore, so it might fail at transaction level or when trying to deserialize
@@ -2692,7 +2692,7 @@ describe("zynk-protocol", () => {
     // Try with manager - should fail
     try {
       await program.methods
-        .closeDanglingOrders(null)
+        .closeOrderTrackers(null)
         .accounts({
           config: configPDA,
           admin: manager.publicKey, // Wrong signer
@@ -2706,19 +2706,19 @@ describe("zynk-protocol", () => {
         ])
         .signers([manager])
         .rpc();
-      assert.fail("Expected closeDanglingOrders to fail when manager calls it");
+      assert.fail("Expected closeOrderTrackers to fail when manager calls it");
     } catch (error) {
       assert.include(
         error.message,
         "UnauthorizedAdmin",
-        "Expected UnauthorizedAdmin error when manager calls closeDanglingOrders"
+        "Expected UnauthorizedAdmin error when manager calls closeOrderTrackers"
       );
     }
 
     // Try with guardian - should fail
     try {
       await program.methods
-        .closeDanglingOrders(null)
+        .closeOrderTrackers(null)
         .accounts({
           config: configPDA,
           admin: guardian.publicKey, // Wrong signer
@@ -2732,12 +2732,12 @@ describe("zynk-protocol", () => {
         ])
         .signers([guardian])
         .rpc();
-      assert.fail("Expected closeDanglingOrders to fail when guardian calls it");
+      assert.fail("Expected closeOrderTrackers to fail when guardian calls it");
     } catch (error) {
       assert.include(
         error.message,
         "UnauthorizedAdmin",
-        "Expected UnauthorizedAdmin error when guardian calls closeDanglingOrders"
+        "Expected UnauthorizedAdmin error when guardian calls closeOrderTrackers"
       );
     }
 
@@ -2751,7 +2751,7 @@ describe("zynk-protocol", () => {
 
     try {
       await program.methods
-        .closeDanglingOrders(null)
+        .closeOrderTrackers(null)
         .accounts({
           config: configPDA,
           admin: randomWallet.publicKey, // Wrong signer
@@ -2765,12 +2765,12 @@ describe("zynk-protocol", () => {
         ])
         .signers([randomWallet])
         .rpc();
-      assert.fail("Expected closeDanglingOrders to fail when random wallet calls it");
+      assert.fail("Expected closeOrderTrackers to fail when random wallet calls it");
     } catch (error) {
       assert.include(
         error.message,
         "UnauthorizedAdmin",
-        "Expected UnauthorizedAdmin error when random wallet calls closeDanglingOrders"
+        "Expected UnauthorizedAdmin error when random wallet calls closeOrderTrackers"
       );
     }
   });
@@ -2827,10 +2827,10 @@ describe("zynk-protocol", () => {
       .signers([admin])
       .rpc();
 
-    // Try to close dangling orders while paused - should fail
+    // Try to close order trackers while paused - should fail
     try {
       await program.methods
-        .closeDanglingOrders(null)
+        .closeOrderTrackers(null)
         .accounts({
           config: configPDA,
           admin: admin.publicKey,
@@ -2844,7 +2844,7 @@ describe("zynk-protocol", () => {
         ])
         .signers([admin])
         .rpc();
-      assert.fail("Expected closeDanglingOrders to fail when contract is paused");
+      assert.fail("Expected closeOrderTrackers to fail when contract is paused");
     } catch (error) {
       assert.include(
         error.message,
@@ -2942,7 +2942,7 @@ describe("zynk-protocol", () => {
     // Try to close with config PDA instead of order tracker - should fail
     try {
       await program.methods
-        .closeDanglingOrders(null)
+        .closeOrderTrackers(null)
         .accounts({
           config: configPDA,
           admin: admin.publicKey,
@@ -2956,7 +2956,7 @@ describe("zynk-protocol", () => {
         ])
         .signers([admin])
         .rpc();
-      assert.fail("Expected closeDanglingOrders to fail when config PDA is passed instead of OrderTracker");
+      assert.fail("Expected closeOrderTrackers to fail when config PDA is passed instead of OrderTracker");
     } catch (error) {
       assert.include(
         error.message,
@@ -3011,7 +3011,7 @@ describe("zynk-protocol", () => {
     // Try to close with partner deposit vault PDA instead of order tracker - should fail
     try {
       await program.methods
-        .closeDanglingOrders(null)
+        .closeOrderTrackers(null)
         .accounts({
           config: configPDA,
           admin: admin.publicKey,
@@ -3025,7 +3025,7 @@ describe("zynk-protocol", () => {
         ])
         .signers([admin])
         .rpc();
-      assert.fail("Expected closeDanglingOrders to fail when partner deposit vault PDA is passed instead of OrderTracker");
+      assert.fail("Expected closeOrderTrackers to fail when partner deposit vault PDA is passed instead of OrderTracker");
     } catch (error) {
       // The partner deposit vault is not owned by the program, so it should fail with ConstraintOwner
       // Or if it's owned but wrong discriminator, it should fail with AccountDiscriminatorMismatch

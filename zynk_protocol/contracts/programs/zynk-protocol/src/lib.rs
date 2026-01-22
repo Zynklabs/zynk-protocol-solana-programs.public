@@ -155,7 +155,7 @@ pub struct OrderReplenish {
 
 
 #[event]
-pub struct DanglingOrderClosure {
+pub struct CloseOrderTracker {
     pub order_id: [u8; 32],
     pub amount: u64,
     pub domain_separator: u64,
@@ -582,7 +582,7 @@ pub mod zynk_protocol {
         Ok(())
     }
 
-    pub fn close_dangling_orders(ctx: Context<CloseDanglingOrders>, meta: Option<Vec<EventArg>>) -> Result<()> {
+    pub fn close_order_trackers(ctx: Context<CloseOrderTrackers>, meta: Option<Vec<EventArg>>) -> Result<()> {
 
         // Check if program is paused.
         require!(!ctx.accounts.config.paused, CustomError::ContractPaused);
@@ -610,7 +610,7 @@ pub mod zynk_protocol {
             
             close_account(account_info, admin_account_info)?;
 
-            emit!(DanglingOrderClosure {
+            emit!(CloseOrderTracker {
                 order_id,
                 amount: amount_in,
                 domain_separator: DOMAIN_SEPARATOR,
@@ -969,7 +969,7 @@ pub struct Replenish<'info> {
 
 
 #[derive(Accounts)]
-pub struct CloseDanglingOrders<'info> {
+pub struct CloseOrderTrackers<'info> {
     #[account(
         mut,
         seeds = [CONFIG_SEED],
