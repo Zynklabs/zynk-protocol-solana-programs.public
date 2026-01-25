@@ -2,9 +2,10 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Transfer};
 use anchor_lang::solana_program::{
     pubkey::Pubkey,
-    sysvar::instructions::load_instruction_at_checked,
+    sysvar::instructions::{ ID as SYSVAR_IX_ID, load_instruction_at_checked },
     ed25519_program::ID as ED25519_ID,
-    program_error::ProgramError
+    program_error::ProgramError,
+    hash::hash
 };
 
 declare_id!("EMNqHAmpFnLsQdmoDbcDYJe9fny6Q42ALoNdH1Z5XZ3e");
@@ -148,6 +149,23 @@ pub struct OrderReplenish {
 }
 
 #[event]
+pub struct Attestation {
+    pub order_id: [u8; 32],
+    pub origin_chain: String,
+    pub target_chain: String,
+    pub origin: String,
+    pub proxy: String,
+    pub target: String,
+    pub txn: String,
+    pub proxy_txn: Option<String>,
+    pub asset: String,
+    pub proxy_asset: Option<String>,
+    pub amount: u64,
+    pub domain_separator: u64,
+    pub meta: Option<Vec<EventArg>>
+}
+
+#[event]
 pub struct Action {
     pub action: u8,
     pub timelock: Pubkey,
@@ -170,8 +188,8 @@ pub enum CustomError {
     UnauthorizedManager,
     #[msg("Unauthorized guardian")]
     UnauthorizedGuardian,
-    #[msg("Invalid order ID")]
-    InvalidOrderId,
+    #[msg("Invalid order")]
+    InvalidOrder,
     #[msg("Invalid token mint")]
     InvalidTokenMint,
     #[msg("Validity must be in future")]
@@ -194,7 +212,6 @@ pub enum CustomError {
 /// Verifies an Ed25519 signature using the Solana Ed25519 program via sysvar instructions.
 /// This function checks that the previous instruction was an Ed25519 signature verification
 /// and validates the signer, message, and signature match the expected values.
-#[allow(dead_code)]
 pub fn verify_signature_syscall(
     ix_sysvar_account: &AccountInfo,
     signer_pubkey: &Pubkey,
@@ -290,12 +307,6 @@ pub mod zynk_protocol {
         let pdv_token_account = &ctx.accounts.pdv_token_account;
         let partner_deposit_vault = &ctx.accounts.partner_deposit_vault;
 
-        require_keys_eq!(
-            pdv_token_account.owner,
-            partner_deposit_vault.key(),
-            CustomError::UnauthorizedSigner
-        );
-        
         // Perform token transfer from pdv_token_account to zow_token_account.
         let pull_accounts = Transfer {
             from: pdv_token_account.to_account_info(),
@@ -365,7 +376,7 @@ pub mod zynk_protocol {
         order_id: [u8; 32],
         amount: u64,
         meta: Option<Vec<EventArg>>
-    ) -> Result<()> {        
+    ) -> Result<()> {
         // Check if program is paused.
         let config = &ctx.accounts.config;
         require!(!config.paused, CustomError::ContractPaused);
@@ -475,6 +486,72 @@ pub mod zynk_protocol {
             partner_deposit_vault: ctx.accounts.partner_deposit_vault.key(),
             amount,
             order_closed: close_order,
+            domain_separator: DOMAIN_SEPARATOR,
+            meta
+        });
+
+        Ok(())
+    }
+    
+    pub fn attest_order(
+        ctx: Context<AttestOrder>,
+        order_id: [u8; 32],
+        origin_chain: String,
+        target_chain: String,
+        origin: String,
+        proxy: String,
+        target: String,
+        txn: String,
+        proxy_txn: Option<String>,
+        asset: String,
+        proxy_asset: Option<String>,
+        amount: u64,
+        signature: [u8; 64],
+        meta: Option<Vec<EventArg>>,
+    ) -> Result<()> {
+        let config = &mut ctx.accounts.config;
+        require!(!config.paused, CustomError::ContractPaused);
+
+        let message = format!("{}::{}::{}::{}::{}", DOMAIN_SEPARATOR, origin, proxy, target, txn);
+        verify_signature_syscall(
+            &ctx.accounts.sysvar_instructions,
+            &config.manager,
+            message,
+            signature
+        )?;
+
+        let order_tracker = &mut ctx.accounts.order_tracker;
+
+        let hashed_proxy = hash(proxy.as_bytes()).to_bytes();
+        if order_tracker.order_id != [0u8; 32] {
+            require!(
+                order_tracker.partner_id == hashed_proxy, 
+                CustomError::InvalidOrder);
+
+            require!(
+                order_tracker.amount_in + amount >= order_tracker.amount_out,
+                CustomError::DeficientOrder
+            );
+
+            close_account(order_tracker, &ctx.accounts.manager)?;
+        } else {
+            order_tracker.partner_id = hashed_proxy;
+            order_tracker.order_id = order_id;
+            order_tracker.amount_out = amount;
+        }
+
+        emit!(Attestation {
+            order_id,
+            origin_chain,
+            target_chain,
+            origin,
+            proxy,
+            target,
+            txn,
+            proxy_txn,
+            asset,
+            proxy_asset,
+            amount,
             domain_separator: DOMAIN_SEPARATOR,
             meta
         });
@@ -822,6 +899,36 @@ pub struct Replenish<'info> {
     pub zow_token_account: Box<Account<'info, TokenAccount>>,
 
     pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(order_id: [u8; 32])]
+pub struct AttestOrder<'info> {
+    #[account(
+        mut,
+        seeds = [CONFIG_SEED],
+        bump,
+        has_one = manager @ CustomError::UnauthorizedManager
+    )]
+    pub config: Account<'info, Config>,
+    
+    #[account(mut)]
+    pub manager: Signer<'info>,
+    
+    #[account(
+        init_if_needed,
+        payer = manager,
+        space = OrderTracker::LEN,
+        seeds = [ORDER_TRACKER_SEED, b"attest", order_id.as_ref()],
+        bump
+    )]
+    pub order_tracker: Account<'info, OrderTracker>,
+    
+    /// CHECK: This is the Sysvar Instructions account used for ed25519 signature verification
+    #[account(address = SYSVAR_IX_ID)]
+    pub sysvar_instructions: AccountInfo<'info>,
+    
     pub system_program: Program<'info, System>,
 }
 

@@ -1,6 +1,6 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
-import { PublicKey, Keypair, SystemProgram } from "@solana/web3.js";
+import { PublicKey, Keypair, SystemProgram, Ed25519Program, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,
   createMint,
@@ -12,6 +12,9 @@ import {
 import { ZynkProtocol } from "../target/types/zynk_protocol";
 import { assert, expect } from "chai";
 import { createHash, randomUUID } from "crypto";
+import { TextEncoder } from "util";
+import nacl from 'tweetnacl';
+import { sha256 } from "@noble/hashes/sha2";
 
 const zynkPartnerId = `zp_32142`;
 const generateOrderId = (): Buffer => {
@@ -23,7 +26,21 @@ const generateOrderId = (): Buffer => {
   return Buffer.from(hash.slice(0, 32));
 };
 
+const buildEd25519Ix = (msg: string, signer: Keypair) => {
+  const message = new TextEncoder().encode(msg);
+  const signature = nacl.sign.detached(message, signer.secretKey);
+
+  const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
+    publicKey: signer.publicKey.toBuffer(),
+    message,
+    signature,
+  });
+
+  return { ed25519Ix, signature }
+}
+
 const DOMAIN_SEPARATOR = 1151111081099710
+
 
 enum TimelockAction {
   TransferAdmin,
@@ -85,12 +102,12 @@ describe("zynk-protocol", () => {
   // Helper to derive order tracker PDA
   const deriveOrderTrackerPDA = (
     orderId: Buffer,
-    beneficiaryWallet: PublicKey = partnerOperationalWallet.publicKey,
+    target: PublicKey | string = partnerOperationalWallet.publicKey,
   ): PublicKey=> {
     return PublicKey.findProgramAddressSync(
       [
         Buffer.from("order_tracker"),
-        beneficiaryWallet.toBuffer(),
+        typeof target === "string" ? Buffer.from(target) : target.toBuffer(),
         orderId,
       ],
       program.programId
@@ -319,8 +336,8 @@ describe("zynk-protocol", () => {
     const tempOrderTrackerPDA = deriveOrderTrackerPDA(tempOrderId);
 
     const listener = program.addEventListener("orderCreation", (event, _slot) => {
-      if (event.orderId !== Array.from(tempOrderId)) return;
-
+      if (!Buffer.from(event.orderId).equals(Buffer.from(tempOrderId))) return;
+      
       try {
         assert.equal(event.domainSeparator.toNumber(), DOMAIN_SEPARATOR)
         assert.equal(event.token.toBase58(), tokenMint.toBase58())
@@ -890,7 +907,7 @@ describe("zynk-protocol", () => {
   it("Should fail when deposit vault has insufficient balance", async () => {
     const amount = new anchor.BN(100000000000);
     
-    // Create a new order since previous one is clo
+    // Create a new order since previous one is closed
     const newOrderId = generateOrderId();
     const newOrderTrackerPDA = deriveOrderTrackerPDA(newOrderId);
     
@@ -1476,5 +1493,150 @@ describe("zynk-protocol", () => {
     assert.ok(!timelockAccount.executed, "Timelock should not be in executed state");
     assert.ok(!timelockAccount.ack, "Timelock should not be in ack'ed state");
     assert.ok(!timelockAccount.consensus, "Timelock should not be a consensus request");
+  })
+  
+  const EthereumZynkOpWalletAddress = "0xy82t3g2v3263712863728g3281378232"
+  const EthereumRecipientAddress = "0x12876382t3fg237623r75e121321e21"
+  const EthereumTxnOut = "0xbsyuadgwgd816213f2v2g3v723f2tv327t323f27c1v"
+  const EthereumTxnIn = "0x8723t4gvru3b2yr8327432gb8dy32ieuh38yeb38e382"
+  const BridgeTxnOut = "jidabuibf871yeu3brg3vrg3v3t27vg3vsdfg3"
+  const BridgeTxnIn = "0xjkb32f32d3wh87egy3u2vbrg3v3782dgihbdkjfh9273tg3"
+  const attestOrderId = generateOrderId();
+  const attestOrderTrackerPDA = deriveOrderTrackerPDA(attestOrderId, "attest");
+  const amount = new anchor.BN(100);
+  
+  it("Should attest trans-chain order creation", async () => {
+    const listener = program.addEventListener("attestation", (event, _slot) => {
+      if (!Buffer.from(event.orderId).equals(Buffer.from(attestOrderId))) return;
+
+      try {
+        assert.equal(event.originChain, "Solana")
+        assert.equal(event.targetChain, "Ethereum")
+        assert.equal(event.origin, zynkOpWallet.publicKey.toString())
+        assert.equal(event.proxy, EthereumZynkOpWalletAddress)
+        assert.equal(event.target, EthereumRecipientAddress)
+        assert.equal(event.txn, EthereumTxnOut)
+        assert.equal(event.proxyTxn, BridgeTxnOut)
+        assert.equal(event.asset, "USDC")
+        assert.equal(event.proxyAsset, "USDT")
+        assert.equal(event.amount.toNumber(), amount.toNumber())
+      } catch (err) {
+        throw err;
+      }
+    });
+    
+    const message = `${DOMAIN_SEPARATOR}::${zynkOpWallet.publicKey.toString()}::${EthereumZynkOpWalletAddress}::${EthereumRecipientAddress}::${EthereumTxnOut}`
+    const { ed25519Ix, signature } = buildEd25519Ix(message, manager)
+    
+    // Initialize new order
+    await program.methods
+      .attestOrder(
+        Array.from(attestOrderId),
+        "Solana",
+        "Ethereum",
+        zynkOpWallet.publicKey.toString(),
+        EthereumZynkOpWalletAddress,
+        EthereumRecipientAddress,
+        EthereumTxnOut,
+        BridgeTxnOut,
+        "USDC",
+        "USDT",
+        amount,
+        Buffer.from(signature).toJSON().data,
+        null
+      )
+      .accounts({
+        config: configPDA,
+        manager: manager.publicKey,
+        orderTracker: attestOrderTrackerPDA,
+        systemProgram: SystemProgram.programId,
+        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY,
+      })
+      .preInstructions([ed25519Ix])
+      .signers([manager])
+      .rpc();
+    
+    const orderTrackerAccount = await program.account.orderTracker.fetch(attestOrderTrackerPDA);
+    assert.ok(Buffer.from(orderTrackerAccount.orderId).equals(Buffer.from(attestOrderId)))
+   
+    const orderAmountIn = orderTrackerAccount.amountIn
+    const orderAmountOut = orderTrackerAccount.amountOut
+    assert.equal(orderAmountOut.toNumber(), amount.toNumber());
+    assert.equal(orderAmountIn.toNumber(), 0);
+    
+    assert.equal(orderTrackerAccount.partnerDepositVault.toBase58(), PublicKey.default.toBase58())
+    assert.equal(orderTrackerAccount.beneficiaryWallet.toBase58(), PublicKey.default.toBase58())
+    
+    assert.ok(Buffer.from(orderTrackerAccount.partnerId).equals(sha256(Buffer.from(EthereumZynkOpWalletAddress))))
+    
+    await program.removeEventListener(listener);
+  })
+  
+  it("Should attest trans-chain order closure", async () => {
+    const orderTrackerAccount = await program.account.orderTracker.fetch(attestOrderTrackerPDA);
+    assert.ok(Buffer.from(orderTrackerAccount.orderId).equals(Buffer.from(attestOrderId)))
+    assert.ok(Buffer.from(orderTrackerAccount.partnerId).equals(sha256(Buffer.from(EthereumZynkOpWalletAddress))))
+    
+    const listener = program.addEventListener("attestation", (event, _slot) => {
+      if (!Buffer.from(event.orderId).equals(Buffer.from(attestOrderId))) return;
+
+      try {
+        assert.equal(event.originChain, "Ethereum")
+        assert.equal(event.targetChain, "Solana")
+        assert.equal(event.origin, EthereumRecipientAddress)
+        assert.equal(event.proxy, EthereumZynkOpWalletAddress)
+        assert.equal(event.target, zynkOpWallet.publicKey.toString())
+        assert.equal(event.txn, EthereumTxnIn)
+        assert.equal(event.proxyTxn, BridgeTxnIn)
+        assert.equal(event.asset, "USDT")
+        assert.equal(event.proxyAsset, "USDG")
+        assert.equal(event.amount.toNumber(), amount.toNumber())
+      } catch (err) {
+        throw err;
+      }
+    });
+    
+    const message = `${DOMAIN_SEPARATOR}::${EthereumRecipientAddress}::${EthereumZynkOpWalletAddress}::${zynkOpWallet.publicKey.toString()}::${EthereumTxnIn}`
+    const { ed25519Ix, signature } = buildEd25519Ix(message, manager)
+    
+    // Initialize new order
+    await program.methods
+      .attestOrder(
+        Array.from(attestOrderId),
+        "Ethereum",
+        "Solana",
+        EthereumRecipientAddress,
+        EthereumZynkOpWalletAddress,
+        zynkOpWallet.publicKey.toString(),
+        EthereumTxnIn,
+        BridgeTxnIn,
+        "USDT",
+        "USDG",
+        amount,
+        Buffer.from(signature).toJSON().data,
+        null
+      )
+      .accounts({
+        config: configPDA,
+        manager: manager.publicKey,
+        orderTracker: attestOrderTrackerPDA,
+        systemProgram: SystemProgram.programId,
+        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY,
+      })
+      .preInstructions([ed25519Ix])
+      .signers([manager])
+      .rpc();
+    
+    try {
+      await program.account.request.fetch(attestOrderTrackerPDA);
+    } catch (error) {
+      assert.include(
+        error.message,
+        "Account does not exist",
+        "Expected `Account does not exist` error"
+      )
+    }
+    
+    await program.removeEventListener(listener);
   })
 });
