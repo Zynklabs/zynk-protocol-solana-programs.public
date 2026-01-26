@@ -1,1 +1,5 @@
 test-ledger
+node_modules
+.env*
+*.json
+notes.md

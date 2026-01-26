@@ -265,7 +265,6 @@ describe("zynk-protocol", () => {
     assert.equal(orderAmountOut.toNumber(), amount.toNumber());
   });
 
-
   it("Creates order without transferring tokens, in case of zero amount", async () => {
     const amount = new anchor.BN(0);
     
@@ -1528,7 +1527,6 @@ describe("zynk-protocol", () => {
     const message = `${DOMAIN_SEPARATOR}::${zynkOpWallet.publicKey.toString()}::${EthereumZynkOpWalletAddress}::${EthereumRecipientAddress}::${EthereumTxnOut}`
     const { ed25519Ix, signature } = buildEd25519Ix(message, manager)
     
-    // Initialize new order
     await program.methods
       .attestOrder(
         Array.from(attestOrderId),
@@ -1599,7 +1597,6 @@ describe("zynk-protocol", () => {
     const message = `${DOMAIN_SEPARATOR}::${EthereumRecipientAddress}::${EthereumZynkOpWalletAddress}::${zynkOpWallet.publicKey.toString()}::${EthereumTxnIn}`
     const { ed25519Ix, signature } = buildEd25519Ix(message, manager)
     
-    // Initialize new order
     await program.methods
       .attestOrder(
         Array.from(attestOrderId),

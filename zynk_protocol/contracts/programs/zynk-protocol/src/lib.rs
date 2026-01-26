@@ -925,11 +925,11 @@ pub struct AttestOrder<'info> {
     )]
     pub order_tracker: Account<'info, OrderTracker>,
     
+    pub system_program: Program<'info, System>,
+    
     /// CHECK: This is the Sysvar Instructions account used for ed25519 signature verification
     #[account(address = SYSVAR_IX_ID)]
     pub sysvar_instructions: AccountInfo<'info>,
-    
-    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
