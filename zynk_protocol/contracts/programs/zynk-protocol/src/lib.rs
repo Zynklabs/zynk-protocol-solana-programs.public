@@ -78,7 +78,6 @@ impl Request {
         1;   // consensus
 }
 
-
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ActionStatus {
@@ -132,7 +131,7 @@ pub struct EventArg {
 }
 
 #[event]
-pub struct OrderCreation {
+pub struct OrderCreated {
     pub order_id: [u8; 32],
     pub beneficiary_wallet: Pubkey,
     pub token: Pubkey,
@@ -143,7 +142,7 @@ pub struct OrderCreation {
 }
 
 #[event]
-pub struct OrderReplenish {
+pub struct OrderReplenished {
     pub order_id: [u8; 32],
     pub token: Pubkey,
     pub partner_deposit_vault: Pubkey,
@@ -153,16 +152,15 @@ pub struct OrderReplenish {
     pub meta: Option<Vec<EventArg>>
 }
 
-
 #[event]
-pub struct CloseOrderTracker {
-    pub order_id: [u8; 32],
-    pub amount: u64,
+pub struct OrdersClosed {
+    pub order_ids: Vec<[u8; 32]>,
     pub domain_separator: u64,
     pub meta: Option<Vec<EventArg>>
 }
+
 #[event]
-pub struct Attestation {
+pub struct OrderAttested {
     pub order_id: [u8; 32],
     pub origin_chain: String,
     pub target_chain: String,
@@ -297,7 +295,6 @@ pub mod zynk_protocol {
         }
         config.whitelisted_token_mints = whitelisted_token_mints;
         config.paused = false;
-
         
         Ok(())
     }
@@ -313,7 +310,7 @@ pub mod zynk_protocol {
     /// - Pulls in tokens from the pdv_token_account (owned by partner_deposit_vault) to the zow_token_account.
     /// - Transfers tokens from the zow_token_account (owned by zynk_op_wallet) to the beneficiary_wallet.
     /// - Records the order details in a new OrderTracker PDA derived from beneficiary + order_id.
-    /// - Emits a OrderCreation event.
+    /// - Emits a OrderCreated event.
     ///
     /// Note: order_id must be exactly 32 bytes (hashed off-chain).
     pub fn pull_and_create_order(
@@ -370,7 +367,7 @@ pub mod zynk_protocol {
         order_tracker.beneficiary_wallet = beneficiary_wallet;
         order_tracker.partner_deposit_vault = partner_deposit_vault.key();
 
-        emit!(OrderCreation {
+        emit!(OrderCreated {
             order_id,
             beneficiary_wallet,
             token: pdv_token_account.mint,
@@ -390,7 +387,7 @@ pub mod zynk_protocol {
     /// - Manager signs the transaction.
     /// - If amount is non-zero, transfers tokens from the zow_token_account (owned by zynk_op_wallet) to the beneficiary_wallet.
     /// - Records the order details in a new OrderTracker PDA derived from beneficiary + order_id.
-    /// - Emits a OrderCreation event.
+    /// - Emits a OrderCreated event.
     ///
     /// Note: order_id must be exactly 32 bytes (hashed off-chain).
     pub fn create_order(
@@ -426,7 +423,7 @@ pub mod zynk_protocol {
         order_tracker.beneficiary_wallet = beneficiary_wallet;
         order_tracker.partner_deposit_vault = partner_deposit_vault;
 
-        emit!(OrderCreation {
+        emit!(OrderCreated {
             order_id,
             beneficiary_wallet,
             token: ctx.accounts.zow_token_account.mint,
@@ -503,7 +500,7 @@ pub mod zynk_protocol {
             close_account(order_tracker, &ctx.accounts.manager)?;
         }
         
-        emit!(OrderReplenish {
+        emit!(OrderReplenished {
             order_id,
             token: ctx.accounts.pdv_token_account.mint,
             partner_deposit_vault: ctx.accounts.partner_deposit_vault.key(),
@@ -563,7 +560,7 @@ pub mod zynk_protocol {
             order_tracker.amount_out = amount;
         }
 
-        emit!(Attestation {
+        emit!(OrderAttested {
             order_id,
             origin_chain,
             target_chain,
@@ -582,41 +579,27 @@ pub mod zynk_protocol {
         Ok(())
     }
 
-    pub fn close_order_trackers(ctx: Context<CloseOrderTrackers>, meta: Option<Vec<EventArg>>) -> Result<()> {
-
-        // Check if program is paused.
-        require!(!ctx.accounts.config.paused, CustomError::ContractPaused);
-
+    pub fn close_orders(ctx: Context<CloseOrders>, meta: Option<Vec<EventArg>>) -> Result<()> {
         let config = &mut ctx.accounts.config;
+        require!(!config.paused, CustomError::ContractPaused);
 
-        let remaining_accounts = ctx.remaining_accounts;
-        let admin_account_info = &ctx.accounts.admin.to_account_info();
+        let mut order_ids = Vec::<[u8; 32]>::new();
+        for account_info in ctx.remaining_accounts.iter() {
+            require!(account_info.owner == ctx.program_id, CustomError::InvalidOrder);
 
-        for account_info in remaining_accounts {
-            let order_id: [u8; 32];
-            let amount_in: u64;
+            let order_tracker = OrderTracker::try_deserialize(&mut &account_info.data.borrow()[..])?;
+            let order_id = order_tracker.order_id;
+            if order_ids.contains(&order_id) { continue; }
+            order_ids.push(order_id);
             
-            {
-                let data = account_info.data.borrow();
-                require!(account_info.owner == ctx.program_id, ErrorCode::ConstraintOwner);
-                require!(data.len() == OrderTracker::LEN, ErrorCode::AccountDiscriminatorMismatch);
-                require!(&data[0..8] == OrderTracker::DISCRIMINATOR, ErrorCode::AccountDiscriminatorMismatch);
-                
-                // Deserialize the account data to get OrderTracker fields
-                let order_tracker = OrderTracker::try_deserialize(&mut &data[..])?;
-                order_id = order_tracker.order_id;
-                amount_in = order_tracker.amount_in;
-            } // Borrow dropped here
-            
-            close_account(account_info, admin_account_info)?;
-
-            emit!(CloseOrderTracker {
-                order_id,
-                amount: amount_in,
-                domain_separator: DOMAIN_SEPARATOR,
-                meta: meta.clone()
-            });
+            close_account(account_info, &ctx.accounts.admin)?;
         }
+
+        emit!(OrdersClosed {
+            order_ids,
+            domain_separator: DOMAIN_SEPARATOR,
+            meta
+        });
 
         Ok(())
     }
@@ -893,14 +876,15 @@ pub struct CreateOrder<'info> {
     #[account(
         mut,
         constraint = zow_token_account.owner == config.zynk_op_wallet @ CustomError::UnauthorizedSigner,
-        constraint = zow_token_account.mint == beneficiary_token_account.mint @ CustomError::InvalidTokenMint,
-        // add constraint here to check whitelisted token mints only
         constraint = config.whitelisted_token_mints.contains(&zow_token_account.mint) @ CustomError::InvalidTokenMint
     )]
     pub zow_token_account: Box<Account<'info, TokenAccount>>,
     
     // Tokens sent out to
-    #[account(mut)]
+    #[account(
+        mut,
+        constraint = beneficiary_token_account.mint == zow_token_account.mint @ CustomError::InvalidTokenMint,
+    )]
     pub beneficiary_token_account: Box<Account<'info, TokenAccount>>,
     
     // Order tracker PDA
@@ -958,7 +942,6 @@ pub struct Replenish<'info> {
     #[account(
         mut,
         constraint = zow_token_account.owner == config.zynk_op_wallet @ CustomError::InvalidTokenMint,
-        // add constraint here to check whitelisted token mints only
         constraint = config.whitelisted_token_mints.contains(&zow_token_account.mint) @ CustomError::InvalidTokenMint
     )]
     pub zow_token_account: Box<Account<'info, TokenAccount>>,
@@ -967,9 +950,8 @@ pub struct Replenish<'info> {
     pub system_program: Program<'info, System>,
 }
 
-
 #[derive(Accounts)]
-pub struct CloseOrderTrackers<'info> {
+pub struct CloseOrders<'info> {
     #[account(
         mut,
         seeds = [CONFIG_SEED],
@@ -981,6 +963,7 @@ pub struct CloseOrderTrackers<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
 }
+
 #[derive(Accounts)]
 #[instruction(order_id: [u8; 32])]
 pub struct AttestOrder<'info> {

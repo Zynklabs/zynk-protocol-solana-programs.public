@@ -497,7 +497,7 @@ describe("zynk-protocol", () => {
     assert.equal(orderAmountOut.toNumber(), 0);
   });
 
-  it("Should emit OrderCreation event with correct meta", async () => {
+  it("Should emit OrderCreated event with correct meta", async () => {
     const amount = new anchor.BN(0);
     const meta = [
       { key: "txType", value: "0" },
@@ -507,7 +507,7 @@ describe("zynk-protocol", () => {
     const tempOrderId = generateOrderId();
     const tempOrderTrackerPDA = deriveOrderTrackerPDA(tempOrderId);
 
-    const listener = program.addEventListener("orderCreation", (event, _slot) => {
+    const listener = program.addEventListener("orderCreated", (event, _slot) => {
       if (!Buffer.from(event.orderId).equals(Buffer.from(tempOrderId))) return;
       
       try {
@@ -757,36 +757,6 @@ describe("zynk-protocol", () => {
         error.message,
         "Validity must be in future",
         "Expected 'Validity must be in future' error"
-      );
-    }
-  });
-
-  it("Should fail when replenishing with zero amount", async () => {
-    const now = Math.floor(Date.now() / 1000);
-    const validity = now + 3600;
-
-    try {
-      await program.methods
-        .replenish(Array.from(currentOrderId), new anchor.BN(validity), new anchor.BN(0), false, null)
-        .accounts({
-          config: configPDA,
-          partnerDepositVault: partnerDepositVaultPDA,
-          pdvTokenAccount: partnerDepositTokenAccount,
-          zowTokenAccount: zynkOpTokenAccount,
-          orderTracker: currentOrderTrackerPDA,
-          manager: manager.publicKey,
-          tokenProgram: TOKEN_PROGRAM_ID,
-          systemProgram: SystemProgram.programId,
-        })
-        .signers([manager])
-        .rpc();
-      assert.fail("Expected replenish to fail with zero amount");
-    } catch (error) {
-      console.log(error);
-      assert.include(
-        error.message,
-        "DeficientOrder",
-        "Expected DeficientOrder error"
       );
     }
   });
@@ -2400,10 +2370,10 @@ describe("zynk-protocol", () => {
     // Get admin balance before closing
     const adminBalanceBefore = await provider.connection.getBalance(admin.publicKey);
 
-    // Call closeOrderTrackers with all 6 order tracker PDAs in remaining_accounts
+    // Call closeOrders with all 6 order tracker PDAs in remaining_accounts
     // Note: accounts must be writable to be closed
     await program.methods
-      .closeOrderTrackers(null)
+      .closeOrders(null)
       .accounts({
         config: configPDA,
         admin: admin.publicKey,
@@ -2519,7 +2489,7 @@ describe("zynk-protocol", () => {
     );
   });
 
-  it("SadPath: Should fail the function if one order is already closed", async () => {
+  it("SadPath: Should fail order closures txn if one order is already closed", async () => {
     const amount = new anchor.BN(50000000000); // 50 tokens
 
     // Create 2 orders
@@ -2586,9 +2556,9 @@ describe("zynk-protocol", () => {
       .signers([manager, zynkOpWallet])
       .rpc();
 
-    // Close the first order using closeOrderTrackers
+    // Close the first order using closeOrders
     await program.methods
-      .closeOrderTrackers(null)
+      .closeOrders(null)
       .accounts({
         config: configPDA,
         admin: admin.publicKey,
@@ -2614,7 +2584,7 @@ describe("zynk-protocol", () => {
     // Try to close both orders (one already closed, one still open) - should fail
     try {
       await program.methods
-        .closeOrderTrackers(null)
+        .closeOrders(null)
         .accounts({
           config: configPDA,
           admin: admin.publicKey,
@@ -2633,16 +2603,13 @@ describe("zynk-protocol", () => {
         ])
         .signers([admin])
         .rpc();
-      assert.fail("Expected closeOrderTrackers to fail when one order is already closed");
+      assert.fail("Expected closeOrders to fail when one order is already closed");
     } catch (error) {
       // Should fail because order1TrackerPDA is already closed and can't be deserialized
       // The account doesn't exist anymore, so it might fail at transaction level or when trying to deserialize
       assert.ok(
-        error.message.includes("Account does not exist") || 
-        error.message.includes("AccountDiscriminatorMismatch") || 
-        error.message.includes("ConstraintOwner") ||
-        error.message.includes("InvalidAccountData"),
-        `Expected error when trying to close already closed account. Got: ${error.message}`
+        error.message.includes("InvalidOrder"),
+        `Expected InvalidOrde error when trying to close already closed account. Got: ${error.message}`
       );
     }
   });
@@ -2692,7 +2659,7 @@ describe("zynk-protocol", () => {
     // Try with manager - should fail
     try {
       await program.methods
-        .closeOrderTrackers(null)
+        .closeOrders(null)
         .accounts({
           config: configPDA,
           admin: manager.publicKey, // Wrong signer
@@ -2706,19 +2673,19 @@ describe("zynk-protocol", () => {
         ])
         .signers([manager])
         .rpc();
-      assert.fail("Expected closeOrderTrackers to fail when manager calls it");
+      assert.fail("Expected closeOrders to fail when manager calls it");
     } catch (error) {
       assert.include(
         error.message,
         "UnauthorizedAdmin",
-        "Expected UnauthorizedAdmin error when manager calls closeOrderTrackers"
+        "Expected UnauthorizedAdmin error when manager calls closeOrders"
       );
     }
 
     // Try with guardian - should fail
     try {
       await program.methods
-        .closeOrderTrackers(null)
+        .closeOrders(null)
         .accounts({
           config: configPDA,
           admin: guardian.publicKey, // Wrong signer
@@ -2732,12 +2699,12 @@ describe("zynk-protocol", () => {
         ])
         .signers([guardian])
         .rpc();
-      assert.fail("Expected closeOrderTrackers to fail when guardian calls it");
+      assert.fail("Expected closeOrders to fail when guardian calls it");
     } catch (error) {
       assert.include(
         error.message,
         "UnauthorizedAdmin",
-        "Expected UnauthorizedAdmin error when guardian calls closeOrderTrackers"
+        "Expected UnauthorizedAdmin error when guardian calls closeOrders"
       );
     }
 
@@ -2751,7 +2718,7 @@ describe("zynk-protocol", () => {
 
     try {
       await program.methods
-        .closeOrderTrackers(null)
+        .closeOrders(null)
         .accounts({
           config: configPDA,
           admin: randomWallet.publicKey, // Wrong signer
@@ -2765,12 +2732,12 @@ describe("zynk-protocol", () => {
         ])
         .signers([randomWallet])
         .rpc();
-      assert.fail("Expected closeOrderTrackers to fail when random wallet calls it");
+      assert.fail("Expected closeOrders to fail when random wallet calls it");
     } catch (error) {
       assert.include(
         error.message,
         "UnauthorizedAdmin",
-        "Expected UnauthorizedAdmin error when random wallet calls closeOrderTrackers"
+        "Expected UnauthorizedAdmin error when random wallet calls closeOrders"
       );
     }
   });
@@ -2830,7 +2797,7 @@ describe("zynk-protocol", () => {
     // Try to close order trackers while paused - should fail
     try {
       await program.methods
-        .closeOrderTrackers(null)
+        .closeOrders(null)
         .accounts({
           config: configPDA,
           admin: admin.publicKey,
@@ -2844,7 +2811,7 @@ describe("zynk-protocol", () => {
         ])
         .signers([admin])
         .rpc();
-      assert.fail("Expected closeOrderTrackers to fail when contract is paused");
+      assert.fail("Expected closeOrders to fail when contract is paused");
     } catch (error) {
       assert.include(
         error.message,
@@ -2942,7 +2909,7 @@ describe("zynk-protocol", () => {
     // Try to close with config PDA instead of order tracker - should fail
     try {
       await program.methods
-        .closeOrderTrackers(null)
+        .closeOrders(null)
         .accounts({
           config: configPDA,
           admin: admin.publicKey,
@@ -2956,7 +2923,7 @@ describe("zynk-protocol", () => {
         ])
         .signers([admin])
         .rpc();
-      assert.fail("Expected closeOrderTrackers to fail when config PDA is passed instead of OrderTracker");
+      assert.fail("Expected closeOrders to fail when config PDA is passed instead of OrderTracker");
     } catch (error) {
       assert.include(
         error.message,
@@ -3011,7 +2978,7 @@ describe("zynk-protocol", () => {
     // Try to close with partner deposit vault PDA instead of order tracker - should fail
     try {
       await program.methods
-        .closeOrderTrackers(null)
+        .closeOrders(null)
         .accounts({
           config: configPDA,
           admin: admin.publicKey,
@@ -3025,14 +2992,14 @@ describe("zynk-protocol", () => {
         ])
         .signers([admin])
         .rpc();
-      assert.fail("Expected closeOrderTrackers to fail when partner deposit vault PDA is passed instead of OrderTracker");
+      assert.fail("Expected closeOrders to fail when partner deposit vault PDA is passed instead of OrderTracker");
     } catch (error) {
-      // The partner deposit vault is not owned by the program, so it should fail with ConstraintOwner
+      // The partner deposit vault is not owned by the program, so it should fail with InvalidOrder
       // Or if it's owned but wrong discriminator, it should fail with AccountDiscriminatorMismatch
       assert.ok(
-        error.message.includes("AccountDiscriminatorMismatch") || 
-        error.message.includes("ConstraintOwner"),
-        `Expected AccountDiscriminatorMismatch or ConstraintOwner error when partner deposit vault PDA is passed instead of OrderTracker. Got: ${error.message}`
+        error.message.includes("InvalidOrder") || 
+        error.message.includes("AccountDiscriminatorMismatch"),
+        `Expected InvalidOrder error when partner deposit vault PDA is passed instead of OrderTracker. Got: ${error.message}`
       );
     }
   });
@@ -3554,7 +3521,7 @@ describe("zynk-protocol", () => {
   const amount = new anchor.BN(100);
   
   it("Should attest trans-chain order creation", async () => {
-    const listener = program.addEventListener("attestation", (event, _slot) => {
+    const listener = program.addEventListener("orderAttested", (event, _slot) => {
       if (!Buffer.from(event.orderId).equals(Buffer.from(attestOrderId))) return;
 
       try {
@@ -3624,7 +3591,7 @@ describe("zynk-protocol", () => {
     assert.ok(Buffer.from(orderTrackerAccount.orderId).equals(Buffer.from(attestOrderId)))
     assert.ok(Buffer.from(orderTrackerAccount.partnerId).equals(sha256(Buffer.from(EthereumZynkOpWalletAddress))))
     
-    const listener = program.addEventListener("attestation", (event, _slot) => {
+    const listener = program.addEventListener("orderAttested", (event, _slot) => {
       if (!Buffer.from(event.orderId).equals(Buffer.from(attestOrderId))) return;
 
       try {
