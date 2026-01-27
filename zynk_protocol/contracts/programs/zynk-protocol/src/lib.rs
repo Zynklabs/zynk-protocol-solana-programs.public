@@ -1,5 +1,4 @@
 use anchor_lang::prelude::*;
-use anchor_lang::error::ErrorCode;
 use anchor_spl::token::{self, Token, TokenAccount, Transfer};
 use anchor_lang::solana_program::{
     pubkey::Pubkey,
@@ -137,6 +136,7 @@ pub struct OrderCreated {
     pub token: Pubkey,
     pub partner_deposit_vault: Pubkey,
     pub amount: u64,
+    pub transient: bool,
     pub domain_separator: u64,
     pub meta: Option<Vec<EventArg>>
 }
@@ -318,17 +318,31 @@ pub mod zynk_protocol {
         partner_id: [u8; 32],
         order_id: [u8; 32],
         amount: u64,
+        signature: Option<[u8; 64]>,
         meta: Option<Vec<EventArg>>
     ) -> Result<()> {
         // Check if program is paused.
         let config = &ctx.accounts.config;
         require!(!config.paused, CustomError::ContractPaused);
 
+        let beneficiary_wallet = ctx.accounts.beneficiary_token_account.owner.key();
         let partner_deposit_vault = &ctx.accounts.partner_deposit_vault;
         let pdv_token_account = ctx.accounts.pdv_token_account.as_ref().ok_or(CustomError::InvalidPdvAuthority)?;
 
         require!(pdv_token_account.owner == ctx.accounts.partner_deposit_vault.key(), CustomError::InvalidPdvAuthority);
         require!(pdv_token_account.mint == ctx.accounts.zow_token_account.mint, CustomError::InvalidTokenMint);
+        
+        let mut transient = false;
+        if let Some(signature) = signature {
+            let message = format!("{}::{}::{}", DOMAIN_SEPARATOR, beneficiary_wallet, partner_deposit_vault.key());
+            verify_signature_syscall(
+                ctx.accounts.sysvar_instructions.as_ref().ok_or(ProgramError::MissingRequiredSignature)?,
+                &config.manager,
+                message,
+                signature
+            )?;
+            transient = true;
+        }
 
         // Perform token transfer from pdv_token_account to zow_token_account.
         let pull_accounts = Transfer {
@@ -358,24 +372,26 @@ pub mod zynk_protocol {
         };
         let cpi_ctx = CpiContext::new(ctx.accounts.token_program.to_account_info(), send_accounts);
         token::transfer(cpi_ctx, amount)?;
-
-        let beneficiary_wallet = ctx.accounts.beneficiary_token_account.owner.key();
         
-        // Store order details in the PDA.
         let order_tracker = &mut ctx.accounts.order_tracker;
-        order_tracker.partner_id = partner_id;
-        order_tracker.order_id = order_id;
-        order_tracker.amount_in = amount;
-        order_tracker.amount_out = amount;
-        order_tracker.beneficiary_wallet = beneficiary_wallet;
-        order_tracker.partner_deposit_vault = partner_deposit_vault.key();
-
+        if transient {
+            close_account(order_tracker, &ctx.accounts.manager)?;
+        } else {
+            order_tracker.partner_id = partner_id;
+            order_tracker.order_id = order_id;
+            order_tracker.amount_in = amount;
+            order_tracker.amount_out = amount;
+            order_tracker.beneficiary_wallet = beneficiary_wallet;
+            order_tracker.partner_deposit_vault = partner_deposit_vault.key();
+        }
+        
         emit!(OrderCreated {
             order_id,
             beneficiary_wallet,
             token: pdv_token_account.mint,
             partner_deposit_vault: partner_deposit_vault.key(),
             amount,
+            transient,
             domain_separator: DOMAIN_SEPARATOR,
             meta
         });
@@ -398,11 +414,27 @@ pub mod zynk_protocol {
         partner_id: [u8; 32],
         order_id: [u8; 32],
         amount: u64,
+        signature: Option<[u8; 64]>,
         meta: Option<Vec<EventArg>>
     ) -> Result<()> {
         // Check if program is paused.
         let config = &ctx.accounts.config;
         require!(!config.paused, CustomError::ContractPaused);
+
+        let beneficiary_wallet = ctx.accounts.beneficiary_token_account.owner.key();
+        let partner_deposit_vault = ctx.accounts.partner_deposit_vault.key();
+
+        let mut transient = false;
+        if let Some(signature) = signature {
+            let message = format!("{}::{}::{}", DOMAIN_SEPARATOR, beneficiary_wallet, partner_deposit_vault);
+            verify_signature_syscall(
+                ctx.accounts.sysvar_instructions.as_ref().ok_or(ProgramError::MissingRequiredSignature)?,
+                &config.manager,
+                message,
+                signature
+            )?;
+            transient = true;
+        }
 
         if amount != 0 {
             // Perform token transfer from zow_token_account to beneficiary_token_account.
@@ -415,16 +447,16 @@ pub mod zynk_protocol {
             token::transfer(cpi_ctx, amount)?;
         }
 
-        let partner_deposit_vault = ctx.accounts.partner_deposit_vault.key();
-        let beneficiary_wallet = ctx.accounts.beneficiary_token_account.owner.key();
-
-        // Store order details in the PDA.
         let order_tracker = &mut ctx.accounts.order_tracker;
-        order_tracker.partner_id = partner_id;
-        order_tracker.order_id = order_id;
-        order_tracker.amount_out = amount;
-        order_tracker.beneficiary_wallet = beneficiary_wallet;
-        order_tracker.partner_deposit_vault = partner_deposit_vault;
+        if transient {
+            close_account(order_tracker, &ctx.accounts.manager)?;
+        } else {
+            order_tracker.partner_id = partner_id;
+            order_tracker.order_id = order_id;
+            order_tracker.amount_out = amount;
+            order_tracker.beneficiary_wallet = beneficiary_wallet;
+            order_tracker.partner_deposit_vault = partner_deposit_vault;
+        }
 
         emit!(OrderCreated {
             order_id,
@@ -432,6 +464,7 @@ pub mod zynk_protocol {
             token: ctx.accounts.zow_token_account.mint,
             partner_deposit_vault,
             amount,
+            transient,
             domain_separator: DOMAIN_SEPARATOR,
             meta
         });
@@ -899,6 +932,10 @@ pub struct CreateOrder<'info> {
 
     pub system_program: Program<'info, System>,
     pub token_program: Program<'info, Token>,
+    
+    /// CHECK: This is the Sysvar Instructions account used for ed25519 signature verification
+    #[account(address = SYSVAR_IX_ID)]
+    pub sysvar_instructions: Option<AccountInfo<'info>>,
 }
 
 #[derive(Accounts)]

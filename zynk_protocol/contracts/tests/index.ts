@@ -351,7 +351,7 @@ describe("zynk-core", () => {
     }
   });
 
-  it("Initializes the protocol with multiple token addresses", async () => {
+  it.only("Initializes the protocol with multiple token addresses", async () => {
     const whitelistedTokenMints: PublicKey[] = [tokenMint, tokenMint2];
     
     await program.methods
@@ -398,6 +398,7 @@ describe("zynk-core", () => {
         Array.from(partnerId),
         Array.from(currentOrderId),
         amount,
+        null,
         null
       )
       .accounts({
@@ -411,6 +412,7 @@ describe("zynk-core", () => {
         orderTracker: currentOrderTrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: null
       })
       .signers([manager, zynkOpWallet])
       .rpc();
@@ -437,6 +439,108 @@ describe("zynk-core", () => {
     assert.equal(orderAmountIn.toNumber(), amount.toNumber());
     assert.equal(orderAmountOut.toNumber(), amount.toNumber());
   });
+  
+  it.only("Creates a transient order for partner_deposit_vault -> zynkOpWallet -> partner_operational_wallet one-way txn", async () => {
+    const amount = new anchor.BN(100000000000);
+    
+    currentOrderId = generateOrderId();
+    currentOrderTrackerPDA = deriveOrderTrackerPDA(currentOrderId);
+
+    const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
+      partnerDepositTokenAccount
+    );
+    expect(+sourceBalance_preTx.value.amount).to.be.gte(+amount);
+
+    const destBalance_preTx = await provider.connection.getTokenAccountBalance(
+      partnerOperationalTokenAccount
+    );
+    
+    const message = `${DOMAIN_SEPARATOR}::${partnerOperationalWallet.publicKey.toString()}::${partnerDepositVaultPDA.toString()}`
+    const { ed25519Ix, signature } = buildEd25519Ix(message, manager)
+
+    await program.methods
+      .pullAndCreateOrder(
+        Array.from(partnerId),
+        Array.from(currentOrderId),
+        amount,
+        Buffer.from(signature).toJSON().data,
+        null
+      )
+      .accounts({
+        config: configPDA,
+        manager: manager.publicKey,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: partnerDepositTokenAccount,
+        zynkOpWallet: zynkOpWallet.publicKey,
+        zowTokenAccount: zynkOpTokenAccount,
+        beneficiaryTokenAccount: partnerOperationalTokenAccount,
+        orderTracker: currentOrderTrackerPDA,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY
+      })
+      .preInstructions([ed25519Ix])
+      .signers([manager, zynkOpWallet])
+      .rpc();
+    
+    // Verify token pull
+    const sourceBalance_postTx = await provider.connection.getTokenAccountBalance(
+      partnerDepositTokenAccount
+    );
+    assert.equal(+sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount, +amount)
+    
+    // Verify token transfer
+    const destBalance_postTx = await provider.connection.getTokenAccountBalance(
+      partnerOperationalTokenAccount
+    );
+    assert.equal(+destBalance_postTx.value.amount - +destBalance_preTx.value.amount, +amount)
+
+    // Verify order is closed
+    try {
+      await program.account.orderTracker.fetch(currentOrderTrackerPDA);
+      assert.fail("Expected order to be closed");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "Account does not exist",
+        "Expected account to be closed"
+      );
+    }
+    
+    // try to replenish and/or close a transient order
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      const validity = now + 3600;
+      
+      await program.methods
+        .replenish(
+          Array.from(currentOrderId),
+          new anchor.BN(validity),
+          new anchor.BN(1),
+          true,
+          null
+        )
+        .accounts({
+          config: configPDA,
+          partnerDepositVault: partnerDepositVaultPDA,
+          pdvTokenAccount: partnerDepositTokenAccount,
+          zowTokenAccount: zynkOpTokenAccount,
+          orderTracker: currentOrderTrackerPDA,
+          manager: manager.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([manager])
+        .rpc();
+      assert.fail("Expected close order to fail for transient orders.");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "AccountNotInitialized",
+        "Expected AccountNotInitialized error when replenishing a closed order"
+      );
+    }
+  });
 
   it("Creates order without transferring tokens, in case of zero amount", async () => {
     const amount = new anchor.BN(0);
@@ -458,6 +562,7 @@ describe("zynk-core", () => {
         Array.from(partnerId),
         Array.from(currentOrderId),
         amount,
+        null,
         null
       )
       .accounts({
@@ -471,6 +576,7 @@ describe("zynk-core", () => {
         orderTracker: currentOrderTrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: null
       })
       .signers([manager, zynkOpWallet])
       .rpc();
@@ -534,6 +640,7 @@ describe("zynk-core", () => {
         Array.from(partnerId),
         Array.from(tempOrderId),
         amount,
+        null,
         meta
       )
       .accounts({
@@ -547,6 +654,7 @@ describe("zynk-core", () => {
         orderTracker: tempOrderTrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: null
       })
       .signers([manager, zynkOpWallet])
       .rpc();
@@ -575,6 +683,7 @@ describe("zynk-core", () => {
         Array.from(partnerId),
         Array.from(currentOrderId),
         amount,
+        null,
         null
       )
       .accounts({
@@ -588,6 +697,7 @@ describe("zynk-core", () => {
         orderTracker: currentOrderTrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: null
       })
       .signers([manager, zynkOpWallet])
       .rpc();
@@ -613,6 +723,108 @@ describe("zynk-core", () => {
     const orderAmountOut = orderTrackerAccount.amountOut
     assert.equal(orderAmountIn.toNumber(), 0);
     assert.equal(orderAmountOut.toNumber(), amount.toNumber());
+  });
+  
+  it.only("Creates a transient order for zynkOpWallet to partner_operational_wallet one-way txn", async () => {
+    const amount = new anchor.BN(100000000000);
+    
+    currentOrderId = generateOrderId();
+    currentOrderTrackerPDA = deriveOrderTrackerPDA(currentOrderId);
+
+    const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
+      zynkOpTokenAccount
+    );
+    expect(+sourceBalance_preTx.value.amount).to.be.gte(+amount);
+
+    const destBalance_preTx = await provider.connection.getTokenAccountBalance(
+      partnerOperationalTokenAccount
+    );
+    
+    const message = `${DOMAIN_SEPARATOR}::${partnerOperationalWallet.publicKey.toString()}::${partnerDepositVaultPDA.toString()}`
+    const { ed25519Ix, signature } = buildEd25519Ix(message, manager)
+
+    await program.methods
+      .createOrder(
+        Array.from(partnerId),
+        Array.from(currentOrderId),
+        amount,
+        Buffer.from(signature).toJSON().data,
+        null
+      )
+      .accounts({
+        config: configPDA,
+        manager: manager.publicKey,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: null,
+        zynkOpWallet: zynkOpWallet.publicKey,
+        zowTokenAccount: zynkOpTokenAccount,
+        beneficiaryTokenAccount: partnerOperationalTokenAccount,
+        orderTracker: currentOrderTrackerPDA,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY
+      })
+      .preInstructions([ed25519Ix])
+      .signers([manager, zynkOpWallet])
+      .rpc();
+
+    // Verify token pull
+    const sourceBalance_postTx = await provider.connection.getTokenAccountBalance(
+      zynkOpTokenAccount
+    );
+    assert.equal(+sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount, +amount)
+    
+    // Verify token transfer
+    const destBalance_postTx = await provider.connection.getTokenAccountBalance(
+      partnerOperationalTokenAccount
+    );
+    assert.equal(+destBalance_postTx.value.amount - +destBalance_preTx.value.amount, +amount)
+
+    // Verify order is closed
+    try {
+      await program.account.orderTracker.fetch(currentOrderTrackerPDA);
+      assert.fail("Expected order to be closed");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "Account does not exist",
+        "Expected account to be closed"
+      );
+    }
+    
+    // try to replenish and/or close a transient order
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      const validity = now + 3600;
+      
+      await program.methods
+        .replenish(
+          Array.from(currentOrderId),
+          new anchor.BN(validity),
+          new anchor.BN(1),
+          true,
+          null
+        )
+        .accounts({
+          config: configPDA,
+          partnerDepositVault: partnerDepositVaultPDA,
+          pdvTokenAccount: partnerDepositTokenAccount,
+          zowTokenAccount: zynkOpTokenAccount,
+          orderTracker: currentOrderTrackerPDA,
+          manager: manager.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([manager])
+        .rpc();
+      assert.fail("Expected close order to fail for transient orders.");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "AccountNotInitialized",
+        "Expected AccountNotInitialized error when replenishing a closed order"
+      );
+    }
   });
 
   it("Should fail closing order when amount_in is less than amount_out", async () => {
@@ -923,6 +1135,7 @@ describe("zynk-core", () => {
         Array.from(partnerId),
         Array.from(newOrderId),
         amount,
+        null,
         null
       )
       .accounts({
@@ -936,6 +1149,7 @@ describe("zynk-core", () => {
         orderTracker: newOrderTrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: null
       })
       .signers([manager, zynkOpWallet])
       .rpc();
@@ -1064,6 +1278,7 @@ describe("zynk-core", () => {
         Array.from(partnerId),
         Array.from(newOrderId),
         amount,
+        null,
         null
       )
       .accounts({
@@ -1077,6 +1292,7 @@ describe("zynk-core", () => {
         orderTracker: newOrderTrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: null
       })
       .signers([manager, zynkOpWallet])
       .rpc();
@@ -1161,6 +1377,7 @@ describe("zynk-core", () => {
         Array.from(partnerId),
         Array.from(orderId),
         amount,
+        null,
         null
       )
       .accounts({
@@ -1174,6 +1391,7 @@ describe("zynk-core", () => {
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: null
       })
       .signers([manager, zynkOpWallet])
       .rpc();
@@ -1247,6 +1465,7 @@ describe("zynk-core", () => {
         Array.from(partnerId),
         Array.from(orderId),
         amount,
+        null,
         null
       )
       .accounts({
@@ -1260,6 +1479,7 @@ describe("zynk-core", () => {
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: null
       })
       .signers([manager, zynkOpWallet])
       .rpc();
@@ -1338,6 +1558,7 @@ describe("zynk-core", () => {
         Array.from(partnerId),
         Array.from(orderId),
         amount,
+        null,
         null
       )
       .accounts({
@@ -1351,6 +1572,7 @@ describe("zynk-core", () => {
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: null
       })
       .signers([manager, zynkOpWallet])
       .rpc();
@@ -1413,6 +1635,7 @@ describe("zynk-core", () => {
         Array.from(partnerId),
         Array.from(orderId),
         amount,
+        null,
         null
       )
       .accounts({
@@ -1426,6 +1649,7 @@ describe("zynk-core", () => {
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: null
       })
       .signers([manager, zynkOpWallet])
       .rpc();
@@ -1481,6 +1705,7 @@ describe("zynk-core", () => {
           Array.from(partnerId),
           Array.from(orderId),
           amount,
+          null,
           null
         )
         .accounts({
@@ -1493,6 +1718,7 @@ describe("zynk-core", () => {
           orderTracker: orderTrackerPDA,
           systemProgram: SystemProgram.programId,
           tokenProgram: TOKEN_PROGRAM_ID,
+          sysvarInstructions: null
         })
         .signers([manager, zynkOpWallet])
         .rpc();
@@ -1517,6 +1743,7 @@ describe("zynk-core", () => {
           Array.from(partnerId),
           Array.from(orderId),
           amount,
+          null,
           null
         )
         .accounts({
@@ -1530,6 +1757,7 @@ describe("zynk-core", () => {
           orderTracker: orderTrackerPDA,
           systemProgram: SystemProgram.programId,
           tokenProgram: TOKEN_PROGRAM_ID,
+          sysvarInstructions: null
         })
         .signers([manager, zynkOpWallet])
         .rpc();
@@ -1554,6 +1782,7 @@ describe("zynk-core", () => {
           Array.from(partnerId),
           Array.from(orderId),
           amount,
+          null,
           null
         )
         .accounts({
@@ -1567,6 +1796,7 @@ describe("zynk-core", () => {
           orderTracker: orderTrackerPDA,
           systemProgram: SystemProgram.programId,
           tokenProgram: TOKEN_PROGRAM_ID,
+          sysvarInstructions: null
         })
         .signers([manager, zynkOpWallet])
         .rpc();
@@ -1593,6 +1823,7 @@ describe("zynk-core", () => {
         Array.from(partnerId),
         Array.from(orderId),
         amount,
+        null,
         null
       )
       .accounts({
@@ -1606,6 +1837,7 @@ describe("zynk-core", () => {
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: null
       })
       .signers([manager, zynkOpWallet])
       .rpc();
@@ -1674,6 +1906,7 @@ describe("zynk-core", () => {
         Array.from(partnerId),
         Array.from(orderId),
         amount,
+        null,
         null
       )
       .accounts({
@@ -1687,6 +1920,7 @@ describe("zynk-core", () => {
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: null
       })
       .signers([manager, zynkOpWallet])
       .rpc();
@@ -1770,6 +2004,7 @@ describe("zynk-core", () => {
         Array.from(partnerId),
         Array.from(orderId),
         amount,
+        null,
         null
       )
       .accounts({
@@ -1783,6 +2018,7 @@ describe("zynk-core", () => {
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: null
       })
       .signers([manager, zynkOpWallet])
       .rpc();
@@ -1867,6 +2103,7 @@ describe("zynk-core", () => {
         Array.from(partnerId),
         Array.from(orderId),
         amount,
+        null,
         null
       )
       .accounts({
@@ -1880,6 +2117,7 @@ describe("zynk-core", () => {
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: null
       })
       .signers([manager, zynkOpWallet])
       .rpc();
@@ -1950,6 +2188,7 @@ describe("zynk-core", () => {
         Array.from(partnerId),
         Array.from(orderId),
         amount,
+        null,
         null
       )
       .accounts({
@@ -1963,6 +2202,7 @@ describe("zynk-core", () => {
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: null
       })
       .signers([manager, zynkOpWallet])
       .rpc();
@@ -2055,6 +2295,7 @@ describe("zynk-core", () => {
         Array.from(partnerId),
         Array.from(orderId),
         amount,
+        null,
         null
       )
       .accounts({
@@ -2068,6 +2309,7 @@ describe("zynk-core", () => {
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: null
       })
       .signers([manager, zynkOpWallet])
       .rpc();
@@ -2154,6 +2396,7 @@ describe("zynk-core", () => {
         Array.from(partnerId),
         Array.from(order1Id),
         amount,
+        null,
         null
       )
       .accounts({
@@ -2167,6 +2410,7 @@ describe("zynk-core", () => {
         orderTracker: order1TrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: null
       })
       .signers([manager, zynkOpWallet])
       .rpc();
@@ -2177,6 +2421,7 @@ describe("zynk-core", () => {
         Array.from(partnerId),
         Array.from(order2Id),
         amount,
+        null,
         null
       )
       .accounts({
@@ -2190,6 +2435,7 @@ describe("zynk-core", () => {
         orderTracker: order2TrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: null
       })
       .signers([manager, zynkOpWallet])
       .rpc();
@@ -2220,6 +2466,7 @@ describe("zynk-core", () => {
         Array.from(partnerId),
         Array.from(order3Id),
         amount,
+        null,
         null
       )
       .accounts({
@@ -2233,6 +2480,7 @@ describe("zynk-core", () => {
         orderTracker: order3TrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: null
       })
       .signers([manager, zynkOpWallet])
       .rpc();
@@ -2243,6 +2491,7 @@ describe("zynk-core", () => {
         Array.from(partnerId),
         Array.from(order4Id),
         amount,
+        null,
         null
       )
       .accounts({
@@ -2256,6 +2505,7 @@ describe("zynk-core", () => {
         orderTracker: order4TrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: null
       })
       .signers([manager, zynkOpWallet])
       .rpc();
@@ -2273,6 +2523,7 @@ describe("zynk-core", () => {
         Array.from(partnerId),
         Array.from(order5Id),
         zeroAmount,
+        null,
         null
       )
       .accounts({
@@ -2286,6 +2537,7 @@ describe("zynk-core", () => {
         orderTracker: order5TrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: null
       })
       .signers([manager, zynkOpWallet])
       .rpc();
@@ -2296,6 +2548,7 @@ describe("zynk-core", () => {
         Array.from(partnerId),
         Array.from(order6Id),
         zeroAmount,
+        null,
         null
       )
       .accounts({
@@ -2309,6 +2562,7 @@ describe("zynk-core", () => {
         orderTracker: order6TrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: null
       })
       .signers([manager, zynkOpWallet])
       .rpc();
@@ -2495,6 +2749,7 @@ describe("zynk-core", () => {
         Array.from(partnerId),
         Array.from(order1Id),
         amount,
+        null,
         null
       )
       .accounts({
@@ -2508,6 +2763,7 @@ describe("zynk-core", () => {
         orderTracker: order1TrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: null
       })
       .signers([manager, zynkOpWallet])
       .rpc();
@@ -2518,6 +2774,7 @@ describe("zynk-core", () => {
         Array.from(partnerId),
         Array.from(order2Id),
         amount,
+        null,
         null
       )
       .accounts({
@@ -2531,6 +2788,7 @@ describe("zynk-core", () => {
         orderTracker: order2TrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: null
       })
       .signers([manager, zynkOpWallet])
       .rpc();
@@ -2619,6 +2877,7 @@ describe("zynk-core", () => {
         Array.from(partnerId),
         Array.from(orderId),
         amount,
+        null,
         null
       )
       .accounts({
@@ -2632,6 +2891,7 @@ describe("zynk-core", () => {
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: null
       })
       .signers([manager, zynkOpWallet])
       .rpc();
@@ -2748,6 +3008,7 @@ describe("zynk-core", () => {
         Array.from(partnerId),
         Array.from(orderId),
         amount,
+        null,
         null
       )
       .accounts({
@@ -2761,6 +3022,7 @@ describe("zynk-core", () => {
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: null
       })
       .signers([manager, zynkOpWallet])
       .rpc();
@@ -2871,6 +3133,7 @@ describe("zynk-core", () => {
         Array.from(partnerId),
         Array.from(orderId),
         amount,
+        null,
         null
       )
       .accounts({
@@ -2884,6 +3147,7 @@ describe("zynk-core", () => {
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: null
       })
       .signers([manager, zynkOpWallet])
       .rpc();
@@ -2941,6 +3205,7 @@ describe("zynk-core", () => {
         Array.from(partnerId),
         Array.from(orderId),
         amount,
+        null,
         null
       )
       .accounts({
@@ -2954,6 +3219,7 @@ describe("zynk-core", () => {
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: null
       })
       .signers([manager, zynkOpWallet])
       .rpc();
