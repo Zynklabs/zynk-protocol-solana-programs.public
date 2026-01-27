@@ -351,7 +351,7 @@ describe("zynk-core", () => {
     }
   });
 
-  it.only("Initializes the protocol with multiple token addresses", async () => {
+  it("Initializes the protocol with multiple token addresses", async () => {
     const whitelistedTokenMints: PublicKey[] = [tokenMint, tokenMint2];
     
     await program.methods
@@ -440,11 +440,11 @@ describe("zynk-core", () => {
     assert.equal(orderAmountOut.toNumber(), amount.toNumber());
   });
   
-  it.only("Creates a transient order for partner_deposit_vault -> zynkOpWallet -> partner_operational_wallet one-way txn", async () => {
+  it("Creates a transient order for partner_deposit_vault -> zynkOpWallet -> partner_operational_wallet one-way txn", async () => {
     const amount = new anchor.BN(100000000000);
     
-    currentOrderId = generateOrderId();
-    currentOrderTrackerPDA = deriveOrderTrackerPDA(currentOrderId);
+    const transientOrderId = generateOrderId();
+    const transientOrderTrackerPDA = deriveOrderTrackerPDA(transientOrderId);
 
     const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
       partnerDepositTokenAccount
@@ -461,7 +461,7 @@ describe("zynk-core", () => {
     await program.methods
       .pullAndCreateOrder(
         Array.from(partnerId),
-        Array.from(currentOrderId),
+        Array.from(transientOrderId),
         amount,
         Buffer.from(signature).toJSON().data,
         null
@@ -474,7 +474,7 @@ describe("zynk-core", () => {
         zynkOpWallet: zynkOpWallet.publicKey,
         zowTokenAccount: zynkOpTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
-        orderTracker: currentOrderTrackerPDA,
+        orderTracker: transientOrderTrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
         sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY
@@ -497,7 +497,7 @@ describe("zynk-core", () => {
 
     // Verify order is closed
     try {
-      await program.account.orderTracker.fetch(currentOrderTrackerPDA);
+      await program.account.orderTracker.fetch(transientOrderTrackerPDA);
       assert.fail("Expected order to be closed");
     } catch (error) {
       assert.include(
@@ -514,7 +514,7 @@ describe("zynk-core", () => {
       
       await program.methods
         .replenish(
-          Array.from(currentOrderId),
+          Array.from(transientOrderId),
           new anchor.BN(validity),
           new anchor.BN(1),
           true,
@@ -525,7 +525,7 @@ describe("zynk-core", () => {
           partnerDepositVault: partnerDepositVaultPDA,
           pdvTokenAccount: partnerDepositTokenAccount,
           zowTokenAccount: zynkOpTokenAccount,
-          orderTracker: currentOrderTrackerPDA,
+          orderTracker: transientOrderTrackerPDA,
           manager: manager.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
@@ -725,11 +725,11 @@ describe("zynk-core", () => {
     assert.equal(orderAmountOut.toNumber(), amount.toNumber());
   });
   
-  it.only("Creates a transient order for zynkOpWallet to partner_operational_wallet one-way txn", async () => {
+  it("Creates a transient order for zynkOpWallet to partner_operational_wallet one-way txn", async () => {
     const amount = new anchor.BN(100000000000);
     
-    currentOrderId = generateOrderId();
-    currentOrderTrackerPDA = deriveOrderTrackerPDA(currentOrderId);
+    const transientOrderId = generateOrderId();
+    const transientOrderTrackerPDA = deriveOrderTrackerPDA(transientOrderId);
 
     const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
       zynkOpTokenAccount
@@ -746,7 +746,7 @@ describe("zynk-core", () => {
     await program.methods
       .createOrder(
         Array.from(partnerId),
-        Array.from(currentOrderId),
+        Array.from(transientOrderId),
         amount,
         Buffer.from(signature).toJSON().data,
         null
@@ -759,7 +759,7 @@ describe("zynk-core", () => {
         zynkOpWallet: zynkOpWallet.publicKey,
         zowTokenAccount: zynkOpTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
-        orderTracker: currentOrderTrackerPDA,
+        orderTracker: transientOrderTrackerPDA,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
         sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY
@@ -782,7 +782,7 @@ describe("zynk-core", () => {
 
     // Verify order is closed
     try {
-      await program.account.orderTracker.fetch(currentOrderTrackerPDA);
+      await program.account.orderTracker.fetch(transientOrderTrackerPDA);
       assert.fail("Expected order to be closed");
     } catch (error) {
       assert.include(
@@ -799,7 +799,7 @@ describe("zynk-core", () => {
       
       await program.methods
         .replenish(
-          Array.from(currentOrderId),
+          Array.from(transientOrderId),
           new anchor.BN(validity),
           new anchor.BN(1),
           true,
@@ -810,7 +810,7 @@ describe("zynk-core", () => {
           partnerDepositVault: partnerDepositVaultPDA,
           pdvTokenAccount: partnerDepositTokenAccount,
           zowTokenAccount: zynkOpTokenAccount,
-          orderTracker: currentOrderTrackerPDA,
+          orderTracker: transientOrderTrackerPDA,
           manager: manager.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,

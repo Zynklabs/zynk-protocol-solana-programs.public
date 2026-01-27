@@ -276,7 +276,25 @@ pub fn close_account<'a, 'b>(from: impl ToAccountInfo<'a>, to: impl ToAccountInf
 pub mod zynk_protocol {
     use super::*;
 
-    /// Initialize the protocol with admin, zynk operator wallet, guardian, and manager wallet.
+    /// Initializes the protocol configuration and core authority roles.
+    ///
+    /// # Arguments
+    /// * `ctx` - The [`Initialize`] context containing the config and admin accounts.
+    /// * `zynk_op_wallet` - The operator wallet authorized to move protocol funds.
+    /// * `whitelisted_token_mints` - A non-empty list of SPL token mints allowed by the protocol.
+    /// * `guardian` - The guardian address with emergency and oversight privileges.
+    /// * `manager` - The manager address authorized for operational signatures.
+    ///
+    /// # Behavior
+    /// - Sets the admin to the transaction signer.
+    /// - Validates that at least one token mint is whitelisted.
+    /// - Ensures all provided token mint addresses are valid.
+    /// - Stores protocol authority roles and configuration.
+    /// - Initializes the protocol in an unpaused state.
+    ///
+    /// # Errors
+    /// - `EmptyWhitelistedTokenMints` if no token mints are provided.
+    /// - Any error returned by address validation.
     pub fn initialize(
         ctx: Context<Initialize>,
         zynk_op_wallet: Pubkey,
@@ -300,19 +318,30 @@ pub mod zynk_protocol {
     }
 
 
-    /// Pulls tokens from the partner_deposit_vault into zynk_op_wallet (operator) and then,
-    /// Sends tokens from the zynk_op_wallet (operator) to the beneficiary_wallet.
-    /// Create an order.
-    /// This function:
-    /// - Checks that the protocol isn't paused.
-    /// - Validates beneficiary matches beneficiary_token_account.owner.
-    /// - Manager signs the transaction.
-    /// - Pulls in tokens from the pdv_token_account (owned by partner_deposit_vault) to the zow_token_account.
-    /// - Transfers tokens from the zow_token_account (owned by zynk_op_wallet) to the beneficiary_wallet.
-    /// - Records the order details in a new OrderTracker PDA derived from beneficiary + order_id.
-    /// - Emits a OrderCreated event.
+    /// Pulls tokens from a partner deposit vault, forwards them to a beneficiary,
+    /// and creates a corresponding order.
     ///
-    /// Note: order_id must be exactly 32 bytes (hashed off-chain).
+    /// # Arguments
+    /// * `ctx` - The [`CreateOrder`] context containing all required accounts.
+    /// * `partner_id` - The unique identifier of the partner.
+    /// * `order_id` - The unique identifier of the order (32 bytes, hashed off-chain).
+    /// * `amount` - The amount of tokens to transfer.
+    /// * `signature` - Optional manager signature enabling transient execution.
+    /// * `meta` - Optional metadata emitted with the event.
+    ///
+    /// # Behavior
+    /// - Fails if the protocol is paused.
+    /// - Validates the partner deposit vault token authority and token mint.
+    /// - Optionally verifies a manager signature for transient execution.
+    /// - Transfers tokens from the partner deposit vault to the operator wallet.
+    /// - Transfers tokens from the operator wallet to the beneficiary.
+    /// - Records order details in an `OrderTracker` PDA unless executed transiently.
+    /// - Immediately closes the order tracker for transient orders.
+    /// - Emits an `OrderCreated` event.
+    ///
+    /// # Notes
+    /// - Transient orders do not persist on-chain state.
+    /// - `order_id` must be exactly 32 bytes.
     pub fn pull_and_create_order(
         ctx: Context<CreateOrder>,
         partner_id: [u8; 32],
@@ -399,16 +428,28 @@ pub mod zynk_protocol {
         Ok(())
     }
 
-    /// Creates order and if needed, sends tokens from the zynk_op_wallet (operator) to the beneficiary_wallet.
-    /// This function:
-    /// - Checks that the protocol isn't paused.
-    /// - Validates beneficiary matches beneficiary_token_account.owner.
-    /// - Manager signs the transaction.
-    /// - If amount is non-zero, transfers tokens from the zow_token_account (owned by zynk_op_wallet) to the beneficiary_wallet.
-    /// - Records the order details in a new OrderTracker PDA derived from beneficiary + order_id.
-    /// - Emits a OrderCreated event.
+    /// Creates an order and optionally transfers tokens from the operator
+    /// wallet to the beneficiary.
     ///
-    /// Note: order_id must be exactly 32 bytes (hashed off-chain).
+    /// # Arguments
+    /// * `ctx` - The [`CreateOrder`] context containing all required accounts.
+    /// * `partner_id` - The unique identifier of the partner.
+    /// * `order_id` - The unique identifier of the order (32 bytes, hashed off-chain).
+    /// * `amount` - The amount of tokens to transfer.
+    /// * `signature` - Optional manager signature enabling transient execution.
+    /// * `meta` - Optional metadata emitted with the event.
+    ///
+    /// # Behavior
+    /// - Fails if the protocol is paused.
+    /// - Optionally verifies a manager signature for transient execution.
+    /// - Transfers tokens from the operator wallet to the beneficiary if `amount > 0`.
+    /// - Records order details in an `OrderTracker` PDA unless executed transiently.
+    /// - Immediately closes the order tracker for transient orders.
+    /// - Emits an `OrderCreated` event.
+    ///
+    /// # Notes
+    /// - Transient orders do not persist on-chain state.
+    /// - `order_id` must be exactly 32 bytes.
     pub fn create_order(
         ctx: Context<CreateOrder>,
         partner_id: [u8; 32],
@@ -472,16 +513,23 @@ pub mod zynk_protocol {
         Ok(())
     }
 
-    /// Replenishes tokens by transferring them from the partner_deposit_vault
-    /// to the zynk_op_wallet.
-    /// This function:
-    /// - Checks that the protocol isn't paused.
-    /// - Verifies order via PDA seeds derived from beneficiary + order_id (in account constraints).
-    /// - Checks if validity is in future.
-    /// - Transfers tokens from the pdv_token_account (owned by partner_deposit_vault) to the zow_token_account (owned by zynk_op_wallet).
-    /// - Records amount_in in the dedicated OrderTracker PDA.
-    /// - Emits a Replenish event.
-    /// - Optionally closes the order if close_order flag is true (requires manager authorization and amount_in >= amount_out).
+    /// Replenishes an existing order by transferring tokens into the Zynk operational wallet.
+    ///
+    /// # Arguments
+    /// * `ctx` - The [`Replenish`] context containing all required accounts.
+    /// * `order_id` - The unique identifier of the order being replenished.
+    /// * `validity` - A Unix timestamp that must be in the future to validate the replenishment.
+    /// * `amount` - The amount of tokens to transfer into the order.
+    /// * `close_order` - Whether the order should be closed after replenishment.
+    /// * `meta` - Optional metadata emitted with the event.
+    ///
+    /// # Behavior
+    /// - Fails if the contract is paused.
+    /// - Ensures the provided validity timestamp is in the future.
+    /// - Transfers tokens from the partner deposit vault to the Zynk operational wallet.
+    /// - Updates the tracked input amount for the order.
+    /// - Optionally closes the order if conditions are met.
+    /// - Emits an `OrderReplenished` event.
     pub fn replenish(
         ctx: Context<Replenish>,
         order_id: [u8; 32],
@@ -521,16 +569,13 @@ pub mod zynk_protocol {
     
             order_tracker.amount_in += amount;
         } else {
-            require!(order_tracker.amount_out <= order_tracker.amount_in, CustomError::DeficientOrder);
+            require!(order_tracker.amount_in >= order_tracker.amount_out, CustomError::DeficientOrder);
         }
         
         // If close_order flag is true, perform order closure
         if close_order {
             // Check if order_tracker's amount_in is greater than or equal to the order_tracker's amount_out
-            require!(
-                order_tracker.amount_in >= order_tracker.amount_out,
-                CustomError::DeficientOrder
-            );
+            require!(order_tracker.amount_in >= order_tracker.amount_out, CustomError::DeficientOrder);
 
             // Close the order_tracker account (transfer lamports to manager and clear data)
             close_account(order_tracker, &ctx.accounts.manager)?;
@@ -549,6 +594,29 @@ pub mod zynk_protocol {
         Ok(())
     }
     
+    /// Attests an order using an off-chain signature and records or settles the order state.
+    ///
+    /// # Arguments
+    /// * `ctx` - The [`AttestOrder`] context.
+    /// * `order_id` - The unique identifier of the order.
+    /// * `origin_chain` - The source blockchain identifier.
+    /// * `target_chain` - The destination blockchain identifier.
+    /// * `origin` - The originating address.
+    /// * `proxy` - The proxy address involved in the transfer.
+    /// * `target` - The target address on the destination chain.
+    /// * `txn` - The originating transaction hash.
+    /// * `proxy_txn` - Optional proxy transaction hash.
+    /// * `asset` - The asset identifier.
+    /// * `proxy_asset` - Optional proxy asset identifier.
+    /// * `amount` - The amount attested for the order.
+    /// * `signature` - The ed25519 signature authorizing the attestation.
+    /// * `meta` - Optional metadata emitted with the event.
+    ///
+    /// # Behavior
+    /// - Verifies the manager signature via the sysvar instructions account.
+    /// - Initializes or updates the order tracker.
+    /// - Closes the order if sufficient input has already been provided.
+    /// - Emits an `OrderAttested` event.
     pub fn attest_order(
         ctx: Context<AttestOrder>,
         order_id: [u8; 32],
@@ -615,6 +683,16 @@ pub mod zynk_protocol {
         Ok(())
     }
 
+    /// Closes multiple order tracker accounts in a single instruction.
+    ///
+    /// # Arguments
+    /// * `ctx` - The [`CloseOrders`] context.
+    /// * `meta` - Optional metadata emitted with the event.
+    ///
+    /// # Behavior
+    /// - Fails if the contract is paused.
+    /// - Iterates over remaining accounts and closes each unique order tracker.
+    /// - Emits an `OrdersClosed` event with all closed order IDs.
     pub fn close_orders(ctx: Context<CloseOrders>, meta: Option<Vec<EventArg>>) -> Result<()> {
         let config = &mut ctx.accounts.config;
         require!(!config.paused, CustomError::ContractPaused);
@@ -640,10 +718,23 @@ pub mod zynk_protocol {
         Ok(())
     }
 
+
     ////////////////////////////////////////////////////////////////
     /////////////////// critical functionalities ///////////////////
     ////////////////////////////////////////////////////////////////
 
+
+    /// Requests a timelocked administrative action.
+    ///
+    /// # Arguments
+    /// * `ctx` - The [`TimelockRequest`] context.
+    /// * `action_u8` - The encoded timelock action.
+    /// * `value` - Optional value associated with the action.
+    ///
+    /// # Behavior
+    /// - Computes the ETA based on the action delay.
+    /// - Stores the request in a timelock account.
+    /// - Emits an `Action::Initiated` event.
     pub fn request_timelock(
         ctx: Context<TimelockRequest>,
         action_u8: u8,
@@ -667,6 +758,15 @@ pub mod zynk_protocol {
         Ok(())
     }
 
+    /// Revokes a pending timelock action before it is executed.
+    ///
+    /// # Arguments
+    /// * `ctx` - The [`Execute`] context containing the timelock account.
+    ///
+    /// # Behavior
+    /// - Fails if the timelock action has already been executed.
+    /// - Fails if the action is still under review (not acknowledged).
+    /// - Emits an `Action::Revoked` event.
     pub fn revoke_timelock(ctx: Context<Execute>) -> Result<()> {
         let req = &mut ctx.accounts.timelock;
 
@@ -683,6 +783,15 @@ pub mod zynk_protocol {
         Ok(())
     }
 
+    /// Acknowledges a timelock action, marking it as reviewed.
+    ///
+    /// # Arguments
+    /// * `ctx` - The [`Ack`] context containing the timelock account.
+    ///
+    /// # Behavior
+    /// - Fails if the action has already been executed.
+    /// - Marks the timelock request as acknowledged.
+    /// - Emits an `Action::Acked` event.
     pub fn ack_timelock(ctx: Context<Ack>) -> Result<()> {
         let req = &mut ctx.accounts.timelock;
         require!(!req.executed, CustomError::AlreadyExecuted);
@@ -699,6 +808,17 @@ pub mod zynk_protocol {
         Ok(())
     }
 
+    /// Executes a timelocked wallet or role update after conditions are met.
+    ///
+    /// # Arguments
+    /// * `ctx` - The [`Execute`] context containing the timelock and config accounts.
+    ///
+    /// # Behavior
+    /// - Validates timelock execution conditions based on action type.
+    /// - Requires acknowledgment for guardian updates.
+    /// - Updates the corresponding configuration field.
+    /// - Marks the timelock action as executed.
+    /// - Emits an `Action::Executed` event.
     pub fn execute_wallet_update(ctx: Context<Execute>) -> Result<()> {
         let timestamp = Clock::get()?.unix_timestamp;
         let req = &mut ctx.accounts.timelock;
@@ -743,6 +863,17 @@ pub mod zynk_protocol {
         Ok(())
     }
 
+    /// Executes an unpause action after timelock conditions are satisfied.
+    ///
+    /// # Arguments
+    /// * `ctx` - The [`Execute`] context containing the timelock and config accounts.
+    ///
+    /// # Behavior
+    /// - Ensures the action corresponds to `Unpause`.
+    /// - Requires ETA expiration or prior acknowledgment.
+    /// - Sets the contract paused state to `false`.
+    /// - Marks the timelock action as executed.
+    /// - Emits an `Action::Executed` event.
     pub fn execute_unpause(ctx: Context<Execute>) -> Result<()> {
         let timestamp = Clock::get()?.unix_timestamp;
         let req = &mut ctx.accounts.timelock;
@@ -769,7 +900,20 @@ pub mod zynk_protocol {
         Ok(())
     }
 
-    // Pause functionality
+    /// Immediately pauses the contract.
+    ///
+    /// # Arguments
+    /// * `ctx` - The [`Pause`] context containing the authority and config accounts.
+    ///
+    /// # Authorization
+    /// May be called by the admin, manager, or guardian.
+    ///
+    /// # Behavior
+    /// - Sets the contract paused state to `true`.
+    /// - Fails if the signer is not an authorized role.
+    ///
+    /// # Authorization
+    /// May be called by the admin, manager, or guardian.
     pub fn pause(ctx: Context<Pause>) -> Result<()> {
         let config = &mut ctx.accounts.config;
         let authority = ctx.accounts.authority.key;
@@ -782,6 +926,17 @@ pub mod zynk_protocol {
         Ok(())
     }
 
+    /// Requests a consensus-based administrative action.
+    ///
+    /// # Arguments
+    /// * `ctx` - The [`Consensus`] context containing the timelock account.
+    /// * `action_u8` - The encoded consensus action.
+    /// * `value` - The value associated with the action.
+    ///
+    /// # Behavior
+    /// - Marks the timelock request as consensus-based.
+    /// - Stores the requested action and value.
+    /// - Emits an `Action::Initiated` event.
     pub fn request_consensus(
         ctx: Context<Consensus>,
         action_u8: u8,
@@ -804,6 +959,17 @@ pub mod zynk_protocol {
         Ok(())
     }
 
+    /// Executes a consensus-approved administrative action.
+    ///
+    /// # Arguments
+    /// * `ctx` - The [`Ack`] context containing the timelock and config accounts.
+    ///
+    /// # Behavior
+    /// - Fails if the action has already been executed.
+    /// - Applies the approved configuration update.
+    /// - Marks the timelock as acknowledged and executed.
+    /// - Closes the timelock account.
+    /// - Emits an `Action::Executed` event.
     pub fn execute_consensus(ctx: Context<Ack>) -> Result<()> {
         let req = &mut ctx.accounts.timelock;
         let action: TimelockAction = req.action.try_into()?;
@@ -839,7 +1005,13 @@ pub mod zynk_protocol {
         Ok(())
     }
 
-    /// Logs the DOMAIN_SEPARATOR
+    /// Logs the domain separator used for signature construction.
+    ///
+    /// # Arguments
+    /// * `_ctx` - The [`Null`] context.
+    ///
+    /// # Behavior
+    /// - Emits the domain separator via program logs for off-chain consumers.
     pub fn domain_separator(_ctx: Context<Null>) -> Result<()> {
         msg!("DOMAIN_SEPARATOR: {}", DOMAIN_SEPARATOR);
         Ok(())
