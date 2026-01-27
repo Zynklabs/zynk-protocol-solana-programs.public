@@ -58,7 +58,7 @@ const timelockDelays = {
   [TimelockAction.Unpause]: 6 * 60 * 60,
 }
 
-describe("zynk-protocol", () => {
+describe("zynk-core", () => {
   // Configure the client to use the local cluster
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
@@ -463,7 +463,8 @@ describe("zynk-protocol", () => {
       .accounts({
         config: configPDA,
         manager: manager.publicKey,
-        pdvTokenAccount: partnerDepositTokenAccount,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: null,
         zynkOpWallet: zynkOpWallet.publicKey,
         zowTokenAccount: zynkOpTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
@@ -538,7 +539,8 @@ describe("zynk-protocol", () => {
       .accounts({
         config: configPDA,
         manager: manager.publicKey,
-        pdvTokenAccount: partnerDepositTokenAccount,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: null,
         zynkOpWallet: zynkOpWallet.publicKey,
         zowTokenAccount: zynkOpTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
@@ -578,7 +580,8 @@ describe("zynk-protocol", () => {
       .accounts({
         config: configPDA,
         manager: manager.publicKey,
-        pdvTokenAccount: partnerDepositTokenAccount,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: null,
         zynkOpWallet: zynkOpWallet.publicKey,
         zowTokenAccount: zynkOpTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
@@ -618,29 +621,29 @@ describe("zynk-protocol", () => {
     const validity = now + 3600;
 
     await program.methods
-        .replenish(
-          Array.from(currentOrderId),
-          new anchor.BN(validity),
-          amount,
-          false, // close_order = false (partial replenish)
-          null
-        )
-        .accounts({
-          config: configPDA,
-          partnerDepositVault: partnerDepositVaultPDA,
-          pdvTokenAccount: partnerDepositTokenAccount,
-          zowTokenAccount: zynkOpTokenAccount,
-          orderTracker: currentOrderTrackerPDA,
-          manager: manager.publicKey,
-          tokenProgram: TOKEN_PROGRAM_ID,
-          systemProgram: SystemProgram.programId,
-        })
-        .signers([manager])
-        .rpc();
+      .replenish(
+        Array.from(currentOrderId),
+        new anchor.BN(validity),
+        amount,
+        false, // close_order = false (partial replenish)
+        null
+      )
+      .accounts({
+        config: configPDA,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: partnerDepositTokenAccount,
+        zowTokenAccount: zynkOpTokenAccount,
+        orderTracker: currentOrderTrackerPDA,
+        manager: manager.publicKey,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([manager])
+      .rpc();
 
      // Now try to close with close_order=true, but amount_in (50) < amount_out (100)
      // Use a small positive amount since amount must be > 0, but total will still be < amount_out
-     try {
+    try {
       await program.methods
         .replenish(
           Array.from(currentOrderId),
@@ -925,7 +928,8 @@ describe("zynk-protocol", () => {
       .accounts({
         config: configPDA,
         manager: manager.publicKey,
-        pdvTokenAccount: partnerDepositTokenAccount,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: null,
         zynkOpWallet: zynkOpWallet.publicKey,
         zowTokenAccount: zynkOpTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
@@ -1065,7 +1069,8 @@ describe("zynk-protocol", () => {
       .accounts({
         config: configPDA,
         manager: manager.publicKey,
-        pdvTokenAccount: partnerDepositTokenAccount,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: null,
         zynkOpWallet: zynkOpWallet.publicKey,
         zowTokenAccount: zynkOpTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
@@ -1161,7 +1166,8 @@ describe("zynk-protocol", () => {
       .accounts({
         config: configPDA,
         manager: manager.publicKey,
-        pdvTokenAccount: partnerDepositTokenAccount,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: null,
         zynkOpWallet: zynkOpWallet.publicKey,
         zowTokenAccount: zynkOpTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
@@ -1246,7 +1252,8 @@ describe("zynk-protocol", () => {
       .accounts({
         config: configPDA,
         manager: manager.publicKey,
-        pdvTokenAccount: partnerDepositTokenAccount,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: null,
         zynkOpWallet: zynkOpWallet.publicKey,
         zowTokenAccount: zynkOpTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
@@ -1412,7 +1419,7 @@ describe("zynk-protocol", () => {
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
-        pdvTokenAccount: partnerDepositTokenAccount, // Using tokenMint
+        pdvTokenAccount: partnerDepositTokenAccount,
         zynkOpWallet: zynkOpWallet.publicKey,
         zowTokenAccount: zynkOpTokenAccount, // Using tokenMint
         beneficiaryTokenAccount: partnerOperationalTokenAccount, // Using tokenMint
@@ -1499,42 +1506,6 @@ describe("zynk-protocol", () => {
     }
   });
 
-  it("User should not be able to create order with valid mint token but pdv and zow mint tokens are different (Both valid)", async () => {
-    const amount = new anchor.BN(100000000000);
-    const orderId = generateOrderId();
-    const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
-
-    try {
-      await program.methods
-        .createOrder(
-          Array.from(partnerId),
-          Array.from(orderId),
-          amount,
-          null
-        )
-        .accounts({
-          config: configPDA,
-          manager: manager.publicKey,
-          pdvTokenAccount: partnerDepositTokenAccount, // Using tokenMint
-          zynkOpWallet: zynkOpWallet.publicKey,
-          zowTokenAccount: zynkOpTokenAccount2, // Using tokenMint2 (different from pdv)
-          beneficiaryTokenAccount: partnerOperationalTokenAccount2, // Using tokenMint2
-          orderTracker: orderTrackerPDA,
-          systemProgram: SystemProgram.programId,
-          tokenProgram: TOKEN_PROGRAM_ID,
-        })
-        .signers([manager, zynkOpWallet])
-        .rpc();
-      assert.fail("Expected create order to fail when pdv and zow mint tokens are different");
-    } catch (error) {
-      assert.include(
-        error.message,
-        "InvalidTokenMint",
-        "Expected InvalidTokenMint error when pdv and zow mints differ"
-      );
-    }
-  });
-
   it("User should not be able to pull and create order with invalid mint token", async () => {
     const amount = new anchor.BN(100000000000);
     const orderId = generateOrderId();
@@ -1589,7 +1560,7 @@ describe("zynk-protocol", () => {
           config: configPDA,
           manager: manager.publicKey,
           partnerDepositVault: partnerDepositVaultPDA,
-          pdvTokenAccount: partnerDepositTokenAccount, // Using tokenMint
+          pdvTokenAccount: partnerDepositTokenAccount,
           zynkOpWallet: zynkOpWallet.publicKey,
           zowTokenAccount: zynkOpTokenAccount2, // Using tokenMint2 (different from pdv)
           beneficiaryTokenAccount: partnerOperationalTokenAccount2, // Using tokenMint2
@@ -1627,7 +1598,8 @@ describe("zynk-protocol", () => {
       .accounts({
         config: configPDA,
         manager: manager.publicKey,
-        pdvTokenAccount: partnerDepositTokenAccount,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: null,
         zynkOpWallet: zynkOpWallet.publicKey,
         zowTokenAccount: zynkOpTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
@@ -1707,7 +1679,8 @@ describe("zynk-protocol", () => {
       .accounts({
         config: configPDA,
         manager: manager.publicKey,
-        pdvTokenAccount: partnerDepositTokenAccount, // Using tokenMint
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: null, // Using tokenMint
         zynkOpWallet: zynkOpWallet.publicKey,
         zowTokenAccount: zynkOpTokenAccount, // Using tokenMint
         beneficiaryTokenAccount: partnerOperationalTokenAccount, // Using tokenMint
@@ -1900,7 +1873,7 @@ describe("zynk-protocol", () => {
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
-        pdvTokenAccount: partnerDepositTokenAccount, // Using tokenMint
+        pdvTokenAccount: partnerDepositTokenAccount,
         zynkOpWallet: zynkOpWallet.publicKey,
         zowTokenAccount: zynkOpTokenAccount, // Using tokenMint
         beneficiaryTokenAccount: partnerOperationalTokenAccount, // Using tokenMint
@@ -1963,7 +1936,6 @@ describe("zynk-protocol", () => {
     }
   });
 
-
   it("Should be able to partially replenish order with different mint token that one order is created with", async () => {
     const amount = new anchor.BN(100000000000);
     const replenishAmount = new anchor.BN(50000000000); // Partial replenish
@@ -1983,7 +1955,8 @@ describe("zynk-protocol", () => {
       .accounts({
         config: configPDA,
         manager: manager.publicKey,
-        pdvTokenAccount: partnerDepositTokenAccount,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: null,
         zynkOpWallet: zynkOpWallet.publicKey,
         zowTokenAccount: zynkOpTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
@@ -2068,7 +2041,6 @@ describe("zynk-protocol", () => {
     );
   });
 
-
   it("Should not be able to partially replenish order with valid mint token but pdv and zow mint tokens are different", async () => {
     const amount = new anchor.BN(100000000000);
     const replenishAmount = new anchor.BN(50000000000);
@@ -2088,7 +2060,8 @@ describe("zynk-protocol", () => {
       .accounts({
         config: configPDA,
         manager: manager.publicKey,
-        pdvTokenAccount: partnerDepositTokenAccount,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: null,
         zynkOpWallet: zynkOpWallet.publicKey,
         zowTokenAccount: zynkOpTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
@@ -2186,7 +2159,8 @@ describe("zynk-protocol", () => {
       .accounts({
         config: configPDA,
         manager: manager.publicKey,
-        pdvTokenAccount: partnerDepositTokenAccount,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: null,
         zynkOpWallet: zynkOpWallet.publicKey,
         zowTokenAccount: zynkOpTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
@@ -2208,7 +2182,8 @@ describe("zynk-protocol", () => {
       .accounts({
         config: configPDA,
         manager: manager.publicKey,
-        pdvTokenAccount: partnerDepositTokenAccount,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: null,
         zynkOpWallet: zynkOpWallet.publicKey,
         zowTokenAccount: zynkOpTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
@@ -2303,7 +2278,8 @@ describe("zynk-protocol", () => {
       .accounts({
         config: configPDA,
         manager: manager.publicKey,
-        pdvTokenAccount: partnerDepositTokenAccount,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: null,
         zynkOpWallet: zynkOpWallet.publicKey,
         zowTokenAccount: zynkOpTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
@@ -2325,7 +2301,8 @@ describe("zynk-protocol", () => {
       .accounts({
         config: configPDA,
         manager: manager.publicKey,
-        pdvTokenAccount: partnerDepositTokenAccount,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: null,
         zynkOpWallet: zynkOpWallet.publicKey,
         zowTokenAccount: zynkOpTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
@@ -2523,7 +2500,8 @@ describe("zynk-protocol", () => {
       .accounts({
         config: configPDA,
         manager: manager.publicKey,
-        pdvTokenAccount: partnerDepositTokenAccount,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: null,
         zynkOpWallet: zynkOpWallet.publicKey,
         zowTokenAccount: zynkOpTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
@@ -2545,7 +2523,8 @@ describe("zynk-protocol", () => {
       .accounts({
         config: configPDA,
         manager: manager.publicKey,
-        pdvTokenAccount: partnerDepositTokenAccount,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: null,
         zynkOpWallet: zynkOpWallet.publicKey,
         zowTokenAccount: zynkOpTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
@@ -2645,7 +2624,8 @@ describe("zynk-protocol", () => {
       .accounts({
         config: configPDA,
         manager: manager.publicKey,
-        pdvTokenAccount: partnerDepositTokenAccount,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: null,
         zynkOpWallet: zynkOpWallet.publicKey,
         zowTokenAccount: zynkOpTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
@@ -2773,7 +2753,8 @@ describe("zynk-protocol", () => {
       .accounts({
         config: configPDA,
         manager: manager.publicKey,
-        pdvTokenAccount: partnerDepositTokenAccount,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: null,
         zynkOpWallet: zynkOpWallet.publicKey,
         zowTokenAccount: zynkOpTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
@@ -2895,7 +2876,8 @@ describe("zynk-protocol", () => {
       .accounts({
         config: configPDA,
         manager: manager.publicKey,
-        pdvTokenAccount: partnerDepositTokenAccount,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: null,
         zynkOpWallet: zynkOpWallet.publicKey,
         zowTokenAccount: zynkOpTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
@@ -2964,7 +2946,8 @@ describe("zynk-protocol", () => {
       .accounts({
         config: configPDA,
         manager: manager.publicKey,
-        pdvTokenAccount: partnerDepositTokenAccount,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: null,
         zynkOpWallet: zynkOpWallet.publicKey,
         zowTokenAccount: zynkOpTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
