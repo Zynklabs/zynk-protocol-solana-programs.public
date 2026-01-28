@@ -1,0 +1,28 @@
+[features]
+seeds = false
+skip-lint = false
+
+[programs.localnet]
+zynk_core = "EMNqHAmpFnLsQdmoDbcDYJe9fny6Q42ALoNdH1Z5XZ3e"
+
+[programs.devnet]
+zynk_core = "EMNqHAmpFnLsQdmoDbcDYJe9fny6Q42ALoNdH1Z5XZ3e"
+
+[registry]
+url = "https://api.apr.dev"
+
+[provider]
+cluster = "Localnet"
+# cluster = "devnet"
+wallet = "~/.config/solana/id.json"
+
+[test.validator]
+rpc_port = 8899
+confirm_timeout_ms = 10000
+
+[test]
+startup_wait = 10000
+
+[scripts]
+test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
+client = "yarn run ts-node client/*.ts"
