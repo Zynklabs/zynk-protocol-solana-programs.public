@@ -12,6 +12,44 @@ declare_id!("EMNqHAmpFnLsQdmoDbcDYJe9fny6Q42ALoNdH1Z5XZ3e");
 
 pub const DOMAIN_SEPARATOR: u64 = 1151111081099710;
 
+
+#[error_code]
+pub enum CustomError {
+    #[msg("Unauthorized signer")]
+    UnauthorizedSigner,
+    #[msg("Invalid address: cannot use null address")]
+    InvalidAddress,
+    #[msg("Contract is paused")]
+    ContractPaused,
+    #[msg("Unauthorized admin")]
+    UnauthorizedAdmin,
+    #[msg("Unauthorized manager")]
+    UnauthorizedManager,
+    #[msg("Unauthorized guardian")]
+    UnauthorizedGuardian,
+    #[msg("Invalid order")]
+    InvalidOrder,
+    #[msg("Invalid token mint")]
+    InvalidTokenMint,
+    #[msg("Validity must be in future")]
+    ValidityMustBeFuture,
+    #[msg("Deployed amount must be replenished")]
+    DeficientOrder,
+    #[msg("Invalid message in Ed25519 instruction")]
+    InvalidEd25519Message,
+    #[msg("Action under review")]
+    ActionUnderReview,
+    #[msg("Action already executed")]
+    AlreadyExecuted,
+    #[msg("Invalid action")]
+    InvalidAction,
+    #[msg("Invalid partner deposit vault authority")]
+    InvalidPdvAuthority,
+    #[msg("Whitelisted token mints must be non-empty")]
+    EmptyWhitelistedTokenMints
+}
+
+
 /// Stores the admin, zynk_op_wallet, the guardian, the manager,
 /// along with the global paused flag.
 #[account]
@@ -55,7 +93,6 @@ impl OrderTracker {
         32 + // beneficiary_wallet
         32;  // partner_deposit_vault
 }
-
 
 #[account]
 pub struct Request {
@@ -129,6 +166,15 @@ pub struct EventArg {
     pub value: String,
 }
 
+
+#[event]
+pub struct Action {
+    pub action: u8,
+    pub timelock: Pubkey,
+    pub status: ActionStatus,
+    pub timestamp: i64,
+}
+
 #[event]
 pub struct OrderCreated {
     pub order_id: [u8; 32],
@@ -174,51 +220,6 @@ pub struct OrderAttested {
     pub amount: u64,
     pub domain_separator: u64,
     pub meta: Option<Vec<EventArg>>
-}
-
-#[event]
-pub struct Action {
-    pub action: u8,
-    pub timelock: Pubkey,
-    pub status: ActionStatus,
-    pub timestamp: i64,
-}
-
-
-#[error_code]
-pub enum CustomError {
-    #[msg("Unauthorized signer")]
-    UnauthorizedSigner,
-    #[msg("Invalid address: cannot use null address")]
-    InvalidAddress,
-    #[msg("Contract is paused")]
-    ContractPaused,
-    #[msg("Unauthorized admin")]
-    UnauthorizedAdmin,
-    #[msg("Unauthorized manager")]
-    UnauthorizedManager,
-    #[msg("Unauthorized guardian")]
-    UnauthorizedGuardian,
-    #[msg("Invalid order")]
-    InvalidOrder,
-    #[msg("Invalid token mint")]
-    InvalidTokenMint,
-    #[msg("Validity must be in future")]
-    ValidityMustBeFuture,
-    #[msg("Deployed amount must be replenished")]
-    DeficientOrder,
-    #[msg("Invalid message in Ed25519 instruction")]
-    InvalidEd25519Message,
-    #[msg("Action under review")]
-    ActionUnderReview,
-    #[msg("Action already executed")]
-    AlreadyExecuted,
-    #[msg("Invalid action")]
-    InvalidAction,
-    #[msg("Invalid partner deposit vault authority")]
-    InvalidPdvAuthority,
-    #[msg("Whitelisted token mints must be non-empty")]
-    EmptyWhitelistedTokenMints
 }
 
 
