@@ -281,10 +281,10 @@ pub mod zynk_core {
     /// # Arguments
     /// * `ctx` - The [`Initialize`] context containing the config and admin accounts.
     /// * `zynk_op_wallet` - The operator wallet authorized to move protocol funds.
-    /// * `whitelisted_token_mints` - A non-empty list of SPL token mints allowed by the program.
-    /// * `guardian` - The guardian address with emergency and oversight privileges.
     /// * `manager` - The manager address authorized for operational signatures.
-    ///
+    /// * `guardian` - The guardian address with emergency and oversight privileges.
+    /// * `whitelisted_token_mints` - A non-empty list of SPL token mints allowed by the program.
+    /// 
     /// # Behavior
     /// - Sets the admin to the transaction signer.
     /// - Validates that at least one token mint is whitelisted.
@@ -298,9 +298,9 @@ pub mod zynk_core {
     pub fn initialize(
         ctx: Context<Initialize>,
         zynk_op_wallet: Pubkey,
-        whitelisted_token_mints: Vec<Pubkey>,
-        guardian: Pubkey,
         manager: Pubkey,
+        guardian: Pubkey,
+        whitelisted_token_mints: Vec<Pubkey>
     ) -> Result<()> {
         let config = &mut ctx.accounts.config;
         config.admin = ctx.accounts.admin.key();
@@ -1031,7 +1031,7 @@ pub const PARTNER_DEPOSIT_VAULT_SEED: &[u8] = b"partner_deposit_vault";
 pub struct Null {}
 
 #[derive(Accounts)]
-#[instruction(zynk_op_wallet: Pubkey, whitelisted_token_mints: Vec<Pubkey>, guardian: Pubkey, manager: Pubkey)]
+#[instruction(zynk_op_wallet: Pubkey, manager: Pubkey, guardian: Pubkey, whitelisted_token_mints: Vec<Pubkey>)]
 pub struct Initialize<'info> {
     #[account(
         init,

@@ -308,7 +308,7 @@ describe("zynk-core", () => {
     
     try {
       await program.methods
-        .initialize(zynkOpWallet.publicKey, whitelistedTokenMints, guardian.publicKey, manager.publicKey)
+        .initialize(zynkOpWallet.publicKey, manager.publicKey, guardian.publicKey, whitelistedTokenMints)
         .accounts({
           config: configPDA,
           admin: admin.publicKey,
@@ -333,7 +333,7 @@ describe("zynk-core", () => {
     
     try {
       await program.methods
-        .initialize(zynkOpWallet.publicKey, whitelistedTokenMints, guardian.publicKey, manager.publicKey)
+        .initialize(zynkOpWallet.publicKey, manager.publicKey, guardian.publicKey, whitelistedTokenMints)
         .accounts({
           config: configPDA,
           admin: admin.publicKey,
@@ -355,7 +355,7 @@ describe("zynk-core", () => {
     const whitelistedTokenMints: PublicKey[] = [tokenMint, tokenMint2];
     
     await program.methods
-      .initialize(zynkOpWallet.publicKey, whitelistedTokenMints, guardian.publicKey, manager.publicKey)
+      .initialize(zynkOpWallet.publicKey, manager.publicKey, guardian.publicKey, whitelistedTokenMints)
       .accounts({
         config: configPDA,
         admin: admin.publicKey,
