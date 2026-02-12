@@ -351,6 +351,28 @@ describe("zynk-core", () => {
     }
   });
 
+  it("Should fail to initialize with duplicate token mints in vector", async () => {
+    const whitelistedTokenMints: PublicKey[] = [tokenMint, tokenMint];
+    try {
+      await program.methods
+        .initialize(zynkOpWallet.publicKey, manager.publicKey, guardian.publicKey, whitelistedTokenMints)
+        .accounts({
+          config: configPDA,
+          admin: admin.publicKey,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([admin])
+        .rpc();
+      assert.fail("Expected initialize to fail with duplicate token mints");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "DuplicateWhitelistedTokenMint",
+        "Expected DuplicateWhitelistedTokenMint error"
+      );
+    }
+  });
+
   it("Initializes the protocol with multiple token addresses", async () => {
     const whitelistedTokenMints: PublicKey[] = [tokenMint, tokenMint2];
     

@@ -46,7 +46,9 @@ pub enum CustomError {
     #[msg("Invalid partner deposit vault authority")]
     InvalidPdvAuthority,
     #[msg("Whitelisted token mints must be non-empty")]
-    EmptyWhitelistedTokenMints
+    EmptyWhitelistedTokenMints,
+    #[msg("Whitelisted token mints must be unique")]
+    DuplicateWhitelistedTokenMint
 }
 
 
@@ -260,6 +262,18 @@ pub fn validate_address(address: &Pubkey) -> Result<()> {
     Ok(())
 }
 
+/// Helper to validate there are no duplicate mints.
+pub fn validate_unique_token_mints(token_mints: &[Pubkey]) -> Result<()> {
+    let mut sorted = token_mints.to_vec();
+    sorted.sort_unstable();
+
+    for pair in sorted.windows(2) {
+        require!(pair[0] != pair[1], CustomError::DuplicateWhitelistedTokenMint);
+    }
+
+    Ok(())
+}
+
 /// Closes an account and transfers lamports to the given destination.
 /// Also zeroes out the account data to prevent reuse.
 pub fn close_account<'a, 'b>(from: impl ToAccountInfo<'a>, to: impl ToAccountInfo<'b>) -> Result<()> {
@@ -295,6 +309,7 @@ pub mod zynk_core {
     ///
     /// # Errors
     /// - `EmptyWhitelistedTokenMints` if no token mints are provided.
+    /// - `DuplicateWhitelistedTokenMint` if duplicate token mints are provided.
     /// - Any error returned by address validation.
     pub fn initialize(
         ctx: Context<Initialize>,
@@ -312,6 +327,7 @@ pub mod zynk_core {
         for token_mint in whitelisted_token_mints.iter() {
             validate_address(token_mint)?;
         }
+        validate_unique_token_mints(&whitelisted_token_mints)?;
         config.whitelisted_token_mints = whitelisted_token_mints;
         config.paused = false;
         
