@@ -1,22 +1,14 @@
 use anchor_lang::prelude::*;
-use anchor_spl::{ 
-    token::{ 
-        self, 
-        Token, 
-        Transfer 
-    }, 
-    token_interface::{
-        self,
-        Mint,
-        TokenAccount,
-        TokenInterface,
-        TransferChecked,
-    }
+use anchor_spl::token_interface::{
+    self,
+    Mint,
+    TokenAccount,
+    TokenInterface,
+    TransferChecked,
 };
 use anchor_lang::solana_program::{
     pubkey::Pubkey,
     sysvar::instructions::{ ID as SYSVAR_IX_ID, load_instruction_at_checked },
-    system_program::ID as SYSTEM_PROGRAM_ID,
     ed25519_program::ID as ED25519_ID,
     program_error::ProgramError,
     hash::hash,
