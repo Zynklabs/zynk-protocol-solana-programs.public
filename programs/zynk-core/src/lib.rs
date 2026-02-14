@@ -1,5 +1,18 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Token, TokenAccount, Transfer};
+use anchor_spl::{ 
+    token::{ 
+        self, 
+        Token, 
+        Transfer 
+    }, 
+    token_interface::{
+        self,
+        Mint,
+        TokenAccount,
+        TokenInterface,
+        TransferChecked,
+    }
+};
 use anchor_lang::solana_program::{
     pubkey::Pubkey,
     sysvar::instructions::{ ID as SYSVAR_IX_ID, load_instruction_at_checked },
@@ -392,9 +405,10 @@ pub mod zynk_core {
         }
 
         // Perform token transfer from pdv_token_account to zow_token_account.
-        let pull_accounts = Transfer {
+        let pull_accounts = TransferChecked {
             from: pdv_token_account.to_account_info(),
             to: ctx.accounts.zow_token_account.to_account_info(),
+            mint: ctx.accounts.mint.to_account_info(),
             authority: partner_deposit_vault.to_account_info(),
         };
 
@@ -409,16 +423,17 @@ pub mod zynk_core {
             pull_accounts,
             signer_seeds,
         );
-        token::transfer(cpi_ctx, amount)?;
+        token_interface::transfer_checked(cpi_ctx, amount, ctx.accounts.mint.decimals)?;
 
         // Perform token transfer from zow_token_account to beneficiary_token_account.
-        let send_accounts = Transfer {
+        let send_accounts = TransferChecked {
             from: ctx.accounts.zow_token_account.to_account_info(),
             to: ctx.accounts.beneficiary_token_account.to_account_info(),
+            mint: ctx.accounts.mint.to_account_info(),
             authority: ctx.accounts.zynk_op_wallet.to_account_info(),
         };
         let cpi_ctx = CpiContext::new(ctx.accounts.token_program.to_account_info(), send_accounts);
-        token::transfer(cpi_ctx, amount)?;
+        token_interface::transfer_checked(cpi_ctx, amount, ctx.accounts.mint.decimals)?;
         
         let order_tracker = &mut ctx.accounts.order_tracker;
         if transient {
@@ -497,13 +512,14 @@ pub mod zynk_core {
 
         if amount != 0 {
             // Perform token transfer from zow_token_account to beneficiary_token_account.
-            let cpi_accounts = Transfer {
+            let cpi_accounts = TransferChecked {
                 from: ctx.accounts.zow_token_account.to_account_info(),
                 to: ctx.accounts.beneficiary_token_account.to_account_info(),
+                mint: ctx.accounts.mint.to_account_info(),
                 authority: ctx.accounts.zynk_op_wallet.to_account_info(),
             };
             let cpi_ctx = CpiContext::new(ctx.accounts.token_program.to_account_info(), cpi_accounts);
-            token::transfer(cpi_ctx, amount)?;
+            token_interface::transfer_checked(cpi_ctx, amount, ctx.accounts.mint.decimals)?;
         }
 
         let order_tracker = &mut ctx.accounts.order_tracker;
@@ -567,9 +583,10 @@ pub mod zynk_core {
             
         if amount > 0 {
             // Perform token transfer from pdv_token_account to zow_token_account.
-            let cpi_accounts = Transfer {
+            let cpi_accounts = TransferChecked {
                 from: ctx.accounts.pdv_token_account.to_account_info(),
                 to: ctx.accounts.zow_token_account.to_account_info(),
+                mint: ctx.accounts.mint.to_account_info(),
                 authority: ctx.accounts.partner_deposit_vault.to_account_info(),
             };
             let seeds = &[
@@ -583,8 +600,8 @@ pub mod zynk_core {
                 cpi_accounts,
                 signer_seeds,
             );
-            token::transfer(cpi_ctx, amount)?;
-    
+            token_interface::transfer_checked(cpi_ctx, amount, ctx.accounts.mint.decimals)?;
+            
             order_tracker.amount_in = order_tracker.amount_in
                 .checked_add(amount)
                 .ok_or(ProgramError::ArithmeticOverflow)?;
@@ -1090,27 +1107,27 @@ pub struct CreateOrder<'info> {
     pub partner_deposit_vault: UncheckedAccount<'info>,
     // optional - used only for pull_and_create_order
     #[account(mut)]
-    pub pdv_token_account: Option<Box<Account<'info, TokenAccount>>>,
+    pub pdv_token_account: Option<InterfaceAccount<'info, TokenAccount>>,
 
     // Admin-controlled signer to transfer tokens
     #[account(
         mut,
-        constraint = zynk_op_wallet.key() == config.zynk_op_wallet @ CustomError::UnauthorizedSigner
+        constraint = zynk_op_wallet.key() == config.zynk_op_wallet @ CustomError::UnauthorizedSigner,
+        constraint = zow_token_account.mint == mint.key() @ CustomError::InvalidTokenMint
     )]
     pub zynk_op_wallet: Signer<'info>,
     #[account(
         mut,
         constraint = zow_token_account.owner == config.zynk_op_wallet @ CustomError::UnauthorizedSigner,
-        constraint = config.whitelisted_token_mints.contains(&zow_token_account.mint) @ CustomError::InvalidTokenMint
     )]
-    pub zow_token_account: Box<Account<'info, TokenAccount>>,
+    pub zow_token_account: InterfaceAccount<'info, TokenAccount>,
     
     // Tokens sent out to
     #[account(
         mut,
         constraint = beneficiary_token_account.mint == zow_token_account.mint @ CustomError::InvalidTokenMint,
     )]
-    pub beneficiary_token_account: Box<Account<'info, TokenAccount>>,
+    pub beneficiary_token_account: InterfaceAccount<'info, TokenAccount>,
     
     // Order tracker PDA
     #[account(
@@ -1122,8 +1139,12 @@ pub struct CreateOrder<'info> {
     )]
     pub order_tracker: Account<'info, OrderTracker>,
 
+    #[account(
+        constraint = config.whitelisted_token_mints.contains(&mint.key()) @ CustomError::InvalidTokenMint,
+    )]
+    pub mint: InterfaceAccount<'info, Mint>,
+    pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
-    pub token_program: Program<'info, Token>,
     
     /// CHECK: This is the Sysvar Instructions account used for ed25519 signature verification
     #[account(address = SYSVAR_IX_ID)]
@@ -1165,17 +1186,21 @@ pub struct Replenish<'info> {
         constraint = pdv_token_account.owner == partner_deposit_vault.key() @ CustomError::InvalidPdvAuthority,
         constraint = pdv_token_account.mint == zow_token_account.mint @ CustomError::InvalidTokenMint
     )]
-    pub pdv_token_account: Box<Account<'info, TokenAccount>>,
+    pub pdv_token_account: InterfaceAccount<'info, TokenAccount>,
 
     // Tokens pulled in to
     #[account(
         mut,
         constraint = zow_token_account.owner == config.zynk_op_wallet @ CustomError::InvalidTokenMint,
-        constraint = config.whitelisted_token_mints.contains(&zow_token_account.mint) @ CustomError::InvalidTokenMint
+        constraint = zow_token_account.mint == mint.key() @ CustomError::InvalidTokenMint
     )]
-    pub zow_token_account: Box<Account<'info, TokenAccount>>,
+    pub zow_token_account: InterfaceAccount<'info, TokenAccount>,
 
-    pub token_program: Program<'info, Token>,
+    #[account(
+        constraint = config.whitelisted_token_mints.contains(&mint.key()) @ CustomError::InvalidTokenMint,
+    )]
+    pub mint: InterfaceAccount<'info, Mint>,
+    pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
 }
 

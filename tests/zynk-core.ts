@@ -3,6 +3,7 @@ import { Program } from "@coral-xyz/anchor";
 import { PublicKey, Keypair, SystemProgram, Ed25519Program, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
   createMint,
   createAccount,
   mintTo,
@@ -43,12 +44,12 @@ const DOMAIN_SEPARATOR = 1151111081099710
 const MAX_U64 = "18446744073709551615";
 
 
-enum TimelockAction {
-  TransferAdmin,
-  UpdateManager,
-  UpdateGuardian,
-  UpdateZynkOpWallet,
-  Unpause
+const TimelockAction = {
+  TransferAdmin: 0,
+  UpdateManager: 1,
+  UpdateGuardian: 2,
+  UpdateZynkOpWallet: 3,
+  Unpause: 4
 }
 
 const timelockDelays = {
@@ -168,7 +169,10 @@ describe("zynk-core", () => {
       admin,
       admin.publicKey,
       null,
-      9
+      9,
+      undefined,
+      undefined,
+      TOKEN_2022_PROGRAM_ID
     );
 
     // Create invalid token mint (not in whitelist)
@@ -237,14 +241,20 @@ describe("zynk-core", () => {
       provider.connection,
       zynkOpWallet,
       tokenMint3,
-      zynkOpWallet.publicKey
+      zynkOpWallet.publicKey,
+      undefined,
+      undefined,
+      TOKEN_2022_PROGRAM_ID
     );
 
     partnerOperationalTokenAccount3 = await createAccount(
       provider.connection,
       partnerOperationalWallet,
       tokenMint3,
-      partnerOperationalWallet.publicKey
+      partnerOperationalWallet.publicKey,
+      undefined,
+      undefined,
+      TOKEN_2022_PROGRAM_ID
     );
     
     partnerDepositTokenAccount3 = await createAssociatedTokenAccount(
@@ -253,7 +263,7 @@ describe("zynk-core", () => {
       tokenMint3,
       partnerDepositVaultPDA,
       { commitment: "confirmed" },
-      TOKEN_PROGRAM_ID,
+      TOKEN_2022_PROGRAM_ID,
       ASSOCIATED_TOKEN_PROGRAM_ID,
       true // allowOwnerOffCurve
     )
@@ -303,33 +313,39 @@ describe("zynk-core", () => {
       10000000000000 // Initial supply for partner deposit
     );
 
-    // Mint tokens to zynkOpWallet and partnerDepositVault (tokenMint2)
-    await mintTo(
-      provider.connection,
-      admin,
-      tokenMint2,
-      zynkOpTokenAccount2,
-      admin.publicKey,
-      10000000000000 // Initial supply for zynk operator
-    );
-
+    // Mint max tokens to partnerDepositVault (tokenMint2)
     await mintTo(
       provider.connection,
       admin,
       tokenMint2,
       partnerDepositTokenAccount2,
       admin.publicKey,
-      10000000000000 // Initial supply for partner deposit
+      BigInt(MAX_U64) // Initial supply for partner deposit (max)
     );
     
-    // Mint max tokens to partnerDepositVault (tokenMint3)
+    // Mint Token2022 tokens to zynkOpWallet and partnerDepositVault (tokenMint3)
+    await mintTo(
+      provider.connection,
+      admin,
+      tokenMint3,
+      zynkOpTokenAccount3,
+      admin.publicKey,
+      10000000000000, // Initial supply for zynk operator
+      undefined,
+      undefined,
+      TOKEN_2022_PROGRAM_ID
+    );
+    
     await mintTo(
       provider.connection,
       admin,
       tokenMint3,
       partnerDepositTokenAccount3,
       admin.publicKey,
-      BigInt(MAX_U64) // Initial supply for partner deposit
+      10000000000000, // Initial supply for partner deposit
+      undefined,
+      undefined,
+      TOKEN_2022_PROGRAM_ID
     );
 
     // Mint tokens to zynkOpWallet and partnerDepositVault (invalidTokenMint)
@@ -422,7 +438,7 @@ describe("zynk-core", () => {
     }
   });
 
-  it.only("Initializes the protocol with multiple token addresses", async () => {
+  it("Initializes the protocol with multiple token addresses", async () => {
     const whitelistedTokenMints: PublicKey[] = [tokenMint, tokenMint2, tokenMint3];
     
     await program.methods
@@ -482,6 +498,7 @@ describe("zynk-core", () => {
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: currentOrderTrackerPDA,
         systemProgram: SystemProgram.programId,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         sysvarInstructions: null
       })
@@ -547,6 +564,7 @@ describe("zynk-core", () => {
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: transientOrderTrackerPDA,
         systemProgram: SystemProgram.programId,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY
       })
@@ -598,7 +616,112 @@ describe("zynk-core", () => {
           zowTokenAccount: zynkOpTokenAccount,
           orderTracker: transientOrderTrackerPDA,
           manager: manager.publicKey,
+          mint: tokenMint,
           tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([manager])
+        .rpc();
+      assert.fail("Expected close order to fail for transient orders.");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "AccountNotInitialized",
+        "Expected AccountNotInitialized error when replenishing a closed order"
+      );
+    }
+  });
+  
+  it("Creates a transient order for partner_deposit_vault -> zynkOpWallet -> partner_operational_wallet one-way txn - Token2022", async () => {
+    const amount = new anchor.BN(100000000000);
+    
+    const transientOrderId = generateOrderId();
+    const transientOrderTrackerPDA = deriveOrderTrackerPDA(transientOrderId);
+
+    const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
+      partnerDepositTokenAccount3
+    );
+    expect(+sourceBalance_preTx.value.amount).to.be.gte(+amount);
+
+    const destBalance_preTx = await provider.connection.getTokenAccountBalance(
+      partnerOperationalTokenAccount3
+    );
+    
+    const message = `${DOMAIN_SEPARATOR}::${partnerOperationalWallet.publicKey.toString()}::${partnerDepositVaultPDA.toString()}`
+    const { ed25519Ix, signature } = buildEd25519Ix(message, manager)
+
+    await program.methods
+      .pullAndCreateOrder(
+        Array.from(partnerId),
+        Array.from(transientOrderId),
+        amount,
+        Buffer.from(signature).toJSON().data,
+        null
+      )
+      .accounts({
+        config: configPDA,
+        manager: manager.publicKey,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: partnerDepositTokenAccount3,
+        zynkOpWallet: zynkOpWallet.publicKey,
+        zowTokenAccount: zynkOpTokenAccount3,
+        beneficiaryTokenAccount: partnerOperationalTokenAccount3,
+        orderTracker: transientOrderTrackerPDA,
+        systemProgram: SystemProgram.programId,
+        mint: tokenMint3,
+        tokenProgram: TOKEN_2022_PROGRAM_ID,
+        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY
+      })
+      .preInstructions([ed25519Ix])
+      .signers([manager, zynkOpWallet])
+      .rpc();
+    
+    // Verify token pull
+    const sourceBalance_postTx = await provider.connection.getTokenAccountBalance(
+      partnerDepositTokenAccount3
+    );
+    assert.equal(+sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount, +amount)
+    
+    // Verify token transfer
+    const destBalance_postTx = await provider.connection.getTokenAccountBalance(
+      partnerOperationalTokenAccount3
+    );
+    assert.equal(+destBalance_postTx.value.amount - +destBalance_preTx.value.amount, +amount)
+
+    // Verify order is closed
+    try {
+      await program.account.orderTracker.fetch(transientOrderTrackerPDA);
+      assert.fail("Expected order to be closed");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "Account does not exist",
+        "Expected account to be closed"
+      );
+    }
+    
+    // try to replenish and/or close a transient order
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      const validity = now + 3600;
+      
+      await program.methods
+        .replenish(
+          Array.from(transientOrderId),
+          new anchor.BN(validity),
+          new anchor.BN(1),
+          true,
+          null
+        )
+        .accounts({
+          config: configPDA,
+          partnerDepositVault: partnerDepositVaultPDA,
+          pdvTokenAccount: partnerDepositTokenAccount3,
+          zowTokenAccount: zynkOpTokenAccount3,
+          orderTracker: transientOrderTrackerPDA,
+          manager: manager.publicKey,
+          mint: tokenMint3,
+          tokenProgram: TOKEN_2022_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
         .signers([manager])
@@ -646,6 +769,7 @@ describe("zynk-core", () => {
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: currentOrderTrackerPDA,
         systemProgram: SystemProgram.programId,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         sysvarInstructions: null
       })
@@ -724,6 +848,7 @@ describe("zynk-core", () => {
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: tempOrderTrackerPDA,
         systemProgram: SystemProgram.programId,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         sysvarInstructions: null
       })
@@ -767,6 +892,7 @@ describe("zynk-core", () => {
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: currentOrderTrackerPDA,
         systemProgram: SystemProgram.programId,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         sysvarInstructions: null
       })
@@ -832,6 +958,7 @@ describe("zynk-core", () => {
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: transientOrderTrackerPDA,
         systemProgram: SystemProgram.programId,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY
       })
@@ -883,7 +1010,112 @@ describe("zynk-core", () => {
           zowTokenAccount: zynkOpTokenAccount,
           orderTracker: transientOrderTrackerPDA,
           manager: manager.publicKey,
+          mint: tokenMint,
           tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([manager])
+        .rpc();
+      assert.fail("Expected close order to fail for transient orders.");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "AccountNotInitialized",
+        "Expected AccountNotInitialized error when replenishing a closed order"
+      );
+    }
+  });
+  
+  it("Creates a transient order for zynkOpWallet to partner_operational_wallet one-way txn - Token2022", async () => {
+    const amount = new anchor.BN(100000000000);
+    
+    const transientOrderId = generateOrderId();
+    const transientOrderTrackerPDA = deriveOrderTrackerPDA(transientOrderId);
+
+    const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
+      zynkOpTokenAccount3
+    );
+    expect(+sourceBalance_preTx.value.amount).to.be.gte(+amount);
+
+    const destBalance_preTx = await provider.connection.getTokenAccountBalance(
+      partnerOperationalTokenAccount3
+    );
+    
+    const message = `${DOMAIN_SEPARATOR}::${partnerOperationalWallet.publicKey.toString()}::${partnerDepositVaultPDA.toString()}`
+    const { ed25519Ix, signature } = buildEd25519Ix(message, manager)
+
+    await program.methods
+      .createOrder(
+        Array.from(partnerId),
+        Array.from(transientOrderId),
+        amount,
+        Buffer.from(signature).toJSON().data,
+        null
+      )
+      .accounts({
+        config: configPDA,
+        manager: manager.publicKey,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: null,
+        zynkOpWallet: zynkOpWallet.publicKey,
+        zowTokenAccount: zynkOpTokenAccount3,
+        beneficiaryTokenAccount: partnerOperationalTokenAccount3,
+        orderTracker: transientOrderTrackerPDA,
+        systemProgram: SystemProgram.programId,
+        mint: tokenMint3,
+        tokenProgram: TOKEN_2022_PROGRAM_ID,
+        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY
+      })
+      .preInstructions([ed25519Ix])
+      .signers([manager, zynkOpWallet])
+      .rpc();
+
+    // Verify token pull
+    const sourceBalance_postTx = await provider.connection.getTokenAccountBalance(
+      zynkOpTokenAccount3
+    );
+    assert.equal(+sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount, +amount)
+    
+    // Verify token transfer
+    const destBalance_postTx = await provider.connection.getTokenAccountBalance(
+      partnerOperationalTokenAccount3
+    );
+    assert.equal(+destBalance_postTx.value.amount - +destBalance_preTx.value.amount, +amount)
+
+    // Verify order is closed
+    try {
+      await program.account.orderTracker.fetch(transientOrderTrackerPDA);
+      assert.fail("Expected order to be closed");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "Account does not exist",
+        "Expected account to be closed"
+      );
+    }
+    
+    // try to replenish and/or close a transient order
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      const validity = now + 3600;
+      
+      await program.methods
+        .replenish(
+          Array.from(transientOrderId),
+          new anchor.BN(validity),
+          new anchor.BN(1),
+          true,
+          null
+        )
+        .accounts({
+          config: configPDA,
+          partnerDepositVault: partnerDepositVaultPDA,
+          pdvTokenAccount: partnerDepositTokenAccount3,
+          zowTokenAccount: zynkOpTokenAccount3,
+          orderTracker: transientOrderTrackerPDA,
+          manager: manager.publicKey,
+          mint: tokenMint3,
+          tokenProgram: TOKEN_2022_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
         .signers([manager])
@@ -918,6 +1150,7 @@ describe("zynk-core", () => {
         zowTokenAccount: zynkOpTokenAccount,
         orderTracker: currentOrderTrackerPDA,
         manager: manager.publicKey,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
@@ -942,6 +1175,7 @@ describe("zynk-core", () => {
           zowTokenAccount: zynkOpTokenAccount,
           orderTracker: currentOrderTrackerPDA,
           manager: manager.publicKey,
+          mint: tokenMint,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
@@ -957,15 +1191,16 @@ describe("zynk-core", () => {
     }
   });
 
-  it("Should fail replenishment when amount surpasses U64_MAX", async () => {
+  it("Should fail replenishment when amount surpasses MAX_U64", async () => {
     const now = Math.floor(Date.now() / 1000);
     const validity = now + 3600; // Valid for 1 hour
 
+    let amount = new anchor.BN(100000000000);
     const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
       partnerDepositTokenAccount
     );
-    let amount = new anchor.BN(sourceBalance_preTx.value.amount)
-
+    expect(+sourceBalance_preTx.value.amount).to.be.gte(+amount);
+    
     const destBalance_preTx = await provider.connection.getTokenAccountBalance(
       zynkOpTokenAccount
     );
@@ -982,6 +1217,7 @@ describe("zynk-core", () => {
         zowTokenAccount: zynkOpTokenAccount,
         orderTracker: currentOrderTrackerPDA,
         manager: manager.publicKey,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
@@ -1022,10 +1258,11 @@ describe("zynk-core", () => {
         .accounts({
           config: configPDA,
           partnerDepositVault: partnerDepositVaultPDA,
-          pdvTokenAccount: partnerDepositTokenAccount3,
-          zowTokenAccount: zynkOpTokenAccount3,
+          pdvTokenAccount: partnerDepositTokenAccount2,
+          zowTokenAccount: zynkOpTokenAccount2,
           orderTracker: currentOrderTrackerPDA,
           manager: manager.publicKey,
+          mint: tokenMint2,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
@@ -1066,6 +1303,7 @@ describe("zynk-core", () => {
         zowTokenAccount: zynkOpTokenAccount,
         orderTracker: currentOrderTrackerPDA,
         manager: manager.publicKey,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
@@ -1099,6 +1337,65 @@ describe("zynk-core", () => {
     assert.equal(orderAmountIn_postTx.toNumber() - orderAmountIn_preTx.toNumber(), amount.toNumber());
   });
 
+  it("Replenishes tokens from partner_deposit_vault to zynk_op_wallet - Token2022", async () => {
+    const amount = new anchor.BN(100000000000);
+    const now = Math.floor(Date.now() / 1000);
+    const validity = now + 3600; // Valid for 1 hour
+
+    const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
+      partnerDepositTokenAccount3
+    );
+    expect(+sourceBalance_preTx.value.amount).to.be.gte(+amount);
+
+    const destBalance_preTx = await provider.connection.getTokenAccountBalance(
+      zynkOpTokenAccount3
+    );
+
+    let orderTrackerAccount = await program.account.orderTracker.fetch(currentOrderTrackerPDA);
+    const orderAmountIn_preTx = orderTrackerAccount.amountIn
+    await program.methods
+      .replenish(Array.from(currentOrderId), new anchor.BN(validity), amount, false, null)
+      .accounts({
+        config: configPDA,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: partnerDepositTokenAccount3,
+        zowTokenAccount: zynkOpTokenAccount3,
+        orderTracker: currentOrderTrackerPDA,
+        manager: manager.publicKey,
+        mint: tokenMint3,
+        tokenProgram: TOKEN_2022_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([manager])
+      .rpc();
+
+    // Verify token pull
+    const sourceBalance_postTx = await provider.connection.getTokenAccountBalance(
+      partnerDepositTokenAccount3
+    );
+    assert.equal(+sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount, +amount)
+    
+    // Verify token transfer
+    const destBalance_postTx = await provider.connection.getTokenAccountBalance(
+      zynkOpTokenAccount3
+    );
+    assert.equal(+destBalance_postTx.value.amount - +destBalance_preTx.value.amount, +amount)
+
+    // Verify that orderTracker is still active
+    const orderTrackerInfo = await provider.connection.getAccountInfo(
+      currentOrderTrackerPDA
+    );
+    assert.isNotNull(
+      orderTrackerInfo,
+      "OrderTracker should still be active after replenish"
+    );
+
+    orderTrackerAccount = await program.account.orderTracker.fetch(currentOrderTrackerPDA);
+
+    const orderAmountIn_postTx = orderTrackerAccount.amountIn
+    assert.equal(orderAmountIn_postTx.toNumber() - orderAmountIn_preTx.toNumber(), amount.toNumber());
+  });
+  
   it("Should fail when replenishing with past validity timestamp", async () => {
     const amount = new anchor.BN(50000000000); // 50 token
     const pastTimestamp = Math.floor(Date.now() / 1000) - 3600; // 1 hour ago
@@ -1113,6 +1410,7 @@ describe("zynk-core", () => {
           zowTokenAccount: zynkOpTokenAccount,
           orderTracker: currentOrderTrackerPDA,
           manager: manager.publicKey,
+          mint: tokenMint,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
@@ -1154,6 +1452,7 @@ describe("zynk-core", () => {
         zowTokenAccount: zynkOpTokenAccount,
         orderTracker: currentOrderTrackerPDA,
         manager: manager.publicKey,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
@@ -1220,6 +1519,7 @@ describe("zynk-core", () => {
           zowTokenAccount: zynkOpTokenAccount,
           orderTracker: currentOrderTrackerPDA,
           manager: manager.publicKey,
+          mint: tokenMint,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
@@ -1258,6 +1558,7 @@ describe("zynk-core", () => {
         zowTokenAccount: zynkOpTokenAccount,
         orderTracker: currentOrderTrackerPDA,
         manager: manager.publicKey,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
@@ -1302,6 +1603,7 @@ describe("zynk-core", () => {
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: newOrderTrackerPDA,
         systemProgram: SystemProgram.programId,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         sysvarInstructions: null
       })
@@ -1335,6 +1637,7 @@ describe("zynk-core", () => {
           zowTokenAccount: zynkOpTokenAccount,
           orderTracker: newOrderTrackerPDA,
           manager: nonManager.publicKey, // Wrong manager
+          mint: tokenMint,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
@@ -1370,6 +1673,7 @@ describe("zynk-core", () => {
           zowTokenAccount: zynkOpTokenAccount,
           orderTracker: currentOrderTrackerPDA,
           manager: manager.publicKey,
+          mint: tokenMint,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
@@ -1404,6 +1708,7 @@ describe("zynk-core", () => {
           zowTokenAccount: zynkOpTokenAccount,
           orderTracker: currentOrderTrackerPDA,
           manager: manager.publicKey,
+          mint: tokenMint,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
@@ -1445,6 +1750,7 @@ describe("zynk-core", () => {
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: newOrderTrackerPDA,
         systemProgram: SystemProgram.programId,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         sysvarInstructions: null
       })
@@ -1470,6 +1776,7 @@ describe("zynk-core", () => {
         zowTokenAccount: zynkOpTokenAccount,
         orderTracker: newOrderTrackerPDA,
         manager: manager.publicKey,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
@@ -1493,6 +1800,7 @@ describe("zynk-core", () => {
           zowTokenAccount: zynkOpTokenAccount,
           orderTracker: newOrderTrackerPDA,
           manager: manager.publicKey,
+          mint: tokenMint,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
@@ -1544,6 +1852,7 @@ describe("zynk-core", () => {
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         sysvarInstructions: null
       })
@@ -1587,6 +1896,7 @@ describe("zynk-core", () => {
         zowTokenAccount: zynkOpTokenAccount,
         orderTracker: orderTrackerPDA,
         manager: manager.publicKey,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
@@ -1632,6 +1942,7 @@ describe("zynk-core", () => {
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         sysvarInstructions: null
       })
@@ -1675,6 +1986,7 @@ describe("zynk-core", () => {
         zowTokenAccount: zynkOpTokenAccount2, // Using tokenMint2
         orderTracker: orderTrackerPDA,
         manager: manager.publicKey,
+        mint: tokenMint2,
         tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
@@ -1725,6 +2037,7 @@ describe("zynk-core", () => {
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         sysvarInstructions: null
       })
@@ -1752,6 +2065,7 @@ describe("zynk-core", () => {
         zowTokenAccount: zynkOpTokenAccount,
         orderTracker: orderTrackerPDA,
         manager: manager.publicKey,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
@@ -1802,6 +2116,7 @@ describe("zynk-core", () => {
         beneficiaryTokenAccount: partnerOperationalTokenAccount, // Using tokenMint
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         sysvarInstructions: null
       })
@@ -1829,6 +2144,7 @@ describe("zynk-core", () => {
         zowTokenAccount: zynkOpTokenAccount2, // Using tokenMint2
         orderTracker: orderTrackerPDA,
         manager: manager.publicKey,
+        mint: tokenMint2,
         tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
@@ -1871,6 +2187,7 @@ describe("zynk-core", () => {
           beneficiaryTokenAccount: partnerOperationalTokenAccountInvalid, // Using invalid token
           orderTracker: orderTrackerPDA,
           systemProgram: SystemProgram.programId,
+          mint: tokenMint,
           tokenProgram: TOKEN_PROGRAM_ID,
           sysvarInstructions: null
         })
@@ -1910,6 +2227,7 @@ describe("zynk-core", () => {
           beneficiaryTokenAccount: partnerOperationalTokenAccountInvalid, // Using invalid token
           orderTracker: orderTrackerPDA,
           systemProgram: SystemProgram.programId,
+          mint: tokenMint,
           tokenProgram: TOKEN_PROGRAM_ID,
           sysvarInstructions: null
         })
@@ -1949,6 +2267,7 @@ describe("zynk-core", () => {
           beneficiaryTokenAccount: partnerOperationalTokenAccount2, // Using tokenMint2
           orderTracker: orderTrackerPDA,
           systemProgram: SystemProgram.programId,
+          mint: tokenMint,
           tokenProgram: TOKEN_PROGRAM_ID,
           sysvarInstructions: null
         })
@@ -1990,6 +2309,7 @@ describe("zynk-core", () => {
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         sysvarInstructions: null
       })
@@ -2032,6 +2352,7 @@ describe("zynk-core", () => {
           zowTokenAccount: zynkOpTokenAccountInvalid, // Using invalid token
           orderTracker: orderTrackerPDA,
           manager: manager.publicKey,
+          mint: tokenMint,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
@@ -2073,6 +2394,7 @@ describe("zynk-core", () => {
         beneficiaryTokenAccount: partnerOperationalTokenAccount, // Using tokenMint
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         sysvarInstructions: null
       })
@@ -2115,6 +2437,7 @@ describe("zynk-core", () => {
           zowTokenAccount: zynkOpTokenAccount, // Using tokenMint (different from pdv)
           orderTracker: orderTrackerPDA,
           manager: manager.publicKey,
+          mint: tokenMint,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
@@ -2171,6 +2494,7 @@ describe("zynk-core", () => {
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         sysvarInstructions: null
       })
@@ -2214,6 +2538,7 @@ describe("zynk-core", () => {
           zowTokenAccount: zynkOpTokenAccountInvalid, // Using invalid token
           orderTracker: orderTrackerPDA,
           manager: manager.publicKey,
+          mint: tokenMint,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
@@ -2270,6 +2595,7 @@ describe("zynk-core", () => {
         beneficiaryTokenAccount: partnerOperationalTokenAccount, // Using tokenMint
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         sysvarInstructions: null
       })
@@ -2313,6 +2639,7 @@ describe("zynk-core", () => {
           zowTokenAccount: zynkOpTokenAccount, // Using tokenMint (different from pdv)
           orderTracker: orderTrackerPDA,
           manager: manager.publicKey,
+          mint: tokenMint,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
@@ -2355,6 +2682,7 @@ describe("zynk-core", () => {
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         sysvarInstructions: null
       })
@@ -2401,6 +2729,7 @@ describe("zynk-core", () => {
         zowTokenAccount: zynkOpTokenAccount2, // Using tokenMint2
         orderTracker: orderTrackerPDA,
         manager: manager.publicKey,
+        mint: tokenMint2,
         tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
@@ -2462,6 +2791,7 @@ describe("zynk-core", () => {
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         sysvarInstructions: null
       })
@@ -2505,6 +2835,7 @@ describe("zynk-core", () => {
           zowTokenAccount: zynkOpTokenAccount, // Using tokenMint (different from pdv)
           orderTracker: orderTrackerPDA,
           manager: manager.publicKey,
+          mint: tokenMint,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
@@ -2563,6 +2894,7 @@ describe("zynk-core", () => {
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: order1TrackerPDA,
         systemProgram: SystemProgram.programId,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         sysvarInstructions: null
       })
@@ -2588,6 +2920,7 @@ describe("zynk-core", () => {
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: order2TrackerPDA,
         systemProgram: SystemProgram.programId,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         sysvarInstructions: null
       })
@@ -2633,6 +2966,7 @@ describe("zynk-core", () => {
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: order3TrackerPDA,
         systemProgram: SystemProgram.programId,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         sysvarInstructions: null
       })
@@ -2658,6 +2992,7 @@ describe("zynk-core", () => {
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: order4TrackerPDA,
         systemProgram: SystemProgram.programId,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         sysvarInstructions: null
       })
@@ -2690,6 +3025,7 @@ describe("zynk-core", () => {
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: order5TrackerPDA,
         systemProgram: SystemProgram.programId,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         sysvarInstructions: null
       })
@@ -2715,6 +3051,7 @@ describe("zynk-core", () => {
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: order6TrackerPDA,
         systemProgram: SystemProgram.programId,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         sysvarInstructions: null
       })
@@ -2916,6 +3253,7 @@ describe("zynk-core", () => {
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: order1TrackerPDA,
         systemProgram: SystemProgram.programId,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         sysvarInstructions: null
       })
@@ -2941,6 +3279,7 @@ describe("zynk-core", () => {
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: order2TrackerPDA,
         systemProgram: SystemProgram.programId,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         sysvarInstructions: null
       })
@@ -3044,6 +3383,7 @@ describe("zynk-core", () => {
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         sysvarInstructions: null
       })
@@ -3175,6 +3515,7 @@ describe("zynk-core", () => {
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         sysvarInstructions: null
       })
@@ -3300,6 +3641,7 @@ describe("zynk-core", () => {
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         sysvarInstructions: null
       })
@@ -3372,6 +3714,7 @@ describe("zynk-core", () => {
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
+        mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         sysvarInstructions: null
       })
