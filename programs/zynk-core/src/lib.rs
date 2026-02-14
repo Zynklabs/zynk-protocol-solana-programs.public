@@ -69,28 +69,19 @@ pub enum CustomError {
 /// Stores the admin, zynk_op_wallet, the guardian, the manager,
 /// along with the global paused flag.
 #[account]
+#[derive(InitSpace)]
 pub struct Config {
+    pub paused: bool,
     pub admin: Pubkey,
     pub manager: Pubkey,
     pub guardian: Pubkey,
     pub zynk_op_wallet: Pubkey,
+    #[max_len(8)]
     pub whitelisted_token_mints: Vec<Pubkey>,
-    pub paused: bool,
-}
-
-impl Config {
-    pub fn space(n: u32) -> usize {
-        return 8  + // discriminator
-        32 + // admin
-        32 + // manager
-        32 + // guardian
-        32 + // zynk_op_wallet
-        4 + (32 * n as usize) + // whitelisted_token_mints
-        1;   // paused
-    }
 }
 
 #[account]
+#[derive(InitSpace)]
 pub struct OrderTracker {
     pub order_id: [u8; 32],
     pub partner_id: [u8; 32],
@@ -100,17 +91,8 @@ pub struct OrderTracker {
     pub partner_deposit_vault: Pubkey,
 }
 
-impl OrderTracker {
-    pub const LEN: usize = 8  + // discriminator
-        32 + // order_id
-        32 + // partner_id
-        8  + // amount_in
-        8  + // amount_out
-        32 + // beneficiary_wallet
-        32;  // partner_deposit_vault
-}
-
 #[account]
+#[derive(InitSpace)]
 pub struct Request {
     pub action: u8,             // Enum tag for the action
     pub value: Pubkey       ,   // New value (wallet address)
@@ -120,15 +102,6 @@ pub struct Request {
     pub consensus: bool,        // Is consensus request?
 }
 
-impl Request {
-    pub const LEN: usize = 8 + // discriminator
-        1  + // action
-        32 + // value
-        8  + // eta
-        1  + // executed
-        1  + // ack
-        1;   // consensus
-}
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq)]
 #[repr(u8)]
@@ -1076,7 +1049,7 @@ pub struct Initialize<'info> {
     #[account(
         init,
         payer = admin,
-        space = Config::space(whitelisted_token_mints.len() as u32),
+        space = 8 + Config::INIT_SPACE,
         seeds = [CONFIG_SEED],
         bump
     )]
@@ -1136,7 +1109,7 @@ pub struct CreateOrder<'info> {
     #[account(
         init,
         payer = manager,
-        space = OrderTracker::LEN,
+        space = 8 + OrderTracker::INIT_SPACE,
         seeds = [ORDER_TRACKER_SEED, beneficiary_token_account.owner.key().as_ref(), order_id.as_ref()],
         bump
     )]
@@ -1238,7 +1211,7 @@ pub struct AttestOrder<'info> {
     #[account(
         init_if_needed,
         payer = manager,
-        space = OrderTracker::LEN,
+        space = 8 + OrderTracker::INIT_SPACE,
         seeds = [ORDER_TRACKER_SEED, b"attest", order_id.as_ref()],
         bump
     )]
@@ -1264,7 +1237,7 @@ pub struct TimelockRequest<'info> {
     #[account(
         init,
         payer = manager,
-        space = Request::LEN,
+        space = 8 + Request::INIT_SPACE,
         seeds = [TIMELOCK_SEED, &[action]],
         bump
     )]
@@ -1344,7 +1317,7 @@ pub struct Consensus<'info> {
     #[account(
         init,
         payer = manager,
-        space = Request::LEN,
+        space = 8 + Request::INIT_SPACE,
         seeds = [TIMELOCK_SEED, &[action]],
         bump
     )]
