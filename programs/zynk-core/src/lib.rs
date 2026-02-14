@@ -1037,6 +1037,9 @@ pub mod zynk_core {
         });
 
         // Close the timelock account (transfer lamports back to guardian)
+        // Must not add `close = guardian` in the Ack context struct,
+        // as the struct is being used for `ack_timelock()` method too
+        // wherein account closure is not required.
         close_account(req, &ctx.accounts.guardian)?;
         
         Ok(())
@@ -1307,6 +1310,7 @@ pub struct Ack<'info> {
         mut,
         seeds = [TIMELOCK_SEED, &[timelock.action]],
         bump
+        // If adding `close = guardian` here, refer to the `execute_consensus()` method
     )]
     pub timelock: Account<'info, Request>,
 
