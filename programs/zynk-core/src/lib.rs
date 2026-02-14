@@ -3,12 +3,13 @@ use anchor_spl::token::{self, Token, TokenAccount, Transfer};
 use anchor_lang::solana_program::{
     pubkey::Pubkey,
     sysvar::instructions::{ ID as SYSVAR_IX_ID, load_instruction_at_checked },
+    system_program::ID as SYSTEM_PROGRAM_ID,
     ed25519_program::ID as ED25519_ID,
     program_error::ProgramError,
-    hash::hash
+    hash::hash,
 };
 
-declare_id!("EMNqHAmpFnLsQdmoDbcDYJe9fny6Q42ALoNdH1Z5XZ3e");
+declare_id!("3AfnoobubxiCpVuFXALzDfNSaD4AjgWvFuqKJGm5Nay3");
 
 pub const DOMAIN_SEPARATOR: u64 = 1151111081099710;
 
@@ -584,7 +585,9 @@ pub mod zynk_core {
             );
             token::transfer(cpi_ctx, amount)?;
     
-            order_tracker.amount_in += amount;
+            order_tracker.amount_in = order_tracker.amount_in
+                .checked_add(amount)
+                .ok_or(ProgramError::ArithmeticOverflow)?;
         } else {
             require!(order_tracker.amount_in >= order_tracker.amount_out, CustomError::DeficientOrder);
         }

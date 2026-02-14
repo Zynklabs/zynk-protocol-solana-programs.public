@@ -3,7 +3,7 @@ seeds = false
 skip-lint = false
 
 [programs.localnet]
-zynk_core = "EMNqHAmpFnLsQdmoDbcDYJe9fny6Q42ALoNdH1Z5XZ3e"
+zynk_core = "3AfnoobubxiCpVuFXALzDfNSaD4AjgWvFuqKJGm5Nay3"
 
 [programs.devnet]
 zynk_core = "4JKLFbtb3B8JNB82PsNwH5FjHG9pX8awPSRiMLXYy7Br"

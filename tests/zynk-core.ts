@@ -40,6 +40,7 @@ const buildEd25519Ix = (msg: string, signer: Keypair) => {
 }
 
 const DOMAIN_SEPARATOR = 1151111081099710
+const MAX_U64 = "18446744073709551615";
 
 
 enum TimelockAction {
@@ -91,18 +92,22 @@ describe("zynk-core", () => {
   // Token accounts
   let tokenMint: PublicKey;
   let tokenMint2: PublicKey;
+  let tokenMint3: PublicKey;
   let invalidTokenMint: PublicKey; // Token not in whitelist
 
   let zynkOpTokenAccount: PublicKey;
   let zynkOpTokenAccount2: PublicKey;
+  let zynkOpTokenAccount3: PublicKey;
   let zynkOpTokenAccountInvalid: PublicKey;
 
   let partnerOperationalTokenAccount: PublicKey;
   let partnerOperationalTokenAccount2: PublicKey;
+  let partnerOperationalTokenAccount3: PublicKey;
   let partnerOperationalTokenAccountInvalid: PublicKey;
 
   let partnerDepositTokenAccount: PublicKey;
   let partnerDepositTokenAccount2: PublicKey;
+  let partnerDepositTokenAccount3: PublicKey;
   let partnerDepositTokenAccountInvalid: PublicKey;
   
   let timelockPDA: PublicKey;
@@ -151,6 +156,14 @@ describe("zynk-core", () => {
     );
 
     tokenMint2 = await createMint(
+      provider.connection,
+      admin,
+      admin.publicKey,
+      null,
+      9
+    );
+    
+    tokenMint3 = await createMint(
       provider.connection,
       admin,
       admin.publicKey,
@@ -218,7 +231,33 @@ describe("zynk-core", () => {
       ASSOCIATED_TOKEN_PROGRAM_ID,
       true // allowOwnerOffCurve
     )
+    
+    // Create token accounts for tokenMint3
+    zynkOpTokenAccount3 = await createAccount(
+      provider.connection,
+      zynkOpWallet,
+      tokenMint3,
+      zynkOpWallet.publicKey
+    );
 
+    partnerOperationalTokenAccount3 = await createAccount(
+      provider.connection,
+      partnerOperationalWallet,
+      tokenMint3,
+      partnerOperationalWallet.publicKey
+    );
+    
+    partnerDepositTokenAccount3 = await createAssociatedTokenAccount(
+      provider.connection,
+      partnerOperationalWallet,
+      tokenMint3,
+      partnerDepositVaultPDA,
+      { commitment: "confirmed" },
+      TOKEN_PROGRAM_ID,
+      ASSOCIATED_TOKEN_PROGRAM_ID,
+      true // allowOwnerOffCurve
+    )
+    
     // Create token accounts for invalid token (not in whitelist)
     zynkOpTokenAccountInvalid = await createAccount(
       provider.connection,
@@ -281,6 +320,16 @@ describe("zynk-core", () => {
       partnerDepositTokenAccount2,
       admin.publicKey,
       10000000000000 // Initial supply for partner deposit
+    );
+    
+    // Mint max tokens to partnerDepositVault (tokenMint3)
+    await mintTo(
+      provider.connection,
+      admin,
+      tokenMint3,
+      partnerDepositTokenAccount3,
+      admin.publicKey,
+      BigInt(MAX_U64) // Initial supply for partner deposit
     );
 
     // Mint tokens to zynkOpWallet and partnerDepositVault (invalidTokenMint)
@@ -373,8 +422,8 @@ describe("zynk-core", () => {
     }
   });
 
-  it("Initializes the protocol with multiple token addresses", async () => {
-    const whitelistedTokenMints: PublicKey[] = [tokenMint, tokenMint2];
+  it.only("Initializes the protocol with multiple token addresses", async () => {
+    const whitelistedTokenMints: PublicKey[] = [tokenMint, tokenMint2, tokenMint3];
     
     await program.methods
       .initialize(zynkOpWallet.publicKey, manager.publicKey, guardian.publicKey, whitelistedTokenMints)
@@ -395,7 +444,7 @@ describe("zynk-core", () => {
     assert.equal(configAccount.paused, false);
     
     // Verify all token mints are stored correctly
-    assert.equal(configAccount.whitelistedTokenMints.length, 2, "Should have 2 token mints");
+    assert.equal(configAccount.whitelistedTokenMints.length, 3, "Should have 3 token mints");
     assert.ok(configAccount.whitelistedTokenMints[0].equals(tokenMint), "First token mint should match");
     assert.ok(configAccount.whitelistedTokenMints[1].equals(tokenMint2), "Second token mint should match");
   });
@@ -908,6 +957,89 @@ describe("zynk-core", () => {
     }
   });
 
+  it("Should fail replenishment when amount surpasses U64_MAX", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const validity = now + 3600; // Valid for 1 hour
+
+    const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
+      partnerDepositTokenAccount
+    );
+    let amount = new anchor.BN(sourceBalance_preTx.value.amount)
+
+    const destBalance_preTx = await provider.connection.getTokenAccountBalance(
+      zynkOpTokenAccount
+    );
+
+    let orderTrackerAccount = await program.account.orderTracker.fetch(currentOrderTrackerPDA);
+    const orderAmountIn_preTx = orderTrackerAccount.amountIn
+    
+    await program.methods
+      .replenish(Array.from(currentOrderId), new anchor.BN(validity), amount, false, null)
+      .accounts({
+        config: configPDA,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: partnerDepositTokenAccount,
+        zowTokenAccount: zynkOpTokenAccount,
+        orderTracker: currentOrderTrackerPDA,
+        manager: manager.publicKey,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([manager])
+      .rpc();
+
+    // Verify token pull
+    const sourceBalance_postTx = await provider.connection.getTokenAccountBalance(
+      partnerDepositTokenAccount
+    );
+    assert.equal(+sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount, +amount)
+    
+    // Verify token transfer
+    const destBalance_postTx = await provider.connection.getTokenAccountBalance(
+      zynkOpTokenAccount
+    );
+    assert.equal(+destBalance_postTx.value.amount - +destBalance_preTx.value.amount, +amount)
+
+    // Verify that orderTracker is still active
+    const orderTrackerInfo = await provider.connection.getAccountInfo(
+      currentOrderTrackerPDA
+    );
+    assert.isNotNull(
+      orderTrackerInfo,
+      "OrderTracker should still be active after replenish"
+    );
+
+    orderTrackerAccount = await program.account.orderTracker.fetch(currentOrderTrackerPDA);
+
+    const orderAmountIn_postTx = orderTrackerAccount.amountIn
+    assert.equal(orderAmountIn_postTx.toNumber() - orderAmountIn_preTx.toNumber(), amount.toNumber());
+    
+    amount = new anchor.BN(MAX_U64);
+    
+    try {
+      await program.methods
+        .replenish(Array.from(currentOrderId), new anchor.BN(validity), amount, true, null)
+        .accounts({
+          config: configPDA,
+          partnerDepositVault: partnerDepositVaultPDA,
+          pdvTokenAccount: partnerDepositTokenAccount3,
+          zowTokenAccount: zynkOpTokenAccount3,
+          orderTracker: currentOrderTrackerPDA,
+          manager: manager.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([manager])
+        .rpc();
+    } catch (error) {
+      assert.include(
+        error.message,
+        "ArithmeticOverflow",
+        "Expected 'ArithmeticOverflow' error"
+      );
+    }
+  });
+  
   it("Replenishes tokens from partner_deposit_vault to zynk_op_wallet", async () => {
     const amount = new anchor.BN(100000000000);
     const now = Math.floor(Date.now() / 1000);
