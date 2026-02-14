@@ -673,7 +673,7 @@ pub mod zynk_core {
         let config = &mut ctx.accounts.config;
         require!(!config.paused, CustomError::ContractPaused);
 
-        let message = format!("{}::{}::{}::{}::{}", DOMAIN_SEPARATOR, origin, proxy, target, txn);
+        let message = format!("{}::{}::{}::{}::{}::{}", DOMAIN_SEPARATOR, origin, proxy, target, txn, amount);
         verify_signature_syscall(
             &ctx.accounts.sysvar_instructions,
             &config.manager,

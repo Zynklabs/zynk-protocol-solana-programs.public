@@ -4286,7 +4286,7 @@ describe("zynk-core", () => {
       }
     });
     
-    const message = `${DOMAIN_SEPARATOR}::${zynkOpWallet.publicKey.toString()}::${EthereumZynkOpWalletAddress}::${EthereumRecipientAddress}::${EthereumTxnOut}`
+    const message = `${DOMAIN_SEPARATOR}::${zynkOpWallet.publicKey.toString()}::${EthereumZynkOpWalletAddress}::${EthereumRecipientAddress}::${EthereumTxnOut}::${amount}`
     const { ed25519Ix, signature } = buildEd25519Ix(message, manager)
     
     await program.methods
@@ -4356,7 +4356,7 @@ describe("zynk-core", () => {
       }
     });
     
-    const message = `${DOMAIN_SEPARATOR}::${EthereumRecipientAddress}::${EthereumZynkOpWalletAddress}::${zynkOpWallet.publicKey.toString()}::${EthereumTxnIn}`
+    const message = `${DOMAIN_SEPARATOR}::${EthereumRecipientAddress}::${EthereumZynkOpWalletAddress}::${zynkOpWallet.publicKey.toString()}::${EthereumTxnIn}::${amount}`
     const { ed25519Ix, signature } = buildEd25519Ix(message, manager)
     
     await program.methods
