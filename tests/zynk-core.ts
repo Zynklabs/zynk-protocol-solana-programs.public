@@ -776,6 +776,46 @@ describe("zynk-core", () => {
     }
   });
 
+  it("Should fail creating order for any ZOW token account", async () => {
+    const amount = new anchor.BN(0);
+    
+    const tempOrderId = generateOrderId();
+    const tempOrderTrackerPDA = deriveOrderTrackerPDA(tempOrderId, zynkOpWallet.publicKey);
+    
+    try {
+      await program.methods
+        .createOrder(
+          Array.from(partnerId),
+          Array.from(tempOrderId),
+          amount,
+          null,
+          null
+        )
+        .accounts({
+          config: configPDA,
+          manager: manager.publicKey,
+          partnerDepositVault: partnerDepositVaultPDA,
+          pdvTokenAccount: null,
+          zynkOpWallet: zynkOpWallet.publicKey,
+          zowTokenAccount: zynkOpTokenAccount,
+          beneficiaryTokenAccount: zynkOpTokenAccount,
+          orderTracker: tempOrderTrackerPDA,
+          systemProgram: SystemProgram.programId,
+          mint: tokenMint,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          sysvarInstructions: null
+        })
+        .signers([manager, zynkOpWallet])
+        .rpc();
+    } catch (error) {
+      assert.include(
+        error.message,
+        "InvalidAccount",
+        "Expected `InvalidAccount` error"
+      );
+    }
+  });
+  
   it("Creates order without transferring tokens, in case of zero amount", async () => {
     const amount = new anchor.BN(0);
     

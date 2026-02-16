@@ -35,6 +35,8 @@ pub enum CustomError {
     UnauthorizedGuardian,
     #[msg("Invalid order")]
     InvalidOrder,
+    #[msg("Invalid account")]
+    InvalidAccount,
     #[msg("Invalid token mint")]
     InvalidTokenMint,
     #[msg("Validity must be in future")]
@@ -1100,6 +1102,7 @@ pub struct CreateOrder<'info> {
     #[account(
         mut,
         constraint = beneficiary_token_account.mint == zow_token_account.mint @ CustomError::InvalidTokenMint,
+        constraint = beneficiary_token_account.owner != zynk_op_wallet.key() @ CustomError::InvalidAccount
     )]
     pub beneficiary_token_account: InterfaceAccount<'info, TokenAccount>,
     
