@@ -349,12 +349,13 @@ pub mod zynk_core {
         // Check if program is paused.
         let config = &ctx.accounts.config;
         require!(!config.paused, CustomError::ContractPaused);
+        require!(amount > 0, CustomError::InvalidOrder);
 
         let beneficiary_wallet = ctx.accounts.beneficiary_token_account.owner.key();
         let partner_deposit_vault = &ctx.accounts.partner_deposit_vault;
         let pdv_token_account = ctx.accounts.pdv_token_account.as_ref().ok_or(CustomError::InvalidPdvAuthority)?;
 
-        require!(pdv_token_account.owner == ctx.accounts.partner_deposit_vault.key(), CustomError::InvalidPdvAuthority);
+        require!(pdv_token_account.owner == partner_deposit_vault.key(), CustomError::InvalidPdvAuthority);
         require!(pdv_token_account.mint == ctx.accounts.zow_token_account.mint, CustomError::InvalidTokenMint);
         
         let mut transient = false;

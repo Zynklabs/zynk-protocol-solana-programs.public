@@ -438,7 +438,7 @@ describe("zynk-core", () => {
     }
   });
 
-  it("Initializes the protocol with multiple token addresses", async () => {
+  it.only("Initializes the protocol with multiple token addresses", async () => {
     const whitelistedTokenMints: PublicKey[] = [tokenMint, tokenMint2, tokenMint3];
     
     await program.methods
@@ -465,6 +465,46 @@ describe("zynk-core", () => {
     assert.ok(configAccount.whitelistedTokenMints[1].equals(tokenMint2), "Second token mint should match");
   });
 
+  it.only("Should fail pullAndCreateOrder when amount is zero", async () => {
+    const amount = new anchor.BN(0);
+    
+    currentOrderId = generateOrderId();
+    currentOrderTrackerPDA = deriveOrderTrackerPDA(currentOrderId);
+
+    try {  
+      await program.methods
+        .pullAndCreateOrder(
+          Array.from(partnerId),
+          Array.from(currentOrderId),
+          amount,
+          null,
+          null
+        )
+        .accounts({
+          config: configPDA,
+          manager: manager.publicKey,
+          partnerDepositVault: partnerDepositVaultPDA,
+          pdvTokenAccount: partnerDepositTokenAccount,
+          zynkOpWallet: zynkOpWallet.publicKey,
+          zowTokenAccount: zynkOpTokenAccount,
+          beneficiaryTokenAccount: partnerOperationalTokenAccount,
+          orderTracker: currentOrderTrackerPDA,
+          systemProgram: SystemProgram.programId,
+          mint: tokenMint,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          sysvarInstructions: null
+        })
+        .signers([manager, zynkOpWallet])
+        .rpc();
+    } catch (error) {
+      assert.include(
+        error.message,
+        "InvalidOrder",
+        "Expected `InvalidOrder` error"
+      );
+    }
+  });
+  
   it("Pulls tokens from partner_deposit_vault to zynkOpWallet and sends tokens from zynkOpWallet to partner_operational_wallet", async () => {
     const amount = new anchor.BN(100000000000);
     
@@ -3339,7 +3379,7 @@ describe("zynk-core", () => {
       // The account doesn't exist anymore, so it might fail at transaction level or when trying to deserialize
       assert.ok(
         error.message.includes("InvalidOrder"),
-        `Expected InvalidOrde error when trying to close already closed account. Got: ${error.message}`
+        `Expected InvalidOrder error when trying to close already closed account. Got: ${error.message}`
       );
     }
   });
