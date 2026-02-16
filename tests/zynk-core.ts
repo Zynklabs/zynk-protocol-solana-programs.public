@@ -438,7 +438,7 @@ describe("zynk-core", () => {
     }
   });
 
-  it.only("Initializes the protocol with multiple token addresses", async () => {
+  it("Initializes the protocol with multiple token addresses", async () => {
     const whitelistedTokenMints: PublicKey[] = [tokenMint, tokenMint2, tokenMint3];
     
     await program.methods
@@ -465,7 +465,7 @@ describe("zynk-core", () => {
     assert.ok(configAccount.whitelistedTokenMints[1].equals(tokenMint2), "Second token mint should match");
   });
 
-  it.only("Should fail pullAndCreateOrder when amount is zero", async () => {
+  it("Should fail pullAndCreateOrder when amount is zero", async () => {
     const amount = new anchor.BN(0);
     
     currentOrderId = generateOrderId();

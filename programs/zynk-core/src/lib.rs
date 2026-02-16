@@ -638,6 +638,11 @@ pub mod zynk_core {
     ) -> Result<()> {
         let config = &mut ctx.accounts.config;
         require!(!config.paused, CustomError::ContractPaused);
+        
+        require!(
+            !origin.contains("::") && !proxy.contains("::") && !target.contains("::") && !txn.contains("::"),
+            CustomError::InvalidOrder
+        );
 
         let message = format!("{}::{}::{}::{}::{}::{}", DOMAIN_SEPARATOR, origin, proxy, target, txn, amount);
         verify_signature_syscall(
