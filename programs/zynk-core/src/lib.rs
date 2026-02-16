@@ -9,6 +9,7 @@ use anchor_spl::token_interface::{
 use anchor_lang::solana_program::{
     pubkey::Pubkey,
     sysvar::instructions::{ ID as SYSVAR_IX_ID, load_instruction_at_checked },
+    system_program::ID as SYSTEM_PROGRAM_ID,
     ed25519_program::ID as ED25519_ID,
     program_error::ProgramError,
     hash::hash,
@@ -261,11 +262,12 @@ pub fn close_account<'a, 'b>(from: impl ToAccountInfo<'a>, to: impl ToAccountInf
     let from = from.to_account_info();
     let to = to.to_account_info();
 
-    **to.try_borrow_mut_lamports()? += **from.try_borrow_lamports()?;
-    **from.try_borrow_mut_lamports()? = 0;
-    from.try_borrow_mut_data()?.fill(0);
-    
-    Ok(())
+    let to_lamports = to.lamports();
+    **to.lamports.borrow_mut() = to_lamports.checked_add(from.lamports()).unwrap();
+    **from.lamports.borrow_mut() = 0;
+
+    from.assign(&SYSTEM_PROGRAM_ID);
+    from.realloc(0, false).map_err(Into::into)
 }
 
 #[program]
