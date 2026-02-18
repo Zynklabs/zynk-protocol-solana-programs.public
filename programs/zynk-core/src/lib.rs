@@ -227,6 +227,25 @@ pub fn verify_signature_syscall(
     if ed25519_instruction.program_id != ED25519_ID || ed25519_instruction.accounts.len() != 0 || data.len() != 16 + 32 + 64 + message.len() {
         return Err(ProgramError::InvalidInstructionData.into());
     }
+    
+    let sig_offset = u16::from_le_bytes([data[2], data[3]]);
+    let sig_ix_idx = u16::from_le_bytes([data[4], data[5]]);
+    let pk_offset  = u16::from_le_bytes([data[6], data[7]]);
+    let pk_ix_idx  = u16::from_le_bytes([data[8], data[9]]);
+    let msg_offset = u16::from_le_bytes([data[10], data[11]]);
+    let msg_size   = u16::from_le_bytes([data[12], data[13]]);
+    let msg_ix_idx = u16::from_le_bytes([data[14], data[15]]);
+
+    if !(pk_offset == 16
+        && pk_ix_idx == 0xFFFF
+        && sig_offset == 48
+        && sig_ix_idx == 0xFFFF
+        && msg_offset == 112
+        && msg_ix_idx == 0xFFFF
+        && msg_size == message.len() as u16)
+    {
+        return Err(ProgramError::InvalidInstructionData.into());
+    }
 
     let data_pubkey = &data[16..48];
     let data_signature = &data[48..112];
