@@ -228,6 +228,10 @@ pub fn verify_signature_syscall(
         return Err(ProgramError::InvalidInstructionData.into());
     }
     
+    if data[0] != 1 { 
+        return Err(ProgramError::InvalidInstructionData.into()); 
+    }
+    
     let sig_offset = u16::from_le_bytes([data[2], data[3]]);
     let sig_ix_idx = u16::from_le_bytes([data[4], data[5]]);
     let pk_offset  = u16::from_le_bytes([data[6], data[7]]);
@@ -253,7 +257,7 @@ pub fn verify_signature_syscall(
     if data_pubkey != &signer_pubkey.to_bytes() || data_signature != signature || data_message != message {
         return Err(CustomError::InvalidEd25519Message.into());
     }
-
+    
     Ok(())
 }
 
