@@ -298,7 +298,7 @@ pub mod zynk_core {
     /// # Arguments
     /// * `ctx` - The [`Initialize`] context containing the config and admin accounts.
     /// * `zynk_op_wallet` - The operator wallet authorized to move protocol funds.
-    /// * `manager` - The manager address authorized for operational signatures.
+    /// * `admin` - The admin address authorized for administrative operations.
     /// * `guardian` - The guardian address with emergency and oversight privileges.
     /// * `whitelisted_token_mints` - A non-empty list of SPL token mints allowed by the program.
     /// 
@@ -316,15 +316,15 @@ pub mod zynk_core {
     pub fn initialize(
         ctx: Context<Initialize>,
         zynk_op_wallet: Pubkey,
-        manager: Pubkey,
+        admin: Pubkey,
         guardian: Pubkey,
         whitelisted_token_mints: Vec<Pubkey>
     ) -> Result<()> {
         let config = &mut ctx.accounts.config;
-        config.admin = ctx.accounts.admin.key();
+        config.manager = ctx.accounts.manager.key();
         config.zynk_op_wallet = zynk_op_wallet;
+        config.admin = admin;
         config.guardian = guardian;
-        config.manager = manager;
         require!(whitelisted_token_mints.len() > 0, CustomError::EmptyWhitelistedTokenMints);
         for token_mint in whitelisted_token_mints.iter() {
             validate_address(token_mint)?;
@@ -1069,14 +1069,17 @@ pub struct Null {}
 pub struct Initialize<'info> {
     #[account(
         init,
-        payer = admin,
+        payer = manager,
         space = 8 + Config::INIT_SPACE,
         seeds = [CONFIG_SEED],
         bump
     )]
     pub config: Account<'info, Config>,
-    #[account(mut)]
-    pub admin: Signer<'info>,
+    #[account(
+        mut,
+        constraint = manager.key() == pubkey!("6jPvMnEkz5NUJrbVq2BGdWgWYFXVE4dRpitgM7cknMfN") @ CustomError::UnauthorizedManager
+    )]
+    pub manager: Signer<'info>,
 
     pub system_program: Program<'info, System>,
 }

@@ -373,13 +373,13 @@ describe("zynk-core", () => {
     
     try {
       await program.methods
-        .initialize(zynkOpWallet.publicKey, manager.publicKey, guardian.publicKey, whitelistedTokenMints)
+        .initialize(zynkOpWallet.publicKey, admin.publicKey, guardian.publicKey, whitelistedTokenMints)
         .accounts({
           config: configPDA,
-          admin: admin.publicKey,
+          manager: manager.publicKey,
           systemProgram: SystemProgram.programId,
         })
-        .signers([admin])
+        .signers([manager])
         .rpc();
       assert.fail("Expected initialize to fail with empty token mints vector");
     } catch (error) {
@@ -398,13 +398,13 @@ describe("zynk-core", () => {
     
     try {
       await program.methods
-        .initialize(zynkOpWallet.publicKey, manager.publicKey, guardian.publicKey, whitelistedTokenMints)
+        .initialize(zynkOpWallet.publicKey, admin.publicKey, guardian.publicKey, whitelistedTokenMints)
         .accounts({
           config: configPDA,
-          admin: admin.publicKey,
+          manager: manager.publicKey,
           systemProgram: SystemProgram.programId,
         })
-        .signers([admin])
+        .signers([manager])
         .rpc();
       assert.fail("Expected initialize to fail with invalid token mint address");
     } catch (error) {
@@ -420,13 +420,13 @@ describe("zynk-core", () => {
     const whitelistedTokenMints: PublicKey[] = [tokenMint, tokenMint];
     try {
       await program.methods
-        .initialize(zynkOpWallet.publicKey, manager.publicKey, guardian.publicKey, whitelistedTokenMints)
+        .initialize(zynkOpWallet.publicKey, admin.publicKey, guardian.publicKey, whitelistedTokenMints)
         .accounts({
           config: configPDA,
-          admin: admin.publicKey,
+          manager: manager.publicKey,
           systemProgram: SystemProgram.programId,
         })
-        .signers([admin])
+        .signers([manager])
         .rpc();
       assert.fail("Expected initialize to fail with duplicate token mints");
     } catch (error) {
@@ -442,13 +442,13 @@ describe("zynk-core", () => {
     const whitelistedTokenMints: PublicKey[] = [tokenMint, tokenMint2, tokenMint3];
     
     await program.methods
-      .initialize(zynkOpWallet.publicKey, manager.publicKey, guardian.publicKey, whitelistedTokenMints)
+      .initialize(zynkOpWallet.publicKey, admin.publicKey, guardian.publicKey, whitelistedTokenMints)
       .accounts({
         config: configPDA,
-        admin: admin.publicKey,
+        manager: manager.publicKey,
         systemProgram: SystemProgram.programId,
       })
-      .signers([admin])
+      .signers([manager])
       .rpc();
 
     // Verify config account fields
