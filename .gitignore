@@ -19,3 +19,6 @@ node_modules
 dist
 build
 test-ledger
+.env
+.env.old
+.env.sample

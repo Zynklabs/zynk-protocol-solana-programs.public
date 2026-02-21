@@ -1,9 +1,8 @@
-import { AnchorProvider, Program, setProvider } from "@project-serum/anchor";
+import { AnchorProvider, Program, Wallet } from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
-import bs58 from "bs58"
-import { IDL } from "./idl.js"
-import { programId, rpcUrl } from "./constants.js";
-import { Wallet } from "@sqds/sdk";
+import bs58 from "bs58";
+import IDL from "../target/idl/zynk_core.json" with { type: "json" }; 
+import { rpcUrl } from "./constants.js";
 
 
 function loadKeypair(walletKey) {
@@ -15,21 +14,21 @@ function loadKeypair(walletKey) {
     return Keypair.fromSecretKey(secretKey);
 }
 
-function getConnector(walletKey = "admin") {
+function getConnector(walletKey = "manager", idl = IDL) {
     const keyPair = loadKeypair(walletKey)
     const wallet = new Wallet(keyPair)
 
     const connection = new Connection(rpcUrl, "confirmed")
+    
     const provider = new AnchorProvider(connection, wallet, { commitment: "confirmed" });
-    setProvider(provider);
-
-    const program = new Program(IDL, programId, provider);
+    
+    const program = new Program(idl, provider);
 
     return { program, provider, keyPair, connection }
 }
 
 
-const { program } = getConnector("admin")
+const { program } = getConnector("manager")
 
 const [configPDA, _] = PublicKey.findProgramAddressSync(
     [Buffer.from("config")],

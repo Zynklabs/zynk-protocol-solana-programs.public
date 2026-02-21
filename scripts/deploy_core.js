@@ -71,7 +71,7 @@ export function createKeypairFromEnv(envVar, fallbackLabel) {
 export async function deploy() {
   try {
     // Create admin wallet from private key in .env file
-    console.log("Loading admin wallet from environment variables...");
+    console.log("Loading manager wallet from environment variables...");
     const manager = createKeypairFromEnv(
       "MANAGER_WALLET_PRIVATE_KEY",
       "manager-wallet"
