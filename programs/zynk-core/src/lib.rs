@@ -15,9 +15,9 @@ use anchor_lang::solana_program::{
     hash::hash,
 };
 
-declare_id!("3AfnoobubxiCpVuFXALzDfNSaD4AjgWvFuqKJGm5Nay3");
+declare_id!("ZYNKuSAuhsfPU7Ky9jT8TNXRJLQSeLbBBAHrq279PTk");
 
-pub const DOMAIN_SEPARATOR: u64 = 1151111081099710;
+pub const DOMAIN_SEPARATOR: u64 = 115111123810997;
 
 
 #[error_code]
@@ -1081,7 +1081,7 @@ pub struct Initialize<'info> {
     pub config: Account<'info, Config>,
     #[account(
         mut,
-        constraint = manager.key() == pubkey!("6jPvMnEkz5NUJrbVq2BGdWgWYFXVE4dRpitgM7cknMfN") @ CustomError::UnauthorizedManager
+        constraint = manager.key() == pubkey!("CRYpBZS8fFHBMTmypUoxXWdiQ8jVcnEVukGzNvuzRUeb") @ CustomError::UnauthorizedManager
     )]
     pub manager: Signer<'info>,
 

@@ -5,20 +5,26 @@ import IDL from "../target/idl/zynk_core.json" with { type: "json" };
 import { rpcUrl } from "./constants.js";
 
 
-function loadKeypair(walletKey) {
+function loadKeypair(walletKey = "manager", options = { getRawBytes: false }) {
     const envName = `${walletKey.toUpperCase()}_WALLET_PRIVATE_KEY`
     const raw = process.env[envName];
     if (!raw) throw new Error(`${envName} not set`);
 
     const secretKey = bs58.decode(raw.trim());
-    return Keypair.fromSecretKey(secretKey);
+    const keyPair = Keypair.fromSecretKey(secretKey);
+    
+    if (options?.getRawBytes) {
+      return { keyPair, raw: Array.from(secretKey) }
+    }
+    
+    return keyPair;
 }
 
 function getConnector(walletKey = "manager", idl = IDL) {
     const keyPair = loadKeypair(walletKey)
     const wallet = new Wallet(keyPair)
 
-    const connection = new Connection(rpcUrl, "confirmed")
+    const connection = new Connection("https://api.mainnet-beta.solana.com", "confirmed")
     
     const provider = new AnchorProvider(connection, wallet, { commitment: "confirmed" });
     
