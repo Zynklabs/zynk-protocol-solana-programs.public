@@ -4,9 +4,11 @@ skip-lint = false
 
 [programs.localnet]
 zynk_core = "3AfnoobubxiCpVuFXALzDfNSaD4AjgWvFuqKJGm5Nay3"
+zynk_orbit = "BeaxD6e6Gut7b7UanFDoKZ5ndY77aSz8tAAVPKHF9PNx"
 
 [programs.devnet]
-zynk_core = "4JKLFbtb3B8JNB82PsNwH5FjHG9pX8awPSRiMLXYy7Br"
+zynk_core = "ZynkcJyxiBTs9ePTQzHh7ckDDnwrLjuNVUbisF6hC7K"
+zynk_orbit = "Zynko1Dup7Cv2quEqLRuCs9Ds8vwELrWZk4eTLFXVCL"
 
 [registry]
 url = "https://api.apr.dev"

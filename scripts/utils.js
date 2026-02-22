@@ -24,7 +24,7 @@ function getConnector(walletKey = "manager", idl = IDL) {
     const keyPair = loadKeypair(walletKey)
     const wallet = new Wallet(keyPair)
 
-    const connection = new Connection("https://api.mainnet-beta.solana.com", "confirmed")
+    const connection = new Connection(rpcUrl, "confirmed")
     
     const provider = new AnchorProvider(connection, wallet, { commitment: "confirmed" });
     
