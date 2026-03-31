@@ -1154,3 +1154,169 @@ describe("Transfer to LP tests", () => {
       }
     });
   });
+
+describe("deposit tests", () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+
+  const program = anchor.workspace.ZynkOrbit as Program;
+
+  const receiverOwner = new PublicKey("GbNjfHHBLFn3epGUwKQacbTD4YBqAMLNHHtKRNATHaep");
+
+  let mint: PublicKey;
+  let spenderTokenAccount: PublicKey;
+  let receiverTokenAccount: PublicKey;
+
+  const spender = Keypair.generate();
+
+  before(async () => {
+    await provider.connection.confirmTransaction(
+      await provider.connection.requestAirdrop(spender.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL)
+    );
+
+    mint = await createMint(provider.connection, spender, spender.publicKey, null, 6);
+
+    spenderTokenAccount = await createAccount(provider.connection, spender, mint, spender.publicKey);
+    await mintTo(provider.connection, spender, mint, spenderTokenAccount, spender, 1_000_000);
+
+    receiverTokenAccount = await createAccount(provider.connection, spender, mint, receiverOwner);
+  });
+
+  it("Happy path: spender deposits tokens into receiver", async () => {
+    const depositAmount = 250_000;
+
+    const spenderBefore = await getAccount(provider.connection, spenderTokenAccount);
+    const receiverBefore = await getAccount(provider.connection, receiverTokenAccount);
+
+    await program.methods
+      .deposit(new BN(depositAmount))
+      .accounts({
+        spender: spender.publicKey,
+        spenderTokenAccount,
+        receiverTokenAccount,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([spender])
+      .rpc();
+
+    const spenderAfter = await getAccount(provider.connection, spenderTokenAccount);
+    const receiverAfter = await getAccount(provider.connection, receiverTokenAccount);
+
+    assert.equal(Number(spenderAfter.amount), Number(spenderBefore.amount) - depositAmount);
+    assert.equal(Number(receiverAfter.amount), Number(receiverBefore.amount) + depositAmount);
+  });
+
+  it("Happy path: anyone (not a special wallet) can call deposit", async () => {
+    const randomSpender = Keypair.generate();
+    await provider.connection.confirmTransaction(
+      await provider.connection.requestAirdrop(randomSpender.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL)
+    );
+    const randomSpenderAta = await createAccount(provider.connection, randomSpender, mint, randomSpender.publicKey);
+    await mintTo(provider.connection, randomSpender, mint, randomSpenderAta, spender, 500_000);
+
+    await program.methods
+      .deposit(new BN(100_000))
+      .accounts({
+        spender: randomSpender.publicKey,
+        spenderTokenAccount: randomSpenderAta,
+        receiverTokenAccount,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([randomSpender])
+      .rpc();
+
+    const ata = await getAccount(provider.connection, randomSpenderAta);
+    assert.equal(Number(ata.amount), 400_000);
+  });
+
+  it("Sad path: spender does not own the source token account", async () => {
+    const interloper = Keypair.generate();
+    await provider.connection.confirmTransaction(
+      await provider.connection.requestAirdrop(interloper.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL)
+    );
+
+    try {
+      // interloper passes their key as `spender` but spenderTokenAccount belongs to `spender`
+      await program.methods
+        .deposit(new BN(10_000))
+        .accounts({
+          spender: interloper.publicKey,
+          spenderTokenAccount,           // owned by `spender`, not interloper
+          receiverTokenAccount,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([interloper])
+        .rpc();
+      assert.fail("Should have failed: interloper cannot sign for a token account they don't own");
+    } catch (err: any) {
+      const logs = err.logs ?? [];
+      assert(
+        logs.some((l: string) => l.includes("failed") || l.includes("ConstraintOwner")),
+        "Expected owner constraint failure"
+      );
+    }
+  });
+
+  it("Sad path: receiver token account not owned by hardcoded receiver address", async () => {
+    const fakeReceiverOwner = Keypair.generate();
+    await provider.connection.confirmTransaction(
+      await provider.connection.requestAirdrop(fakeReceiverOwner.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL)
+    );
+    const fakeReceiverTokenAccount = await createAccount(
+      provider.connection,
+      fakeReceiverOwner,
+      mint,
+      fakeReceiverOwner.publicKey
+    );
+
+    try {
+      await program.methods
+        .deposit(new BN(10_000))
+        .accounts({
+          spender: spender.publicKey,
+          spenderTokenAccount,
+          receiverTokenAccount: fakeReceiverTokenAccount, // not owned by hardcoded receiver
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([spender])
+        .rpc();
+      assert.fail("Should have failed: receiver token account not owned by hardcoded receiver address");
+    } catch (err: any) {
+      const logs = err.logs ?? [];
+      assert(
+        logs.some((l: string) => l.includes("ConstraintOwner") || l.includes("failed")),
+        "Expected receiver owner constraint failure"
+      );
+    }
+  });
+
+  it("Sad path: insufficient balance", async () => {
+    const broke = Keypair.generate();
+    await provider.connection.confirmTransaction(
+      await provider.connection.requestAirdrop(broke.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL)
+    );
+    const brokeAta = await createAccount(provider.connection, broke, mint, broke.publicKey);
+    // mint only 50 tokens but try to deposit 1000
+    await mintTo(provider.connection, broke, mint, brokeAta, spender, 50);
+
+    try {
+      await program.methods
+        .deposit(new BN(1_000))
+        .accounts({
+          spender: broke.publicKey,
+          spenderTokenAccount: brokeAta,
+          receiverTokenAccount,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([broke])
+        .rpc();
+      assert.fail("Should have failed: insufficient token balance");
+    } catch (err: any) {
+      const logs = err.logs ?? [];
+      assert(
+        logs.some((l: string) => l.includes("failed")),
+        "Expected insufficient funds error"
+      );
+    }
+  });
+});
