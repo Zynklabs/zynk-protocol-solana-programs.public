@@ -11,6 +11,15 @@ declare_id!("ZYNKyAqtYQhU838QStZaVevZYMeWBrtDiRdDDxjpLXU");
 
 pub const DOMAIN_SEPARATOR: u64 = 115131153410997;
 
+#[event]
+pub struct DepositEvent {
+    pub spender: Pubkey,
+    pub receiver: Pubkey,
+    pub amount: u64,
+    pub request_id: String,
+    pub domain_separator: u64
+}
+
 pub fn verify_signature_syscall(
     ix_sysvar_account: &AccountInfo,
     signer_pubkey: &Pubkey,
@@ -43,7 +52,7 @@ pub fn verify_signature_syscall(
 pub mod zynk_orbit {
     use super::*;
     
-    pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
+    pub fn deposit(ctx: Context<Deposit>, amount: u64, request_id: String) -> Result<()> {
         let cpi_accounts = Transfer {
             from: ctx.accounts.spender_token_account.to_account_info(),
             to: ctx.accounts.receiver_token_account.to_account_info(),
@@ -51,6 +60,15 @@ pub mod zynk_orbit {
         };
         let cpi_ctx = CpiContext::new(ctx.accounts.token_program.to_account_info(), cpi_accounts);
         token::transfer(cpi_ctx, amount)?;
+        
+        emit!(DepositEvent {
+            spender: ctx.accounts.spender.key(),
+            receiver: ctx.accounts.receiver_token_account.owner.key(),
+            amount,
+            request_id,
+            domain_separator: DOMAIN_SEPARATOR
+        });
+
         Ok(())
     }
 

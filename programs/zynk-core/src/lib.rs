@@ -197,6 +197,7 @@ pub struct OrderAttested {
     pub origin: String,
     pub proxy: String,
     pub target: String,
+    pub txn_id: String,
     pub txn: String,
     pub proxy_txn: Option<String>,
     pub asset: String,

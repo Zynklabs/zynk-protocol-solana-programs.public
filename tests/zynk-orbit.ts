@@ -1188,8 +1188,22 @@ describe("deposit tests", () => {
     const spenderBefore = await getAccount(provider.connection, spenderTokenAccount);
     const receiverBefore = await getAccount(provider.connection, receiverTokenAccount);
 
+    const requestId = "req-1";
+    
+    const listener = program.addEventListener("depositEvent", (event, _slot) => {
+      try {
+        assert.equal(event.domainSeparator.toNumber(), DOMAIN_SEPARATOR)
+        assert.equal(event.spender.toBase58(), spender.publicKey.toBase58())
+        assert.equal(event.receiver.toBase58(), receiverOwner.toBase58())
+        assert.equal(event.amount.toNumber(), depositAmount)
+        assert.equal(event.requestId, requestId)
+      } catch (err) {
+        throw err;
+      }
+    });
+    
     await program.methods
-      .deposit(new BN(depositAmount))
+      .deposit(new BN(depositAmount), requestId)
       .accounts({
         spender: spender.publicKey,
         spenderTokenAccount,
@@ -1204,9 +1218,13 @@ describe("deposit tests", () => {
 
     assert.equal(Number(spenderAfter.amount), Number(spenderBefore.amount) - depositAmount);
     assert.equal(Number(receiverAfter.amount), Number(receiverBefore.amount) + depositAmount);
+  
+    await program.removeEventListener(listener);
   });
 
   it("Happy path: anyone (not a special wallet) can call deposit", async () => {
+    const depositAmount = 100_000;
+    
     const randomSpender = Keypair.generate();
     await provider.connection.confirmTransaction(
       await provider.connection.requestAirdrop(randomSpender.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL)
@@ -1214,8 +1232,22 @@ describe("deposit tests", () => {
     const randomSpenderAta = await createAccount(provider.connection, randomSpender, mint, randomSpender.publicKey);
     await mintTo(provider.connection, randomSpender, mint, randomSpenderAta, spender, 500_000);
 
+    const requestId = "req-2";
+    
+    const listener = program.addEventListener("depositEvent", (event, _slot) => {
+      try {
+        assert.equal(event.domainSeparator.toNumber(), DOMAIN_SEPARATOR)
+        assert.equal(event.spender.toBase58(), randomSpender.publicKey.toBase58())
+        assert.equal(event.receiver.toBase58(), receiverOwner.toBase58())
+        assert.equal(event.amount.toNumber(), depositAmount)
+        assert.equal(event.requestId, requestId)
+      } catch (err) {
+        throw err;
+      }
+    });
+    
     await program.methods
-      .deposit(new BN(100_000))
+      .deposit(new BN(depositAmount), requestId)
       .accounts({
         spender: randomSpender.publicKey,
         spenderTokenAccount: randomSpenderAta,
@@ -1227,6 +1259,8 @@ describe("deposit tests", () => {
 
     const ata = await getAccount(provider.connection, randomSpenderAta);
     assert.equal(Number(ata.amount), 400_000);
+    
+    await program.removeEventListener(listener);
   });
 
   it("Sad path: spender does not own the source token account", async () => {
@@ -1235,10 +1269,11 @@ describe("deposit tests", () => {
       await provider.connection.requestAirdrop(interloper.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL)
     );
 
+    const requestId = "req-3";
     try {
       // interloper passes their key as `spender` but spenderTokenAccount belongs to `spender`
       await program.methods
-        .deposit(new BN(10_000))
+        .deposit(new BN(10_000), requestId)
         .accounts({
           spender: interloper.publicKey,
           spenderTokenAccount,           // owned by `spender`, not interloper
@@ -1269,9 +1304,10 @@ describe("deposit tests", () => {
       fakeReceiverOwner.publicKey
     );
 
+    const requestId = "req-4";
     try {
       await program.methods
-        .deposit(new BN(10_000))
+        .deposit(new BN(10_000), requestId)
         .accounts({
           spender: spender.publicKey,
           spenderTokenAccount,
@@ -1299,9 +1335,10 @@ describe("deposit tests", () => {
     // mint only 50 tokens but try to deposit 1000
     await mintTo(provider.connection, broke, mint, brokeAta, spender, 50);
 
+    const requestId = "req-4";
     try {
       await program.methods
-        .deposit(new BN(1_000))
+        .deposit(new BN(1_000), requestId)
         .accounts({
           spender: broke.publicKey,
           spenderTokenAccount: brokeAta,
