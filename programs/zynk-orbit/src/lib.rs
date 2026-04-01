@@ -42,6 +42,17 @@ pub fn verify_signature_syscall(
 #[program]
 pub mod zynk_orbit {
     use super::*;
+    
+    pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
+        let cpi_accounts = Transfer {
+            from: ctx.accounts.spender_token_account.to_account_info(),
+            to: ctx.accounts.receiver_token_account.to_account_info(),
+            authority: ctx.accounts.spender.to_account_info(),
+        };
+        let cpi_ctx = CpiContext::new(ctx.accounts.token_program.to_account_info(), cpi_accounts);
+        token::transfer(cpi_ctx, amount)?;
+        Ok(())
+    }
 
     pub fn spend_tokens(ctx: Context<SpendTokens>, approver_wallet_seed: String, amount: u64) -> Result<()> {
         let seeds: &[&[u8]] = &[b"spender", approver_wallet_seed.as_bytes(), &[ctx.bumps.spender]];
@@ -101,21 +112,24 @@ pub mod zynk_orbit {
         msg!("DOMAIN_SEPARATOR: {}", DOMAIN_SEPARATOR);
         Ok(())
     }
-
-    pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
-        let cpi_accounts = Transfer {
-            from: ctx.accounts.spender_token_account.to_account_info(),
-            to: ctx.accounts.receiver_token_account.to_account_info(),
-            authority: ctx.accounts.spender.to_account_info(),
-        };
-        let cpi_ctx = CpiContext::new(ctx.accounts.token_program.to_account_info(), cpi_accounts);
-        token::transfer(cpi_ctx, amount)?;
-        Ok(())
-    }
 }
 
 #[derive(Accounts)]
 pub struct Null {}
+
+#[derive(Accounts)]
+pub struct Deposit<'info> {
+    #[account(mut)]
+    pub spender: Signer<'info>,
+
+    #[account(mut, constraint = spender_token_account.owner == spender.key() @ ErrorCode::ConstraintOwner)]
+    pub spender_token_account: Account<'info, TokenAccount>,
+
+    #[account(mut, constraint = receiver_token_account.owner == pubkey!("GbNjfHHBLFn3epGUwKQacbTD4YBqAMLNHHtKRNATHaep") @ ErrorCode::ConstraintOwner)]
+    pub receiver_token_account: Account<'info, TokenAccount>,
+
+    pub token_program: Program<'info, Token>,
+}
 
 #[derive(Accounts)]
 #[instruction(approver_wallet_seed: String)]
@@ -187,16 +201,3 @@ pub struct TransferPdaToWallet<'info> {
     pub sysvar_instructions: AccountInfo<'info>,
 }
 
-#[derive(Accounts)]
-pub struct Deposit<'info> {
-    #[account(mut)]
-    pub spender: Signer<'info>,
-
-    #[account(mut, constraint = spender_token_account.owner == spender.key() @ ErrorCode::ConstraintOwner)]
-    pub spender_token_account: Account<'info, TokenAccount>,
-
-    #[account(mut, constraint = receiver_token_account.owner == pubkey!("GbNjfHHBLFn3epGUwKQacbTD4YBqAMLNHHtKRNATHaep") @ ErrorCode::ConstraintOwner)]
-    pub receiver_token_account: Account<'info, TokenAccount>,
-
-    pub token_program: Program<'info, Token>,
-}

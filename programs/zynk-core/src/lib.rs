@@ -545,14 +545,12 @@ pub mod zynk_core {
     /// # Arguments
     /// * `ctx` - The [`Replenish`] context containing all required accounts.
     /// * `order_id` - The unique identifier of the order being replenished.
-    /// * `validity` - A Unix timestamp that must be in the future to validate the replenishment.
     /// * `amount` - The amount of tokens to transfer into the order.
     /// * `close_order` - Whether the order should be closed after replenishment.
     /// * `meta` - Optional metadata emitted with the event.
     ///
     /// # Behavior
     /// - Fails if the contract is paused.
-    /// - Ensures the provided validity timestamp is in the future.
     /// - Transfers tokens from the partner deposit vault to the Zynk operational wallet.
     /// - Updates the tracked input amount for the order.
     /// - Optionally closes the order if conditions are met.
@@ -560,17 +558,12 @@ pub mod zynk_core {
     pub fn replenish(
         ctx: Context<Replenish>,
         order_id: [u8; 32],
-        validity: i64,
         amount: u64,
         close_order: bool,
         meta: Option<Vec<EventArg>>
     ) -> Result<()> {
         // Check if program is paused.
         require!(!ctx.accounts.config.paused, CustomError::ContractPaused);
-        
-        // Validate that validity is in future
-        let now = Clock::get()?.unix_timestamp;
-        require!(validity > now, CustomError::ValidityMustBeFuture);
 
         let order_tracker = &mut ctx.accounts.order_tracker;
             
