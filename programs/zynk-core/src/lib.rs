@@ -627,6 +627,7 @@ pub mod zynk_core {
     /// * `origin` - The originating address.
     /// * `proxy` - The proxy address involved in the transfer.
     /// * `target` - The target address on the destination chain.
+    /// * `txn_id` - A unique identifier for the transaction.
     /// * `txn` - The originating transaction hash.
     /// * `proxy_txn` - Optional proxy transaction hash.
     /// * `asset` - The asset identifier.
@@ -648,6 +649,7 @@ pub mod zynk_core {
         origin: String,
         proxy: String,
         target: String,
+        txn_id: String,
         txn: String,
         proxy_txn: Option<String>,
         asset: String,
@@ -660,11 +662,11 @@ pub mod zynk_core {
         require!(!config.paused, CustomError::ContractPaused);
         
         require!(
-            !origin.contains("::") && !proxy.contains("::") && !target.contains("::") && !txn.contains("::"),
+            !origin.contains("::") && !proxy.contains("::") && !target.contains("::") && !txn_id.contains("::"),
             CustomError::InvalidOrder
         );
 
-        let message = format!("{}::{}::{}::{}::{}::{}", DOMAIN_SEPARATOR, origin, proxy, target, txn, amount);
+        let message = format!("{}::{}::{}::{}::{}::{}", DOMAIN_SEPARATOR, origin, proxy, target, txn_id, amount);
         verify_signature_syscall(
             &ctx.accounts.sysvar_instructions,
             &config.manager,
@@ -699,6 +701,7 @@ pub mod zynk_core {
             origin,
             proxy,
             target,
+            txn_id,
             txn,
             proxy_txn,
             asset,
