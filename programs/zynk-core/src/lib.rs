@@ -95,7 +95,6 @@ pub struct Request {
     pub eta: i64,               // Earliest time the action can be executed
     pub executed: bool,         // Prevent double execution
     pub ack: bool,              // Acknowledgement flag (only by guardian)
-    pub consensus: bool,        // Is consensus request?
 }
 
 
@@ -862,7 +861,7 @@ pub mod zynk_core {
         Ok(())
     }
 
-    /// Executes a timelocked wallet or role update after conditions are met.
+    /// Executes a timelocked request after conditions are met.
     ///
     /// # Arguments
     /// * `ctx` - The [`Execute`] context containing the timelock and config accounts.
@@ -873,13 +872,12 @@ pub mod zynk_core {
     /// - Updates the corresponding configuration field.
     /// - Marks the timelock action as executed.
     /// - Emits an `Action::Executed` event.
-    pub fn execute_wallet_update(ctx: Context<Execute>) -> Result<()> {
+    pub fn execute_request(ctx: Context<Execute>) -> Result<()> {
         let timestamp = Clock::get()?.unix_timestamp;
         let req = &mut ctx.accounts.timelock;
         let action: TimelockAction = req.action.try_into()?;
 
         require!(!req.executed, CustomError::AlreadyExecuted);
-        require!(!req.consensus, CustomError::InvalidAction);
 
         let acked = req.ack;
         let eta_ready = timestamp >= req.eta;
@@ -928,7 +926,7 @@ pub mod zynk_core {
     /// - Sets the contract paused state to `false`.
     /// - Marks the timelock action as executed.
     /// - Emits an `Action::Executed` event.
-    pub fn execute_unpause(ctx: Context<Execute>) -> Result<()> {
+    pub fn unpause(ctx: Context<Execute>) -> Result<()> {
         let timestamp = Clock::get()?.unix_timestamp;
         let req = &mut ctx.accounts.timelock;
 
@@ -979,100 +977,6 @@ pub mod zynk_core {
         config.paused = true;
         Ok(())
     }
-
-    /// Requests a consensus-based administrative action.
-    ///
-    /// # Arguments
-    /// * `ctx` - The [`Consensus`] context containing the timelock account.
-    /// * `action_u8` - The encoded consensus action.
-    /// * `value` - The value associated with the action.
-    ///
-    /// # Behavior
-    /// - Marks the timelock request as consensus-based.
-    /// - Stores the requested action and value.
-    /// - Emits an `Action::Initiated` event.
-    pub fn request_consensus(
-        ctx: Context<Consensus>,
-        action_u8: u8,
-        value: Pubkey,
-    ) -> Result<()> {
-        let req = &mut ctx.accounts.timelock;
-        let _: TimelockAction = action_u8.try_into()?;
-
-        req.action = action_u8;
-        req.value = value;
-        req.consensus = true;
-
-        emit!(Action {
-            action: action_u8,
-            timelock: req.key(),
-            status: ActionStatus::Initiated,
-            timestamp: Clock::get()?.unix_timestamp,
-        });
-
-        Ok(())
-    }
-
-    /// Executes a consensus-approved administrative action.
-    ///
-    /// # Arguments
-    /// * `ctx` - The [`Ack`] context containing the timelock and config accounts.
-    ///
-    /// # Behavior
-    /// - Fails if the action has already been executed.
-    /// - Applies the approved configuration update.
-    /// - Marks the timelock as acknowledged and executed.
-    /// - Closes the timelock account.
-    /// - Emits an `Action::Executed` event.
-    pub fn execute_consensus(ctx: Context<Ack>) -> Result<()> {
-        let req = &mut ctx.accounts.timelock;
-        let action: TimelockAction = req.action.try_into()?;
-
-        require!(!req.executed, CustomError::AlreadyExecuted);
-        require!(req.consensus, CustomError::InvalidAction);
-
-        let value = req.value;
-        validate_address(&value)?;
-
-        let config = &mut ctx.accounts.config;
-
-        match action {
-            TimelockAction::TransferAdmin => config.admin = value,
-            TimelockAction::UpdateManager => config.manager = value,
-            TimelockAction::UpdateZynkCoreVault => config.zynk_core_vault = value,
-            _ => return Err(error!(CustomError::InvalidAction)),
-        }
-
-        req.ack = true;
-        req.executed = true;
-
-        emit!(Action {
-            action: req.action,
-            timelock: req.key(),
-            status: ActionStatus::Executed,
-            timestamp: Clock::get()?.unix_timestamp,
-        });
-
-        // Close the timelock account (transfer lamports back to guardian)
-        // Must not add `close = guardian` in the Ack context struct,
-        // as the struct is being used for `ack_timelock()` method too
-        // wherein account closure is not required.
-        close_account(req, &ctx.accounts.guardian)?;
-
-        Ok(())
-    }
-
-    /// Logs the domain separator used for signature construction.
-    ///
-    /// # Arguments
-    /// * `_ctx` - The [`Null`] context.
-    ///
-    /// # Behavior
-    /// - Emits the domain separator via program logs for off-chain consumers.
-    pub fn domain_separator(_ctx: Context<Null>) -> Result<()> {
-        msg!("DOMAIN_SEPARATOR: {}", DOMAIN_SEPARATOR);
-        Ok(())
-    }
 }
 
 
@@ -1088,8 +992,6 @@ pub const PARTNER_DEPOSIT_VAULT_SEED: &[u8] = b"partner_deposit_vault";
 pub const ZYNK_CORE_VAULT_SEED: &[u8] = b"zynk_core_vault";
 
 
-#[derive(Accounts)]
-pub struct Null {}
 
 #[derive(Accounts)]
 // #[instruction(admin: Pubkey, guardian: Pubkey, whitelisted_token_mints: Vec<Pubkey>)]
@@ -1336,7 +1238,6 @@ pub struct Ack<'info> {
         mut,
         seeds = [TIMELOCK_SEED, &[timelock.action]],
         bump
-        // If adding `close = guardian` here, refer to the `execute_consensus()` method
     )]
     pub timelock: Account<'info, Request>,
 
@@ -1353,32 +1254,4 @@ pub struct Pause<'info> {
     )]
     pub config: Account<'info, Config>,
     pub authority: Signer<'info>,
-}
-
-#[derive(Accounts)]
-#[instruction(action: u8)]
-pub struct Consensus<'info> {
-    #[account(
-        mut,
-        seeds = [CONFIG_SEED],
-        bump,
-        has_one = manager @ CustomError::UnauthorizedManager,
-        has_one = zynk_core_vault @ CustomError::UnauthorizedSigner
-    )]
-    pub config: Account<'info, Config>,
-
-    #[account(
-        init,
-        payer = manager,
-        space = 8 + Request::INIT_SPACE,
-        seeds = [TIMELOCK_SEED, &[action]],
-        bump
-    )]
-    pub timelock: Account<'info, Request>,
-
-    #[account(mut)]
-    pub manager: Signer<'info>,
-    pub zynk_core_vault: Signer<'info>,
-
-    pub system_program: Program<'info, System>,
 }

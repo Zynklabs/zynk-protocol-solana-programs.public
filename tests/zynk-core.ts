@@ -3924,7 +3924,7 @@ describe("zynk-core", () => {
       );
     }
 
-    // Unpause for other tests using executeUnpause with timelock
+    // Unpause for other tests using unpause with timelock
     const action = TimelockAction.Unpause;
     const [timelockPDA] = PublicKey.findProgramAddressSync(
       [Buffer.from("timelock"), Buffer.from([action])],
@@ -3953,9 +3953,8 @@ describe("zynk-core", () => {
       .signers([guardian])
       .rpc();
 
-    // Execute unpause
     await program.methods
-      .executeUnpause()
+      .unpause()
       .accounts({
         config: configPDA,
         timelock: timelockPDA,
@@ -4241,10 +4240,6 @@ describe("zynk-core", () => {
       "Timelock should not be in executed state"
     );
     assert.ok(!timelockAccount.ack, "Timelock should not be in ack'ed state");
-    assert.ok(
-      !timelockAccount.consensus,
-      "Timelock should not be a consensus request"
-    );
     assert.equal(
       timelockAccount.value.toBase58(),
       guardian.publicKey.toBase58()
@@ -4266,7 +4261,7 @@ describe("zynk-core", () => {
 
     try {
       await program.methods
-        .executeUnpause()
+        .unpause()
         .accounts({
           config: configPDA,
           timelock: timelockPDA,
@@ -4343,7 +4338,7 @@ describe("zynk-core", () => {
     try {
       ///// Execute unpause with wrong timelock /////
       await program.methods
-        .executeUnpause()
+        .unpause()
         .accounts({
           config: configPDA,
           timelock: wrongTimelockPDA,
@@ -4381,7 +4376,7 @@ describe("zynk-core", () => {
     assert.ok(timelockAccount.ack, "Timelock not ack'ed!");
 
     await program.methods
-      .executeUnpause()
+      .unpause()
       .accounts({
         config: configPDA,
         timelock: timelockPDA,
@@ -4459,187 +4454,6 @@ describe("zynk-core", () => {
       );
     }
   });
-
-  // it("Should not be able to request consensus by non-manager", async () => {
-  //   const action = TimelockAction.TransferAdmin;
-  //   const [timelockPDA, _] = PublicKey.findProgramAddressSync(
-  //     [Buffer.from("timelock"), Buffer.from([action])],
-  //     program.programId
-  //   );
-
-  //   try {
-  //     await program.methods
-  //       .requestConsensus(action, guardian.publicKey)
-  //       .accounts({
-  //         config: configPDA,
-  //         timelock: timelockPDA,
-  //         manager: admin.publicKey,
-  //         zynkCoreVault: zynkCoreVault,
-  //       })
-  //       .signers([admin, zynkCoreVault])
-  //       .rpc();
-  //   } catch (error) {
-  //     assert.include(
-  //       error.message,
-  //       "UnauthorizedManager",
-  //       "Expected UnauthorizedManager error"
-  //     );
-  //   }
-  // });
-
-  // it("Should not be able to request consensus by non-zow", async () => {
-  //   const action = TimelockAction.TransferAdmin;
-  //   const [timelockPDA, _] = PublicKey.findProgramAddressSync(
-  //     [Buffer.from("timelock"), Buffer.from([action])],
-  //     program.programId
-  //   );
-
-  //   try {
-  //     await program.methods
-  //       .requestConsensus(action, guardian.publicKey)
-  //       .accounts({
-  //         config: configPDA,
-  //         timelock: timelockPDA,
-  //         manager: manager.publicKey,
-  //         zynkCoreVault: manager.publicKey,
-  //       })
-  //       .signers([manager, manager])
-  //       .rpc();
-  //   } catch (error) {
-  //     assert.include(
-  //       error.message,
-  //       "UnauthorizedSigner",
-  //       "Expected UnauthorizedSigner error"
-  //     );
-  //   }
-  // });
-
-  // it("Should be able to request consensus by valid signers", async () => {
-  //   const action = TimelockAction.TransferAdmin;
-  //   const result = PublicKey.findProgramAddressSync(
-  //     [Buffer.from("timelock"), Buffer.from([action])],
-  //     program.programId
-  //   );
-  //   timelockPDA = result[0];
-
-  //   await program.methods
-  //     .requestConsensus(action, guardian.publicKey)
-  //     .accounts({
-  //       config: configPDA,
-  //       timelock: timelockPDA,
-  //       manager: manager.publicKey,
-  //       zynkCoreVault: zynkCoreVault,
-  //     })
-  //     .signers([manager])
-  //     .rpc();
-
-  //   let timelockAccount = await program.account.request.fetch(timelockPDA);
-  //   assert.equal(timelockAccount.action, action);
-  //   assert.ok(
-  //     timelockAccount.consensus,
-  //     "Timelock should be a consensus request"
-  //   );
-  //   assert.ok(
-  //     !timelockAccount.executed,
-  //     "Timelock should not be in executed state"
-  //   );
-  //   assert.ok(!timelockAccount.ack, "Timelock should not be in ack'ed state");
-  //   assert.equal(
-  //     timelockAccount.value.toBase58(),
-  //     guardian.publicKey.toBase58()
-  //   );
-  // });
-
-  // it("Should be able to execute consensus request by guardian", async () => {
-  //   let timelockAccount = await program.account.request.fetch(timelockPDA);
-  //   assert.ok(
-  //     timelockAccount.consensus,
-  //     "Timelock should be a consensus request"
-  //   );
-
-  //   await program.methods
-  //     .executeConsensus()
-  //     .accounts({
-  //       config: configPDA,
-  //       timelock: timelockPDA,
-  //       guardian: guardian.publicKey,
-  //     })
-  //     .signers([guardian])
-  //     .rpc();
-
-  //   // timelock account must be closed
-  //   try {
-  //     timelockAccount = await program.account.request.fetch(timelockPDA);
-  //     console.log(timelockAccount);
-  //   } catch (error) {
-  //     assert.include(
-  //       error.message,
-  //       "Account does not exist",
-  //       "Expected `Account does not exist` error"
-  //     );
-  //   }
-
-  //   const configAccount = await program.account.config.fetch(configPDA);
-  //   assert.equal(configAccount.admin.toBase58(), guardian.publicKey.toBase58());
-  // });
-
-  // it("Should not be able to execute non-consensus request by guardian", async () => {
-  //   const action = TimelockAction.TransferAdmin;
-  //   const [timelockPDA, _] = PublicKey.findProgramAddressSync(
-  //     [Buffer.from("timelock"), Buffer.from([action])],
-  //     program.programId
-  //   );
-
-  //   await program.methods
-  //     .requestTimelock(action, guardian.publicKey)
-  //     .accounts({
-  //       config: configPDA,
-  //       timelock: timelockPDA,
-  //       manager: manager.publicKey,
-  //     })
-  //     .signers([manager])
-  //     .rpc();
-
-  //   let timelockAccount = await program.account.request.fetch(timelockPDA);
-  //   assert.equal(timelockAccount.action, action);
-  //   assert.ok(
-  //     !timelockAccount.consensus,
-  //     "Timelock should not be a consensus request"
-  //   );
-  //   assert.equal(
-  //     timelockAccount.value.toBase58(),
-  //     guardian.publicKey.toBase58()
-  //   );
-
-  //   try {
-  //     await program.methods
-  //       .executeConsensus()
-  //       .accounts({
-  //         config: configPDA,
-  //         timelock: timelockPDA,
-  //         guardian: guardian.publicKey,
-  //       })
-  //       .signers([guardian])
-  //       .rpc();
-  //   } catch (error) {
-  //     assert.include(
-  //       error.message,
-  //       "InvalidAction",
-  //       "Expected InvalidAction error"
-  //     );
-  //   }
-
-  //   timelockAccount = await program.account.request.fetch(timelockPDA);
-  //   assert.ok(
-  //     !timelockAccount.executed,
-  //     "Timelock should not be in executed state"
-  //   );
-  //   assert.ok(!timelockAccount.ack, "Timelock should not be in ack'ed state");
-  //   assert.ok(
-  //     !timelockAccount.consensus,
-  //     "Timelock should not be a consensus request"
-  //   );
-  // });
 
   const EthereumzynkCoreVaultAddress = "0xy82t3g2v3263712863728g3281378232";
   const EthereumRecipientAddress = "0x12876382t3fg237623r75e121321e21";
