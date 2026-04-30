@@ -1,6 +1,12 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
-import { PublicKey, Keypair, SystemProgram, Ed25519Program, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
+import {
+  PublicKey,
+  Keypair,
+  SystemProgram,
+  Ed25519Program,
+  SYSVAR_INSTRUCTIONS_PUBKEY,
+} from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
@@ -14,16 +20,16 @@ import { ZynkCore } from "../target/types/zynk_core";
 import { assert, expect } from "chai";
 import { createHash, randomUUID } from "crypto";
 import { TextEncoder } from "util";
-import nacl from 'tweetnacl';
 import { sha256 } from "@noble/hashes/sha2";
+import nacl from "tweetnacl";
 
 const zynkPartnerId = `zp_32142`;
 const generateOrderId = (): Buffer => {
   const transactionId = `txn_${randomUUID()}`;
-  
+
   const orderKey = `${zynkPartnerId}::${transactionId}`;
-  const hash = createHash('sha256').update(orderKey).digest('hex');
-  
+  const hash = createHash("sha256").update(orderKey).digest("hex");
+
   return Buffer.from(hash.slice(0, 32));
 };
 
@@ -37,28 +43,27 @@ const buildEd25519Ix = (msg: string, signer: Keypair) => {
     signature,
   });
 
-  return { ed25519Ix, signature }
-}
+  return { ed25519Ix, signature };
+};
 
-const DOMAIN_SEPARATOR = 1151111081099710
+const DOMAIN_SEPARATOR = 1151111081099710;
 const MAX_U64 = "18446744073709551615";
-
 
 const TimelockAction = {
   TransferAdmin: 0,
   UpdateManager: 1,
   UpdateGuardian: 2,
-  UpdateZynkOpWallet: 3,
-  Unpause: 4
-}
+  UpdateZynkCoreVault: 3,
+  Unpause: 4,
+};
 
 const timelockDelays = {
   [TimelockAction.TransferAdmin]: 24 * 60 * 60,
   [TimelockAction.UpdateManager]: 12 * 60 * 60,
   [TimelockAction.UpdateGuardian]: 48 * 60 * 60,
-  [TimelockAction.UpdateZynkOpWallet]: 12 * 60 * 60,
+  [TimelockAction.UpdateZynkCoreVault]: 12 * 60 * 60,
   [TimelockAction.Unpause]: 6 * 60 * 60,
-}
+};
 
 describe("zynk-core", () => {
   // Configure the client to use the local cluster
@@ -69,15 +74,19 @@ describe("zynk-core", () => {
 
   // Test wallets (keypairs)
   const admin = Keypair.generate();
-  const zynkOpWallet = Keypair.generate();
   const manager = Keypair.generate();
   const guardian = Keypair.generate();
   const partnerOperationalWallet = Keypair.generate();
-  
+
+  const [zynkCoreVault] = PublicKey.findProgramAddressSync(
+    [Buffer.from("zynk_core_vault")],
+    program.programId
+  );
+
   // Partner ID for PDA derivation (32 bytes)
   const partnerId = Buffer.alloc(32);
   partnerId.write(zynkPartnerId, 0, "utf-8");
-  
+
   // Partner deposit vault PDA
   const [partnerDepositVaultPDA] = PublicKey.findProgramAddressSync(
     [Buffer.from("partner_deposit_vault"), partnerId],
@@ -86,7 +95,7 @@ describe("zynk-core", () => {
 
   // Config account PDA (to be initialized)
   const [configPDA] = PublicKey.findProgramAddressSync(
-    [Buffer.from("config")],
+    [Buffer.from("config::v4")],
     program.programId
   );
 
@@ -96,10 +105,10 @@ describe("zynk-core", () => {
   let tokenMint3: PublicKey;
   let invalidTokenMint: PublicKey; // Token not in whitelist
 
-  let zynkOpTokenAccount: PublicKey;
-  let zynkOpTokenAccount2: PublicKey;
-  let zynkOpTokenAccount3: PublicKey;
-  let zynkOpTokenAccountInvalid: PublicKey;
+  let zcvTokenAccount: PublicKey;
+  let zcvTokenAccount2: PublicKey;
+  let zcvTokenAccount3: PublicKey;
+  let zcvTokenAccountInvalid: PublicKey;
 
   let partnerOperationalTokenAccount: PublicKey;
   let partnerOperationalTokenAccount2: PublicKey;
@@ -110,7 +119,7 @@ describe("zynk-core", () => {
   let partnerDepositTokenAccount2: PublicKey;
   let partnerDepositTokenAccount3: PublicKey;
   let partnerDepositTokenAccountInvalid: PublicKey;
-  
+
   let timelockPDA: PublicKey;
 
   let currentOrderId: Buffer;
@@ -119,8 +128,8 @@ describe("zynk-core", () => {
   // Helper to derive order tracker PDA
   const deriveOrderTrackerPDA = (
     orderId: Buffer,
-    target: PublicKey | string = partnerOperationalWallet.publicKey,
-  ): PublicKey=> {
+    target: PublicKey | string = partnerOperationalWallet.publicKey
+  ): PublicKey => {
     return PublicKey.findProgramAddressSync(
       [
         Buffer.from("order_tracker"),
@@ -133,20 +142,14 @@ describe("zynk-core", () => {
 
   before(async () => {
     // Airdrop SOL to test wallets for transactions
-    for (const kp of [
-      admin,
-      manager,
-      guardian,
-      zynkOpWallet,
-      partnerOperationalWallet,
-    ]) {
+    for (const kp of [admin, manager, guardian, partnerOperationalWallet]) {
       const tx = await provider.connection.requestAirdrop(
         kp.publicKey,
         2 * anchor.web3.LAMPORTS_PER_SOL
       );
-      await provider.connection.confirmTransaction(tx, 'confirmed');
+      await provider.connection.confirmTransaction(tx, "confirmed");
     }
-    
+
     // Create test tokens (using admin as mint authority)
     tokenMint = await createMint(
       provider.connection,
@@ -163,7 +166,7 @@ describe("zynk-core", () => {
       null,
       9
     );
-    
+
     tokenMint3 = await createMint(
       provider.connection,
       admin,
@@ -185,11 +188,15 @@ describe("zynk-core", () => {
     );
 
     // Create token accounts for all wallets (tokenMint)
-    zynkOpTokenAccount = await createAccount(
+    zcvTokenAccount = await createAssociatedTokenAccount(
       provider.connection,
-      zynkOpWallet,
+      admin,
       tokenMint,
-      zynkOpWallet.publicKey
+      zynkCoreVault,
+      { commitment: "confirmed" },
+      TOKEN_PROGRAM_ID,
+      ASSOCIATED_TOKEN_PROGRAM_ID,
+      true // allowOwnerOffCurve
     );
 
     partnerOperationalTokenAccount = await createAccount(
@@ -198,7 +205,7 @@ describe("zynk-core", () => {
       tokenMint,
       partnerOperationalWallet.publicKey
     );
-    
+
     partnerDepositTokenAccount = await createAssociatedTokenAccount(
       provider.connection,
       partnerOperationalWallet,
@@ -208,14 +215,18 @@ describe("zynk-core", () => {
       TOKEN_PROGRAM_ID,
       ASSOCIATED_TOKEN_PROGRAM_ID,
       true // allowOwnerOffCurve
-    )
+    );
 
     // Create token accounts for tokenMint2
-    zynkOpTokenAccount2 = await createAccount(
+    zcvTokenAccount2 = await createAssociatedTokenAccount(
       provider.connection,
-      zynkOpWallet,
+      admin,
       tokenMint2,
-      zynkOpWallet.publicKey
+      zynkCoreVault,
+      { commitment: "confirmed" },
+      TOKEN_PROGRAM_ID,
+      ASSOCIATED_TOKEN_PROGRAM_ID,
+      true // allowOwnerOffCurve
     );
 
     partnerOperationalTokenAccount2 = await createAccount(
@@ -224,7 +235,7 @@ describe("zynk-core", () => {
       tokenMint2,
       partnerOperationalWallet.publicKey
     );
-    
+
     partnerDepositTokenAccount2 = await createAssociatedTokenAccount(
       provider.connection,
       partnerOperationalWallet,
@@ -234,17 +245,18 @@ describe("zynk-core", () => {
       TOKEN_PROGRAM_ID,
       ASSOCIATED_TOKEN_PROGRAM_ID,
       true // allowOwnerOffCurve
-    )
-    
+    );
+
     // Create token accounts for tokenMint3
-    zynkOpTokenAccount3 = await createAccount(
+    zcvTokenAccount3 = await createAssociatedTokenAccount(
       provider.connection,
-      zynkOpWallet,
+      admin,
       tokenMint3,
-      zynkOpWallet.publicKey,
-      undefined,
-      undefined,
-      TOKEN_2022_PROGRAM_ID
+      zynkCoreVault,
+      { commitment: "confirmed" },
+      TOKEN_2022_PROGRAM_ID,
+      ASSOCIATED_TOKEN_PROGRAM_ID,
+      true // allowOwnerOffCurve
     );
 
     partnerOperationalTokenAccount3 = await createAccount(
@@ -256,7 +268,7 @@ describe("zynk-core", () => {
       undefined,
       TOKEN_2022_PROGRAM_ID
     );
-    
+
     partnerDepositTokenAccount3 = await createAssociatedTokenAccount(
       provider.connection,
       partnerOperationalWallet,
@@ -266,14 +278,18 @@ describe("zynk-core", () => {
       TOKEN_2022_PROGRAM_ID,
       ASSOCIATED_TOKEN_PROGRAM_ID,
       true // allowOwnerOffCurve
-    )
-    
+    );
+
     // Create token accounts for invalid token (not in whitelist)
-    zynkOpTokenAccountInvalid = await createAccount(
+    zcvTokenAccountInvalid = await createAssociatedTokenAccount(
       provider.connection,
-      zynkOpWallet,
+      admin,
       invalidTokenMint,
-      zynkOpWallet.publicKey
+      zynkCoreVault,
+      { commitment: "confirmed" },
+      TOKEN_PROGRAM_ID,
+      ASSOCIATED_TOKEN_PROGRAM_ID,
+      true // allowOwnerOffCurve
     );
 
     partnerOperationalTokenAccountInvalid = await createAccount(
@@ -282,7 +298,7 @@ describe("zynk-core", () => {
       invalidTokenMint,
       partnerOperationalWallet.publicKey
     );
-    
+
     partnerDepositTokenAccountInvalid = await createAssociatedTokenAccount(
       provider.connection,
       partnerOperationalWallet,
@@ -292,16 +308,16 @@ describe("zynk-core", () => {
       TOKEN_PROGRAM_ID,
       ASSOCIATED_TOKEN_PROGRAM_ID,
       true // allowOwnerOffCurve
-    )
+    );
 
-    // Mint tokens to zynkOpWallet and partnerDepositVault (tokenMint)
+    // Mint tokens to zynkCoreVault and partnerDepositVault (tokenMint)
     await mintTo(
       provider.connection,
       admin,
       tokenMint,
-      zynkOpTokenAccount,
+      zcvTokenAccount,
       admin.publicKey,
-      10000000000000 // Initial supply for zynk operator
+      10000000000000 // Initial supply for Zynk Core vault
     );
 
     await mintTo(
@@ -322,20 +338,20 @@ describe("zynk-core", () => {
       admin.publicKey,
       BigInt(MAX_U64) // Initial supply for partner deposit (max)
     );
-    
-    // Mint Token2022 tokens to zynkOpWallet and partnerDepositVault (tokenMint3)
+
+    // Mint Token2022 tokens to zynkCoreVault and partnerDepositVault (tokenMint3)
     await mintTo(
       provider.connection,
       admin,
       tokenMint3,
-      zynkOpTokenAccount3,
+      zcvTokenAccount3,
       admin.publicKey,
-      10000000000000, // Initial supply for zynk operator
+      10000000000000, // Initial supply for Zynk Core vault
       undefined,
       undefined,
       TOKEN_2022_PROGRAM_ID
     );
-    
+
     await mintTo(
       provider.connection,
       admin,
@@ -348,14 +364,14 @@ describe("zynk-core", () => {
       TOKEN_2022_PROGRAM_ID
     );
 
-    // Mint tokens to zynkOpWallet and partnerDepositVault (invalidTokenMint)
+    // Mint tokens to zynkCoreVault and partnerDepositVault (invalidTokenMint)
     await mintTo(
       provider.connection,
       admin,
       invalidTokenMint,
-      zynkOpTokenAccountInvalid,
+      zcvTokenAccountInvalid,
       admin.publicKey,
-      10000000000000 // Initial supply for zynk operator
+      10000000000000 // Initial supply for Zynk Core vault
     );
 
     await mintTo(
@@ -370,10 +386,10 @@ describe("zynk-core", () => {
 
   it("Should fail to initialize with empty whitelisted token mints vector", async () => {
     const whitelistedTokenMints: PublicKey[] = [];
-    
+
     try {
       await program.methods
-        .initialize(zynkOpWallet.publicKey, admin.publicKey, guardian.publicKey, whitelistedTokenMints)
+        .initialize(admin.publicKey, guardian.publicKey, whitelistedTokenMints)
         .accounts({
           config: configPDA,
           manager: manager.publicKey,
@@ -395,10 +411,10 @@ describe("zynk-core", () => {
     // Create a vector with a null/default PublicKey (invalid address)
     const invalidTokenMint = PublicKey.default;
     const whitelistedTokenMints: PublicKey[] = [invalidTokenMint];
-    
+
     try {
       await program.methods
-        .initialize(zynkOpWallet.publicKey, admin.publicKey, guardian.publicKey, whitelistedTokenMints)
+        .initialize(admin.publicKey, guardian.publicKey, whitelistedTokenMints)
         .accounts({
           config: configPDA,
           manager: manager.publicKey,
@@ -406,7 +422,9 @@ describe("zynk-core", () => {
         })
         .signers([manager])
         .rpc();
-      assert.fail("Expected initialize to fail with invalid token mint address");
+      assert.fail(
+        "Expected initialize to fail with invalid token mint address"
+      );
     } catch (error) {
       assert.include(
         error.message,
@@ -420,7 +438,7 @@ describe("zynk-core", () => {
     const whitelistedTokenMints: PublicKey[] = [tokenMint, tokenMint];
     try {
       await program.methods
-        .initialize(zynkOpWallet.publicKey, admin.publicKey, guardian.publicKey, whitelistedTokenMints)
+        .initialize(admin.publicKey, guardian.publicKey, whitelistedTokenMints)
         .accounts({
           config: configPDA,
           manager: manager.publicKey,
@@ -439,10 +457,14 @@ describe("zynk-core", () => {
   });
 
   it("Initializes the protocol with multiple token addresses", async () => {
-    const whitelistedTokenMints: PublicKey[] = [tokenMint, tokenMint2, tokenMint3];
-    
+    const whitelistedTokenMints: PublicKey[] = [
+      tokenMint,
+      tokenMint2,
+      tokenMint3,
+    ];
+
     await program.methods
-      .initialize(zynkOpWallet.publicKey, admin.publicKey, guardian.publicKey, whitelistedTokenMints)
+      .initialize(admin.publicKey, guardian.publicKey, whitelistedTokenMints)
       .accounts({
         config: configPDA,
         manager: manager.publicKey,
@@ -456,22 +478,32 @@ describe("zynk-core", () => {
     assert.ok(configAccount.admin.equals(admin.publicKey));
     assert.ok(configAccount.manager.equals(manager.publicKey));
     assert.ok(configAccount.guardian.equals(guardian.publicKey));
-    assert.ok(configAccount.zynkOpWallet.equals(zynkOpWallet.publicKey));
+    assert.ok(configAccount.zynkCoreVault.equals(zynkCoreVault));
     assert.equal(configAccount.paused, false);
-    
+
     // Verify all token mints are stored correctly
-    assert.equal(configAccount.whitelistedTokenMints.length, 3, "Should have 3 token mints");
-    assert.ok(configAccount.whitelistedTokenMints[0].equals(tokenMint), "First token mint should match");
-    assert.ok(configAccount.whitelistedTokenMints[1].equals(tokenMint2), "Second token mint should match");
+    assert.equal(
+      configAccount.whitelistedTokenMints.length,
+      3,
+      "Should have 3 token mints"
+    );
+    assert.ok(
+      configAccount.whitelistedTokenMints[0].equals(tokenMint),
+      "First token mint should match"
+    );
+    assert.ok(
+      configAccount.whitelistedTokenMints[1].equals(tokenMint2),
+      "Second token mint should match"
+    );
   });
 
   it("Should fail pullAndCreateOrder when amount is zero", async () => {
     const amount = new anchor.BN(0);
-    
+
     currentOrderId = generateOrderId();
     currentOrderTrackerPDA = deriveOrderTrackerPDA(currentOrderId);
 
-    try {  
+    try {
       await program.methods
         .pullAndCreateOrder(
           Array.from(partnerId),
@@ -485,16 +517,16 @@ describe("zynk-core", () => {
           manager: manager.publicKey,
           partnerDepositVault: partnerDepositVaultPDA,
           pdvTokenAccount: partnerDepositTokenAccount,
-          zynkOpWallet: zynkOpWallet.publicKey,
-          zowTokenAccount: zynkOpTokenAccount,
+          zynkCoreVault: zynkCoreVault,
+          zcvTokenAccount: zcvTokenAccount,
           beneficiaryTokenAccount: partnerOperationalTokenAccount,
           orderTracker: currentOrderTrackerPDA,
           systemProgram: SystemProgram.programId,
           mint: tokenMint,
           tokenProgram: TOKEN_PROGRAM_ID,
-          sysvarInstructions: null
+          sysvarInstructions: null,
         })
-        .signers([manager, zynkOpWallet])
+        .signers([manager])
         .rpc();
     } catch (error) {
       assert.include(
@@ -504,16 +536,17 @@ describe("zynk-core", () => {
       );
     }
   });
-  
-  it("Pulls tokens from partner_deposit_vault to zynkOpWallet and sends tokens from zynkOpWallet to partner_operational_wallet", async () => {
+
+  it("Pulls tokens from partner_deposit_vault to zynkCoreVault and sends tokens from zynkCoreVault to partner_operational_wallet", async () => {
     const amount = new anchor.BN(100000000000);
-    
+
     currentOrderId = generateOrderId();
     currentOrderTrackerPDA = deriveOrderTrackerPDA(currentOrderId);
 
-    const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
-      partnerDepositTokenAccount
-    );
+    const sourceBalance_preTx =
+      await provider.connection.getTokenAccountBalance(
+        partnerDepositTokenAccount
+      );
     expect(+sourceBalance_preTx.value.amount).to.be.gte(+amount);
 
     const destBalance_preTx = await provider.connection.getTokenAccountBalance(
@@ -533,58 +566,74 @@ describe("zynk-core", () => {
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: partnerDepositTokenAccount,
-        zynkOpWallet: zynkOpWallet.publicKey,
-        zowTokenAccount: zynkOpTokenAccount,
+        zynkCoreVault: zynkCoreVault,
+        zcvTokenAccount: zcvTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: currentOrderTrackerPDA,
         systemProgram: SystemProgram.programId,
         mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: null
+        sysvarInstructions: null,
       })
-      .signers([manager, zynkOpWallet])
+      .signers([manager])
       .rpc();
-    
+
     // Verify token pull
-    const sourceBalance_postTx = await provider.connection.getTokenAccountBalance(
-      partnerDepositTokenAccount
+    const sourceBalance_postTx =
+      await provider.connection.getTokenAccountBalance(
+        partnerDepositTokenAccount
+      );
+    assert.equal(
+      +sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount,
+      +amount
     );
-    assert.equal(+sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount, +amount)
-    
+
     // Verify token transfer
     const destBalance_postTx = await provider.connection.getTokenAccountBalance(
       partnerOperationalTokenAccount
     );
-    assert.equal(+destBalance_postTx.value.amount - +destBalance_preTx.value.amount, +amount)
+    assert.equal(
+      +destBalance_postTx.value.amount - +destBalance_preTx.value.amount,
+      +amount
+    );
 
     // Verify OrderTracker stores correct partner deposit vault
-    const orderTrackerAccount = await program.account.orderTracker.fetch(currentOrderTrackerPDA);
-    assert.equal(orderTrackerAccount.partnerDepositVault.toBase58(), partnerDepositVaultPDA.toBase58())
-    assert.equal(orderTrackerAccount.beneficiaryWallet.toBase58(), partnerOperationalWallet.publicKey.toBase58())
-    
-    const orderAmountIn = orderTrackerAccount.amountIn
-    const orderAmountOut = orderTrackerAccount.amountOut
+    const orderTrackerAccount = await program.account.orderTracker.fetch(
+      currentOrderTrackerPDA
+    );
+    assert.equal(
+      orderTrackerAccount.partnerDepositVault.toBase58(),
+      partnerDepositVaultPDA.toBase58()
+    );
+    assert.equal(
+      orderTrackerAccount.beneficiaryWallet.toBase58(),
+      partnerOperationalWallet.publicKey.toBase58()
+    );
+
+    const orderAmountIn = orderTrackerAccount.amountIn;
+    const orderAmountOut = orderTrackerAccount.amountOut;
     assert.equal(orderAmountIn.toNumber(), amount.toNumber());
     assert.equal(orderAmountOut.toNumber(), amount.toNumber());
   });
-  
-  it("Creates a transient order for partner_deposit_vault -> zynkOpWallet -> partner_operational_wallet one-way txn", async () => {
+
+  it("Creates a transient order for partner_deposit_vault -> zynkCoreVault -> partner_operational_wallet one-way txn", async () => {
     const amount = new anchor.BN(100000000000);
-    
+
     const transientOrderId = generateOrderId();
     const transientOrderTrackerPDA = deriveOrderTrackerPDA(transientOrderId);
 
-    const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
-      partnerDepositTokenAccount
-    );
+    const sourceBalance_preTx =
+      await provider.connection.getTokenAccountBalance(
+        partnerDepositTokenAccount
+      );
     expect(+sourceBalance_preTx.value.amount).to.be.gte(+amount);
 
     const destBalance_preTx = await provider.connection.getTokenAccountBalance(
       partnerOperationalTokenAccount
     );
-    
-    const message = `${DOMAIN_SEPARATOR}::${partnerOperationalWallet.publicKey.toString()}::${partnerDepositVaultPDA.toString()}`
-    const { ed25519Ix, signature } = buildEd25519Ix(message, manager)
+
+    const message = `${DOMAIN_SEPARATOR}::${partnerOperationalWallet.publicKey.toString()}::${partnerDepositVaultPDA.toString()}`;
+    const { ed25519Ix, signature } = buildEd25519Ix(message, manager);
 
     await program.methods
       .pullAndCreateOrder(
@@ -599,30 +648,37 @@ describe("zynk-core", () => {
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: partnerDepositTokenAccount,
-        zynkOpWallet: zynkOpWallet.publicKey,
-        zowTokenAccount: zynkOpTokenAccount,
+        zynkCoreVault: zynkCoreVault,
+        zcvTokenAccount: zcvTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: transientOrderTrackerPDA,
         systemProgram: SystemProgram.programId,
         mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY
+        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY,
       })
       .preInstructions([ed25519Ix])
-      .signers([manager, zynkOpWallet])
+      .signers([manager])
       .rpc();
-    
+
     // Verify token pull
-    const sourceBalance_postTx = await provider.connection.getTokenAccountBalance(
-      partnerDepositTokenAccount
+    const sourceBalance_postTx =
+      await provider.connection.getTokenAccountBalance(
+        partnerDepositTokenAccount
+      );
+    assert.equal(
+      +sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount,
+      +amount
     );
-    assert.equal(+sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount, +amount)
-    
+
     // Verify token transfer
     const destBalance_postTx = await provider.connection.getTokenAccountBalance(
       partnerOperationalTokenAccount
     );
-    assert.equal(+destBalance_postTx.value.amount - +destBalance_preTx.value.amount, +amount)
+    assert.equal(
+      +destBalance_postTx.value.amount - +destBalance_preTx.value.amount,
+      +amount
+    );
 
     // Verify order is closed
     try {
@@ -635,12 +691,12 @@ describe("zynk-core", () => {
         "Expected account to be closed"
       );
     }
-    
+
     // try to replenish and/or close a transient order
     try {
       const now = Math.floor(Date.now() / 1000);
       const validity = now + 3600;
-      
+
       await program.methods
         .replenish(
           Array.from(transientOrderId),
@@ -653,7 +709,7 @@ describe("zynk-core", () => {
           config: configPDA,
           partnerDepositVault: partnerDepositVaultPDA,
           pdvTokenAccount: partnerDepositTokenAccount,
-          zowTokenAccount: zynkOpTokenAccount,
+          zcvTokenAccount: zcvTokenAccount,
           orderTracker: transientOrderTrackerPDA,
           manager: manager.publicKey,
           mint: tokenMint,
@@ -671,24 +727,25 @@ describe("zynk-core", () => {
       );
     }
   });
-  
-  it("Creates a transient order for partner_deposit_vault -> zynkOpWallet -> partner_operational_wallet one-way txn - Token2022", async () => {
+
+  it("Creates a transient order for partner_deposit_vault -> zynkCoreVault -> partner_operational_wallet one-way txn - Token2022", async () => {
     const amount = new anchor.BN(100000000000);
-    
+
     const transientOrderId = generateOrderId();
     const transientOrderTrackerPDA = deriveOrderTrackerPDA(transientOrderId);
 
-    const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
-      partnerDepositTokenAccount3
-    );
+    const sourceBalance_preTx =
+      await provider.connection.getTokenAccountBalance(
+        partnerDepositTokenAccount3
+      );
     expect(+sourceBalance_preTx.value.amount).to.be.gte(+amount);
 
     const destBalance_preTx = await provider.connection.getTokenAccountBalance(
       partnerOperationalTokenAccount3
     );
-    
-    const message = `${DOMAIN_SEPARATOR}::${partnerOperationalWallet.publicKey.toString()}::${partnerDepositVaultPDA.toString()}`
-    const { ed25519Ix, signature } = buildEd25519Ix(message, manager)
+
+    const message = `${DOMAIN_SEPARATOR}::${partnerOperationalWallet.publicKey.toString()}::${partnerDepositVaultPDA.toString()}`;
+    const { ed25519Ix, signature } = buildEd25519Ix(message, manager);
 
     await program.methods
       .pullAndCreateOrder(
@@ -703,30 +760,37 @@ describe("zynk-core", () => {
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: partnerDepositTokenAccount3,
-        zynkOpWallet: zynkOpWallet.publicKey,
-        zowTokenAccount: zynkOpTokenAccount3,
+        zynkCoreVault: zynkCoreVault,
+        zcvTokenAccount: zcvTokenAccount3,
         beneficiaryTokenAccount: partnerOperationalTokenAccount3,
         orderTracker: transientOrderTrackerPDA,
         systemProgram: SystemProgram.programId,
         mint: tokenMint3,
         tokenProgram: TOKEN_2022_PROGRAM_ID,
-        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY
+        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY,
       })
       .preInstructions([ed25519Ix])
-      .signers([manager, zynkOpWallet])
+      .signers([manager])
       .rpc();
-    
+
     // Verify token pull
-    const sourceBalance_postTx = await provider.connection.getTokenAccountBalance(
-      partnerDepositTokenAccount3
+    const sourceBalance_postTx =
+      await provider.connection.getTokenAccountBalance(
+        partnerDepositTokenAccount3
+      );
+    assert.equal(
+      +sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount,
+      +amount
     );
-    assert.equal(+sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount, +amount)
-    
+
     // Verify token transfer
     const destBalance_postTx = await provider.connection.getTokenAccountBalance(
       partnerOperationalTokenAccount3
     );
-    assert.equal(+destBalance_postTx.value.amount - +destBalance_preTx.value.amount, +amount)
+    assert.equal(
+      +destBalance_postTx.value.amount - +destBalance_preTx.value.amount,
+      +amount
+    );
 
     // Verify order is closed
     try {
@@ -739,12 +803,12 @@ describe("zynk-core", () => {
         "Expected account to be closed"
       );
     }
-    
+
     // try to replenish and/or close a transient order
     try {
       const now = Math.floor(Date.now() / 1000);
       const validity = now + 3600;
-      
+
       await program.methods
         .replenish(
           Array.from(transientOrderId),
@@ -757,7 +821,7 @@ describe("zynk-core", () => {
           config: configPDA,
           partnerDepositVault: partnerDepositVaultPDA,
           pdvTokenAccount: partnerDepositTokenAccount3,
-          zowTokenAccount: zynkOpTokenAccount3,
+          zcvTokenAccount: zcvTokenAccount3,
           orderTracker: transientOrderTrackerPDA,
           manager: manager.publicKey,
           mint: tokenMint3,
@@ -778,10 +842,13 @@ describe("zynk-core", () => {
 
   it("Should fail creating order for any ZOW token account", async () => {
     const amount = new anchor.BN(0);
-    
+
     const tempOrderId = generateOrderId();
-    const tempOrderTrackerPDA = deriveOrderTrackerPDA(tempOrderId, zynkOpWallet.publicKey);
-    
+    const tempOrderTrackerPDA = deriveOrderTrackerPDA(
+      tempOrderId,
+      zynkCoreVault
+    );
+
     try {
       await program.methods
         .createOrder(
@@ -796,16 +863,16 @@ describe("zynk-core", () => {
           manager: manager.publicKey,
           partnerDepositVault: partnerDepositVaultPDA,
           pdvTokenAccount: null,
-          zynkOpWallet: zynkOpWallet.publicKey,
-          zowTokenAccount: zynkOpTokenAccount,
-          beneficiaryTokenAccount: zynkOpTokenAccount,
+          zynkCoreVault: zynkCoreVault,
+          zcvTokenAccount: zcvTokenAccount,
+          beneficiaryTokenAccount: zcvTokenAccount,
           orderTracker: tempOrderTrackerPDA,
           systemProgram: SystemProgram.programId,
           mint: tokenMint,
           tokenProgram: TOKEN_PROGRAM_ID,
-          sysvarInstructions: null
+          sysvarInstructions: null,
         })
-        .signers([manager, zynkOpWallet])
+        .signers([manager])
         .rpc();
     } catch (error) {
       assert.include(
@@ -815,16 +882,15 @@ describe("zynk-core", () => {
       );
     }
   });
-  
+
   it("Creates order without transferring tokens, in case of zero amount", async () => {
     const amount = new anchor.BN(0);
-    
+
     currentOrderId = generateOrderId();
     currentOrderTrackerPDA = deriveOrderTrackerPDA(currentOrderId);
 
-    const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
-      zynkOpTokenAccount
-    );
+    const sourceBalance_preTx =
+      await provider.connection.getTokenAccountBalance(zcvTokenAccount);
     expect(+sourceBalance_preTx.value.amount).to.be.gte(+amount);
 
     const destBalance_preTx = await provider.connection.getTokenAccountBalance(
@@ -844,37 +910,50 @@ describe("zynk-core", () => {
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: null,
-        zynkOpWallet: zynkOpWallet.publicKey,
-        zowTokenAccount: zynkOpTokenAccount,
+        zynkCoreVault: zynkCoreVault,
+        zcvTokenAccount: zcvTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: currentOrderTrackerPDA,
         systemProgram: SystemProgram.programId,
         mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: null
+        sysvarInstructions: null,
       })
-      .signers([manager, zynkOpWallet])
+      .signers([manager])
       .rpc();
 
     // Verify token pull
-    const sourceBalance_postTx = await provider.connection.getTokenAccountBalance(
-      zynkOpTokenAccount
+    const sourceBalance_postTx =
+      await provider.connection.getTokenAccountBalance(zcvTokenAccount);
+    assert.equal(
+      +sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount,
+      0
     );
-    assert.equal(+sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount, 0)
-    
+
     // Verify token transfer
     const destBalance_postTx = await provider.connection.getTokenAccountBalance(
       partnerOperationalTokenAccount
     );
-    assert.equal(+destBalance_postTx.value.amount - +destBalance_preTx.value.amount, 0)
+    assert.equal(
+      +destBalance_postTx.value.amount - +destBalance_preTx.value.amount,
+      0
+    );
 
     // Verify OrderTracker stores correct details
-    const orderTrackerAccount = await program.account.orderTracker.fetch(currentOrderTrackerPDA);
-    assert.equal(orderTrackerAccount.partnerDepositVault.toBase58(), partnerDepositVaultPDA.toBase58())
-    assert.equal(orderTrackerAccount.beneficiaryWallet.toBase58(), partnerOperationalWallet.publicKey.toBase58())
-    
-    const orderAmountIn = orderTrackerAccount.amountIn
-    const orderAmountOut = orderTrackerAccount.amountOut
+    const orderTrackerAccount = await program.account.orderTracker.fetch(
+      currentOrderTrackerPDA
+    );
+    assert.equal(
+      orderTrackerAccount.partnerDepositVault.toBase58(),
+      partnerDepositVaultPDA.toBase58()
+    );
+    assert.equal(
+      orderTrackerAccount.beneficiaryWallet.toBase58(),
+      partnerOperationalWallet.publicKey.toBase58()
+    );
+
+    const orderAmountIn = orderTrackerAccount.amountIn;
+    const orderAmountOut = orderTrackerAccount.amountOut;
     assert.equal(orderAmountIn.toNumber(), 0);
     assert.equal(orderAmountOut.toNumber(), 0);
   });
@@ -883,32 +962,46 @@ describe("zynk-core", () => {
     const amount = new anchor.BN(0);
     const meta = [
       { key: "txType", value: "0" },
-      { key: "txAmount", value: "100000000000" }
+      { key: "txAmount", value: "100000000000" },
     ];
 
     const tempOrderId = generateOrderId();
     const tempOrderTrackerPDA = deriveOrderTrackerPDA(tempOrderId);
 
-    const listener = program.addEventListener("orderCreated", (event, _slot) => {
-      if (!Buffer.from(event.orderId).equals(Buffer.from(tempOrderId))) return;
-      
-      try {
-        assert.equal(event.domainSeparator.toNumber(), DOMAIN_SEPARATOR)
-        assert.equal(event.token.toBase58(), tokenMint.toBase58())
-        assert.equal(event.amount.toNumber(), amount.toNumber())
-        assert.equal(event.partnerDepositVault.toBase58(), partnerDepositVaultPDA.toBase58());
-        assert.equal(event.beneficiaryWallet.toBase58(), partnerOperationalWallet.publicKey.toBase58())
+    const listener = program.addEventListener(
+      "orderCreated",
+      (event, _slot) => {
+        if (!Buffer.from(event.orderId).equals(Buffer.from(tempOrderId)))
+          return;
 
-        assert.ok(event.meta, "Meta should be present");
-        assert.lengthOf(event.meta, meta.length, `Meta should have ${meta.length} entries`);
-        meta.forEach((item, idx) => {
-          assert.strictEqual(event.meta[idx].key, item.key);
-          assert.strictEqual(event.meta[idx].value, item.value);
-        });
-      } catch (err) {
-        throw err;
+        try {
+          assert.equal(event.domainSeparator.toNumber(), DOMAIN_SEPARATOR);
+          assert.equal(event.token.toBase58(), tokenMint.toBase58());
+          assert.equal(event.amount.toNumber(), amount.toNumber());
+          assert.equal(
+            event.partnerDepositVault.toBase58(),
+            partnerDepositVaultPDA.toBase58()
+          );
+          assert.equal(
+            event.beneficiaryWallet.toBase58(),
+            partnerOperationalWallet.publicKey.toBase58()
+          );
+
+          assert.ok(event.meta, "Meta should be present");
+          assert.lengthOf(
+            event.meta,
+            meta.length,
+            `Meta should have ${meta.length} entries`
+          );
+          meta.forEach((item, idx) => {
+            assert.strictEqual(event.meta[idx].key, item.key);
+            assert.strictEqual(event.meta[idx].value, item.value);
+          });
+        } catch (err) {
+          throw err;
+        }
       }
-    });
+    );
 
     await program.methods
       .createOrder(
@@ -923,31 +1016,30 @@ describe("zynk-core", () => {
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: null,
-        zynkOpWallet: zynkOpWallet.publicKey,
-        zowTokenAccount: zynkOpTokenAccount,
+        zynkCoreVault: zynkCoreVault,
+        zcvTokenAccount: zcvTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: tempOrderTrackerPDA,
         systemProgram: SystemProgram.programId,
         mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: null
+        sysvarInstructions: null,
       })
-      .signers([manager, zynkOpWallet])
+      .signers([manager])
       .rpc();
 
     await new Promise((resolve) => setTimeout(resolve, 1000));
     await program.removeEventListener(listener);
   });
 
-  it("Sends tokens from zynkOpWallet to partner_operational_wallet", async () => {
+  it("Sends tokens from zynkCoreVault to partner_operational_wallet", async () => {
     const amount = new anchor.BN(100000000000);
-    
+
     currentOrderId = generateOrderId();
     currentOrderTrackerPDA = deriveOrderTrackerPDA(currentOrderId);
 
-    const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
-      zynkOpTokenAccount
-    );
+    const sourceBalance_preTx =
+      await provider.connection.getTokenAccountBalance(zcvTokenAccount);
     expect(+sourceBalance_preTx.value.amount).to.be.gte(+amount);
 
     const destBalance_preTx = await provider.connection.getTokenAccountBalance(
@@ -967,58 +1059,70 @@ describe("zynk-core", () => {
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: null,
-        zynkOpWallet: zynkOpWallet.publicKey,
-        zowTokenAccount: zynkOpTokenAccount,
+        zynkCoreVault: zynkCoreVault,
+        zcvTokenAccount: zcvTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: currentOrderTrackerPDA,
         systemProgram: SystemProgram.programId,
         mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: null
+        sysvarInstructions: null,
       })
-      .signers([manager, zynkOpWallet])
+      .signers([manager])
       .rpc();
 
     // Verify token pull
-    const sourceBalance_postTx = await provider.connection.getTokenAccountBalance(
-      zynkOpTokenAccount
+    const sourceBalance_postTx =
+      await provider.connection.getTokenAccountBalance(zcvTokenAccount);
+    assert.equal(
+      +sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount,
+      +amount
     );
-    assert.equal(+sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount, +amount)
-    
+
     // Verify token transfer
     const destBalance_postTx = await provider.connection.getTokenAccountBalance(
       partnerOperationalTokenAccount
     );
-    assert.equal(+destBalance_postTx.value.amount - +destBalance_preTx.value.amount, +amount)
+    assert.equal(
+      +destBalance_postTx.value.amount - +destBalance_preTx.value.amount,
+      +amount
+    );
 
     // Verify OrderTracker stores correct details
-    const orderTrackerAccount = await program.account.orderTracker.fetch(currentOrderTrackerPDA);
-    assert.equal(orderTrackerAccount.partnerDepositVault.toBase58(), partnerDepositVaultPDA.toBase58())
-    assert.equal(orderTrackerAccount.beneficiaryWallet.toBase58(), partnerOperationalWallet.publicKey.toBase58())
+    const orderTrackerAccount = await program.account.orderTracker.fetch(
+      currentOrderTrackerPDA
+    );
+    assert.equal(
+      orderTrackerAccount.partnerDepositVault.toBase58(),
+      partnerDepositVaultPDA.toBase58()
+    );
+    assert.equal(
+      orderTrackerAccount.beneficiaryWallet.toBase58(),
+      partnerOperationalWallet.publicKey.toBase58()
+    );
 
-    const orderAmountIn = orderTrackerAccount.amountIn
-    const orderAmountOut = orderTrackerAccount.amountOut
+    const orderAmountIn = orderTrackerAccount.amountIn;
+    const orderAmountOut = orderTrackerAccount.amountOut;
     assert.equal(orderAmountIn.toNumber(), 0);
     assert.equal(orderAmountOut.toNumber(), amount.toNumber());
   });
-  
-  it("Creates a transient order for zynkOpWallet to partner_operational_wallet one-way txn", async () => {
+
+  it("Creates a transient order for zynkCoreVault to partner_operational_wallet one-way txn", async () => {
     const amount = new anchor.BN(100000000000);
-    
+
     const transientOrderId = generateOrderId();
     const transientOrderTrackerPDA = deriveOrderTrackerPDA(transientOrderId);
 
-    const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
-      zynkOpTokenAccount
-    );
+    const sourceBalance_preTx =
+      await provider.connection.getTokenAccountBalance(zcvTokenAccount);
     expect(+sourceBalance_preTx.value.amount).to.be.gte(+amount);
 
     const destBalance_preTx = await provider.connection.getTokenAccountBalance(
       partnerOperationalTokenAccount
     );
-    
-    const message = `${DOMAIN_SEPARATOR}::${partnerOperationalWallet.publicKey.toString()}::${partnerDepositVaultPDA.toString()}`
-    const { ed25519Ix, signature } = buildEd25519Ix(message, manager)
+
+    const message = `${DOMAIN_SEPARATOR}::${partnerOperationalWallet.publicKey.toString()}::${partnerDepositVaultPDA.toString()}`;
+    const { ed25519Ix, signature } = buildEd25519Ix(message, manager);
 
     await program.methods
       .createOrder(
@@ -1033,30 +1137,35 @@ describe("zynk-core", () => {
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: null,
-        zynkOpWallet: zynkOpWallet.publicKey,
-        zowTokenAccount: zynkOpTokenAccount,
+        zynkCoreVault: zynkCoreVault,
+        zcvTokenAccount: zcvTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: transientOrderTrackerPDA,
         systemProgram: SystemProgram.programId,
         mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY
+        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY,
       })
       .preInstructions([ed25519Ix])
-      .signers([manager, zynkOpWallet])
+      .signers([manager])
       .rpc();
 
     // Verify token pull
-    const sourceBalance_postTx = await provider.connection.getTokenAccountBalance(
-      zynkOpTokenAccount
+    const sourceBalance_postTx =
+      await provider.connection.getTokenAccountBalance(zcvTokenAccount);
+    assert.equal(
+      +sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount,
+      +amount
     );
-    assert.equal(+sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount, +amount)
-    
+
     // Verify token transfer
     const destBalance_postTx = await provider.connection.getTokenAccountBalance(
       partnerOperationalTokenAccount
     );
-    assert.equal(+destBalance_postTx.value.amount - +destBalance_preTx.value.amount, +amount)
+    assert.equal(
+      +destBalance_postTx.value.amount - +destBalance_preTx.value.amount,
+      +amount
+    );
 
     // Verify order is closed
     try {
@@ -1069,12 +1178,12 @@ describe("zynk-core", () => {
         "Expected account to be closed"
       );
     }
-    
+
     // try to replenish and/or close a transient order
     try {
       const now = Math.floor(Date.now() / 1000);
       const validity = now + 3600;
-      
+
       await program.methods
         .replenish(
           Array.from(transientOrderId),
@@ -1087,7 +1196,7 @@ describe("zynk-core", () => {
           config: configPDA,
           partnerDepositVault: partnerDepositVaultPDA,
           pdvTokenAccount: partnerDepositTokenAccount,
-          zowTokenAccount: zynkOpTokenAccount,
+          zcvTokenAccount: zcvTokenAccount,
           orderTracker: transientOrderTrackerPDA,
           manager: manager.publicKey,
           mint: tokenMint,
@@ -1105,24 +1214,23 @@ describe("zynk-core", () => {
       );
     }
   });
-  
-  it("Creates a transient order for zynkOpWallet to partner_operational_wallet one-way txn - Token2022", async () => {
+
+  it("Creates a transient order for zynkCoreVault to partner_operational_wallet one-way txn - Token2022", async () => {
     const amount = new anchor.BN(100000000000);
-    
+
     const transientOrderId = generateOrderId();
     const transientOrderTrackerPDA = deriveOrderTrackerPDA(transientOrderId);
 
-    const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
-      zynkOpTokenAccount3
-    );
+    const sourceBalance_preTx =
+      await provider.connection.getTokenAccountBalance(zcvTokenAccount3);
     expect(+sourceBalance_preTx.value.amount).to.be.gte(+amount);
 
     const destBalance_preTx = await provider.connection.getTokenAccountBalance(
       partnerOperationalTokenAccount3
     );
-    
-    const message = `${DOMAIN_SEPARATOR}::${partnerOperationalWallet.publicKey.toString()}::${partnerDepositVaultPDA.toString()}`
-    const { ed25519Ix, signature } = buildEd25519Ix(message, manager)
+
+    const message = `${DOMAIN_SEPARATOR}::${partnerOperationalWallet.publicKey.toString()}::${partnerDepositVaultPDA.toString()}`;
+    const { ed25519Ix, signature } = buildEd25519Ix(message, manager);
 
     await program.methods
       .createOrder(
@@ -1137,30 +1245,35 @@ describe("zynk-core", () => {
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: null,
-        zynkOpWallet: zynkOpWallet.publicKey,
-        zowTokenAccount: zynkOpTokenAccount3,
+        zynkCoreVault: zynkCoreVault,
+        zcvTokenAccount: zcvTokenAccount3,
         beneficiaryTokenAccount: partnerOperationalTokenAccount3,
         orderTracker: transientOrderTrackerPDA,
         systemProgram: SystemProgram.programId,
         mint: tokenMint3,
         tokenProgram: TOKEN_2022_PROGRAM_ID,
-        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY
+        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY,
       })
       .preInstructions([ed25519Ix])
-      .signers([manager, zynkOpWallet])
+      .signers([manager])
       .rpc();
 
     // Verify token pull
-    const sourceBalance_postTx = await provider.connection.getTokenAccountBalance(
-      zynkOpTokenAccount3
+    const sourceBalance_postTx =
+      await provider.connection.getTokenAccountBalance(zcvTokenAccount3);
+    assert.equal(
+      +sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount,
+      +amount
     );
-    assert.equal(+sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount, +amount)
-    
+
     // Verify token transfer
     const destBalance_postTx = await provider.connection.getTokenAccountBalance(
       partnerOperationalTokenAccount3
     );
-    assert.equal(+destBalance_postTx.value.amount - +destBalance_preTx.value.amount, +amount)
+    assert.equal(
+      +destBalance_postTx.value.amount - +destBalance_preTx.value.amount,
+      +amount
+    );
 
     // Verify order is closed
     try {
@@ -1173,12 +1286,12 @@ describe("zynk-core", () => {
         "Expected account to be closed"
       );
     }
-    
+
     // try to replenish and/or close a transient order
     try {
       const now = Math.floor(Date.now() / 1000);
       const validity = now + 3600;
-      
+
       await program.methods
         .replenish(
           Array.from(transientOrderId),
@@ -1191,7 +1304,7 @@ describe("zynk-core", () => {
           config: configPDA,
           partnerDepositVault: partnerDepositVaultPDA,
           pdvTokenAccount: partnerDepositTokenAccount3,
-          zowTokenAccount: zynkOpTokenAccount3,
+          zcvTokenAccount: zcvTokenAccount3,
           orderTracker: transientOrderTrackerPDA,
           manager: manager.publicKey,
           mint: tokenMint3,
@@ -1227,7 +1340,7 @@ describe("zynk-core", () => {
         config: configPDA,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: partnerDepositTokenAccount,
-        zowTokenAccount: zynkOpTokenAccount,
+        zcvTokenAccount: zcvTokenAccount,
         orderTracker: currentOrderTrackerPDA,
         manager: manager.publicKey,
         mint: tokenMint,
@@ -1237,8 +1350,8 @@ describe("zynk-core", () => {
       .signers([manager])
       .rpc();
 
-     // Now try to close with close_order=true, but amount_in (50) < amount_out (100)
-     // Use a small positive amount since amount must be > 0, but total will still be < amount_out
+    // Now try to close with close_order=true, but amount_in (50) < amount_out (100)
+    // Use a small positive amount since amount must be > 0, but total will still be < amount_out
     try {
       await program.methods
         .replenish(
@@ -1252,7 +1365,7 @@ describe("zynk-core", () => {
           config: configPDA,
           partnerDepositVault: partnerDepositVaultPDA,
           pdvTokenAccount: partnerDepositTokenAccount,
-          zowTokenAccount: zynkOpTokenAccount,
+          zcvTokenAccount: zcvTokenAccount,
           orderTracker: currentOrderTrackerPDA,
           manager: manager.publicKey,
           mint: tokenMint,
@@ -1261,7 +1374,9 @@ describe("zynk-core", () => {
         })
         .signers([manager])
         .rpc();
-      assert.fail("Expected close order to fail when amount_in is less than amount_out");
+      assert.fail(
+        "Expected close order to fail when amount_in is less than amount_out"
+      );
     } catch (error) {
       assert.include(
         error.message,
@@ -1276,25 +1391,34 @@ describe("zynk-core", () => {
     const validity = now + 3600; // Valid for 1 hour
 
     let amount = new anchor.BN(100000000000);
-    const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
-      partnerDepositTokenAccount
-    );
+    const sourceBalance_preTx =
+      await provider.connection.getTokenAccountBalance(
+        partnerDepositTokenAccount
+      );
     expect(+sourceBalance_preTx.value.amount).to.be.gte(+amount);
-    
+
     const destBalance_preTx = await provider.connection.getTokenAccountBalance(
-      zynkOpTokenAccount
+      zcvTokenAccount
     );
 
-    let orderTrackerAccount = await program.account.orderTracker.fetch(currentOrderTrackerPDA);
-    const orderAmountIn_preTx = orderTrackerAccount.amountIn
-    
+    let orderTrackerAccount = await program.account.orderTracker.fetch(
+      currentOrderTrackerPDA
+    );
+    const orderAmountIn_preTx = orderTrackerAccount.amountIn;
+
     await program.methods
-      .replenish(Array.from(currentOrderId), new anchor.BN(validity), amount, false, null)
+      .replenish(
+        Array.from(currentOrderId),
+        new anchor.BN(validity),
+        amount,
+        false,
+        null
+      )
       .accounts({
         config: configPDA,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: partnerDepositTokenAccount,
-        zowTokenAccount: zynkOpTokenAccount,
+        zcvTokenAccount: zcvTokenAccount,
         orderTracker: currentOrderTrackerPDA,
         manager: manager.publicKey,
         mint: tokenMint,
@@ -1305,16 +1429,23 @@ describe("zynk-core", () => {
       .rpc();
 
     // Verify token pull
-    const sourceBalance_postTx = await provider.connection.getTokenAccountBalance(
-      partnerDepositTokenAccount
+    const sourceBalance_postTx =
+      await provider.connection.getTokenAccountBalance(
+        partnerDepositTokenAccount
+      );
+    assert.equal(
+      +sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount,
+      +amount
     );
-    assert.equal(+sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount, +amount)
-    
+
     // Verify token transfer
     const destBalance_postTx = await provider.connection.getTokenAccountBalance(
-      zynkOpTokenAccount
+      zcvTokenAccount
     );
-    assert.equal(+destBalance_postTx.value.amount - +destBalance_preTx.value.amount, +amount)
+    assert.equal(
+      +destBalance_postTx.value.amount - +destBalance_preTx.value.amount,
+      +amount
+    );
 
     // Verify that orderTracker is still active
     const orderTrackerInfo = await provider.connection.getAccountInfo(
@@ -1325,21 +1456,32 @@ describe("zynk-core", () => {
       "OrderTracker should still be active after replenish"
     );
 
-    orderTrackerAccount = await program.account.orderTracker.fetch(currentOrderTrackerPDA);
+    orderTrackerAccount = await program.account.orderTracker.fetch(
+      currentOrderTrackerPDA
+    );
 
-    const orderAmountIn_postTx = orderTrackerAccount.amountIn
-    assert.equal(orderAmountIn_postTx.toNumber() - orderAmountIn_preTx.toNumber(), amount.toNumber());
-    
+    const orderAmountIn_postTx = orderTrackerAccount.amountIn;
+    assert.equal(
+      orderAmountIn_postTx.toNumber() - orderAmountIn_preTx.toNumber(),
+      amount.toNumber()
+    );
+
     amount = new anchor.BN(MAX_U64);
-    
+
     try {
       await program.methods
-        .replenish(Array.from(currentOrderId), new anchor.BN(validity), amount, true, null)
+        .replenish(
+          Array.from(currentOrderId),
+          new anchor.BN(validity),
+          amount,
+          true,
+          null
+        )
         .accounts({
           config: configPDA,
           partnerDepositVault: partnerDepositVaultPDA,
           pdvTokenAccount: partnerDepositTokenAccount2,
-          zowTokenAccount: zynkOpTokenAccount2,
+          zcvTokenAccount: zcvTokenAccount2,
           orderTracker: currentOrderTrackerPDA,
           manager: manager.publicKey,
           mint: tokenMint2,
@@ -1356,31 +1498,40 @@ describe("zynk-core", () => {
       );
     }
   });
-  
+
   it("Replenishes tokens from partner_deposit_vault to zynk_op_wallet", async () => {
     const amount = new anchor.BN(100000000000);
     const now = Math.floor(Date.now() / 1000);
     const validity = now + 3600; // Valid for 1 hour
 
-    const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
-      partnerDepositTokenAccount
-    );
+    const sourceBalance_preTx =
+      await provider.connection.getTokenAccountBalance(
+        partnerDepositTokenAccount
+      );
     expect(+sourceBalance_preTx.value.amount).to.be.gte(+amount);
 
     const destBalance_preTx = await provider.connection.getTokenAccountBalance(
-      zynkOpTokenAccount
+      zcvTokenAccount
     );
 
-    let orderTrackerAccount = await program.account.orderTracker.fetch(currentOrderTrackerPDA);
-    const orderAmountIn_preTx = orderTrackerAccount.amountIn
+    let orderTrackerAccount = await program.account.orderTracker.fetch(
+      currentOrderTrackerPDA
+    );
+    const orderAmountIn_preTx = orderTrackerAccount.amountIn;
 
     await program.methods
-      .replenish(Array.from(currentOrderId), new anchor.BN(validity), amount, false, null)
+      .replenish(
+        Array.from(currentOrderId),
+        new anchor.BN(validity),
+        amount,
+        false,
+        null
+      )
       .accounts({
         config: configPDA,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: partnerDepositTokenAccount,
-        zowTokenAccount: zynkOpTokenAccount,
+        zcvTokenAccount: zcvTokenAccount,
         orderTracker: currentOrderTrackerPDA,
         manager: manager.publicKey,
         mint: tokenMint,
@@ -1391,16 +1542,23 @@ describe("zynk-core", () => {
       .rpc();
 
     // Verify token pull
-    const sourceBalance_postTx = await provider.connection.getTokenAccountBalance(
-      partnerDepositTokenAccount
+    const sourceBalance_postTx =
+      await provider.connection.getTokenAccountBalance(
+        partnerDepositTokenAccount
+      );
+    assert.equal(
+      +sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount,
+      +amount
     );
-    assert.equal(+sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount, +amount)
-    
+
     // Verify token transfer
     const destBalance_postTx = await provider.connection.getTokenAccountBalance(
-      zynkOpTokenAccount
+      zcvTokenAccount
     );
-    assert.equal(+destBalance_postTx.value.amount - +destBalance_preTx.value.amount, +amount)
+    assert.equal(
+      +destBalance_postTx.value.amount - +destBalance_preTx.value.amount,
+      +amount
+    );
 
     // Verify that orderTracker is still active
     const orderTrackerInfo = await provider.connection.getAccountInfo(
@@ -1411,10 +1569,15 @@ describe("zynk-core", () => {
       "OrderTracker should still be active after replenish"
     );
 
-    orderTrackerAccount = await program.account.orderTracker.fetch(currentOrderTrackerPDA);
+    orderTrackerAccount = await program.account.orderTracker.fetch(
+      currentOrderTrackerPDA
+    );
 
-    const orderAmountIn_postTx = orderTrackerAccount.amountIn
-    assert.equal(orderAmountIn_postTx.toNumber() - orderAmountIn_preTx.toNumber(), amount.toNumber());
+    const orderAmountIn_postTx = orderTrackerAccount.amountIn;
+    assert.equal(
+      orderAmountIn_postTx.toNumber() - orderAmountIn_preTx.toNumber(),
+      amount.toNumber()
+    );
   });
 
   it("Replenishes tokens from partner_deposit_vault to zynk_op_wallet - Token2022", async () => {
@@ -1422,24 +1585,33 @@ describe("zynk-core", () => {
     const now = Math.floor(Date.now() / 1000);
     const validity = now + 3600; // Valid for 1 hour
 
-    const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
-      partnerDepositTokenAccount3
-    );
+    const sourceBalance_preTx =
+      await provider.connection.getTokenAccountBalance(
+        partnerDepositTokenAccount3
+      );
     expect(+sourceBalance_preTx.value.amount).to.be.gte(+amount);
 
     const destBalance_preTx = await provider.connection.getTokenAccountBalance(
-      zynkOpTokenAccount3
+      zcvTokenAccount3
     );
 
-    let orderTrackerAccount = await program.account.orderTracker.fetch(currentOrderTrackerPDA);
-    const orderAmountIn_preTx = orderTrackerAccount.amountIn
+    let orderTrackerAccount = await program.account.orderTracker.fetch(
+      currentOrderTrackerPDA
+    );
+    const orderAmountIn_preTx = orderTrackerAccount.amountIn;
     await program.methods
-      .replenish(Array.from(currentOrderId), new anchor.BN(validity), amount, false, null)
+      .replenish(
+        Array.from(currentOrderId),
+        new anchor.BN(validity),
+        amount,
+        false,
+        null
+      )
       .accounts({
         config: configPDA,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: partnerDepositTokenAccount3,
-        zowTokenAccount: zynkOpTokenAccount3,
+        zcvTokenAccount: zcvTokenAccount3,
         orderTracker: currentOrderTrackerPDA,
         manager: manager.publicKey,
         mint: tokenMint3,
@@ -1450,16 +1622,23 @@ describe("zynk-core", () => {
       .rpc();
 
     // Verify token pull
-    const sourceBalance_postTx = await provider.connection.getTokenAccountBalance(
-      partnerDepositTokenAccount3
+    const sourceBalance_postTx =
+      await provider.connection.getTokenAccountBalance(
+        partnerDepositTokenAccount3
+      );
+    assert.equal(
+      +sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount,
+      +amount
     );
-    assert.equal(+sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount, +amount)
-    
+
     // Verify token transfer
     const destBalance_postTx = await provider.connection.getTokenAccountBalance(
-      zynkOpTokenAccount3
+      zcvTokenAccount3
     );
-    assert.equal(+destBalance_postTx.value.amount - +destBalance_preTx.value.amount, +amount)
+    assert.equal(
+      +destBalance_postTx.value.amount - +destBalance_preTx.value.amount,
+      +amount
+    );
 
     // Verify that orderTracker is still active
     const orderTrackerInfo = await provider.connection.getAccountInfo(
@@ -1470,24 +1649,35 @@ describe("zynk-core", () => {
       "OrderTracker should still be active after replenish"
     );
 
-    orderTrackerAccount = await program.account.orderTracker.fetch(currentOrderTrackerPDA);
+    orderTrackerAccount = await program.account.orderTracker.fetch(
+      currentOrderTrackerPDA
+    );
 
-    const orderAmountIn_postTx = orderTrackerAccount.amountIn
-    assert.equal(orderAmountIn_postTx.toNumber() - orderAmountIn_preTx.toNumber(), amount.toNumber());
+    const orderAmountIn_postTx = orderTrackerAccount.amountIn;
+    assert.equal(
+      orderAmountIn_postTx.toNumber() - orderAmountIn_preTx.toNumber(),
+      amount.toNumber()
+    );
   });
-  
+
   it("Should fail when replenishing with past validity timestamp", async () => {
     const amount = new anchor.BN(50000000000); // 50 token
     const pastTimestamp = Math.floor(Date.now() / 1000) - 3600; // 1 hour ago
 
     try {
       await program.methods
-        .replenish(Array.from(currentOrderId), new anchor.BN(pastTimestamp), amount, false, null)
+        .replenish(
+          Array.from(currentOrderId),
+          new anchor.BN(pastTimestamp),
+          amount,
+          false,
+          null
+        )
         .accounts({
           config: configPDA,
           partnerDepositVault: partnerDepositVaultPDA,
           pdvTokenAccount: partnerDepositTokenAccount,
-          zowTokenAccount: zynkOpTokenAccount,
+          zcvTokenAccount: zcvTokenAccount,
           orderTracker: currentOrderTrackerPDA,
           manager: manager.publicKey,
           mint: tokenMint,
@@ -1513,23 +1703,30 @@ describe("zynk-core", () => {
     const now = Math.floor(Date.now() / 1000);
     const validity = now + 3600; // Valid for 1 hour
 
-    const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
-      partnerDepositTokenAccount
-    );
+    const sourceBalance_preTx =
+      await provider.connection.getTokenAccountBalance(
+        partnerDepositTokenAccount
+      );
     expect(+sourceBalance_preTx.value.amount).to.be.gte(+amount);
 
     const destBalance_preTx = await provider.connection.getTokenAccountBalance(
-      zynkOpTokenAccount
+      zcvTokenAccount
     );
 
     // Second replenish operation
     await program.methods
-      .replenish(Array.from(currentOrderId), new anchor.BN(validity),amount, false, null)
+      .replenish(
+        Array.from(currentOrderId),
+        new anchor.BN(validity),
+        amount,
+        false,
+        null
+      )
       .accounts({
         config: configPDA,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: partnerDepositTokenAccount,
-        zowTokenAccount: zynkOpTokenAccount,
+        zcvTokenAccount: zcvTokenAccount,
         orderTracker: currentOrderTrackerPDA,
         manager: manager.publicKey,
         mint: tokenMint,
@@ -1540,16 +1737,23 @@ describe("zynk-core", () => {
       .rpc();
 
     // Verify token pull
-    const sourceBalance_postTx = await provider.connection.getTokenAccountBalance(
-      partnerDepositTokenAccount
+    const sourceBalance_postTx =
+      await provider.connection.getTokenAccountBalance(
+        partnerDepositTokenAccount
+      );
+    assert.equal(
+      +sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount,
+      +amount
     );
-    assert.equal(+sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount, +amount)
-    
+
     // Verify token transfer
     const destBalance_postTx = await provider.connection.getTokenAccountBalance(
-      zynkOpTokenAccount
+      zcvTokenAccount
     );
-    assert.equal(+destBalance_postTx.value.amount - +destBalance_preTx.value.amount, +amount)
+    assert.equal(
+      +destBalance_postTx.value.amount - +destBalance_preTx.value.amount,
+      +amount
+    );
 
     // Verify that orderTracker is still active
     const orderTrackerInfo = await provider.connection.getAccountInfo(
@@ -1566,12 +1770,12 @@ describe("zynk-core", () => {
     // Must manually create since PDA can't own an ATA
     const partnerId = Buffer.alloc(32);
     partnerId.write("test-id", 0, "utf-8");
-    
+
     const [wrongPartnerDepositVaultPDA] = PublicKey.findProgramAddressSync(
       [Buffer.from("partner_deposit_vault"), partnerId],
       program.programId
     );
-    
+
     const wrongTokenAccount = await createAssociatedTokenAccount(
       provider.connection,
       partnerOperationalWallet,
@@ -1581,7 +1785,7 @@ describe("zynk-core", () => {
       TOKEN_PROGRAM_ID,
       ASSOCIATED_TOKEN_PROGRAM_ID,
       true // allowOwnerOffCurve
-    )
+    );
 
     try {
       await program.methods
@@ -1596,7 +1800,7 @@ describe("zynk-core", () => {
           config: configPDA,
           partnerDepositVault: wrongPartnerDepositVaultPDA,
           pdvTokenAccount: wrongTokenAccount, // Wrong token account (not the one in orderTracker)
-          zowTokenAccount: zynkOpTokenAccount,
+          zcvTokenAccount: zcvTokenAccount,
           orderTracker: currentOrderTrackerPDA,
           manager: manager.publicKey,
           mint: tokenMint,
@@ -1617,11 +1821,15 @@ describe("zynk-core", () => {
 
   it("Should be able close the order by manager via replenish", async () => {
     // First, replenish enough to meet amount_out requirement
-    const orderTrackerAccount = await program.account.orderTracker.fetch(currentOrderTrackerPDA);
-    const remainingAmount = orderTrackerAccount.amountOut.sub(orderTrackerAccount.amountIn);
+    const orderTrackerAccount = await program.account.orderTracker.fetch(
+      currentOrderTrackerPDA
+    );
+    const remainingAmount = orderTrackerAccount.amountOut.sub(
+      orderTrackerAccount.amountIn
+    );
     const now = Math.floor(Date.now() / 1000);
     const validity = now + 3600;
-    
+
     // Replenish the remaining amount and close the order
     await program.methods
       .replenish(
@@ -1635,7 +1843,7 @@ describe("zynk-core", () => {
         config: configPDA,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: partnerDepositTokenAccount,
-        zowTokenAccount: zynkOpTokenAccount,
+        zcvTokenAccount: zcvTokenAccount,
         orderTracker: currentOrderTrackerPDA,
         manager: manager.publicKey,
         mint: tokenMint,
@@ -1678,16 +1886,16 @@ describe("zynk-core", () => {
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: null,
-        zynkOpWallet: zynkOpWallet.publicKey,
-        zowTokenAccount: zynkOpTokenAccount,
+        zynkCoreVault: zynkCoreVault,
+        zcvTokenAccount: zcvTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: newOrderTrackerPDA,
         systemProgram: SystemProgram.programId,
         mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: null
+        sysvarInstructions: null,
       })
-      .signers([manager, zynkOpWallet])
+      .signers([manager])
       .rpc();
 
     // Create a new keypair for non-manager and fund it
@@ -1696,11 +1904,11 @@ describe("zynk-core", () => {
       nonManager.publicKey,
       1000000000
     );
-    await provider.connection.confirmTransaction(airdropSig, 'confirmed');
+    await provider.connection.confirmTransaction(airdropSig, "confirmed");
 
     const now = Math.floor(Date.now() / 1000);
     const validity = now + 3600;
-    
+
     try {
       await program.methods
         .replenish(
@@ -1714,7 +1922,7 @@ describe("zynk-core", () => {
           config: configPDA,
           partnerDepositVault: partnerDepositVaultPDA,
           pdvTokenAccount: partnerDepositTokenAccount,
-          zowTokenAccount: zynkOpTokenAccount,
+          zcvTokenAccount: zcvTokenAccount,
           orderTracker: newOrderTrackerPDA,
           manager: nonManager.publicKey, // Wrong manager
           mint: tokenMint,
@@ -1750,7 +1958,7 @@ describe("zynk-core", () => {
           config: configPDA,
           partnerDepositVault: partnerDepositVaultPDA,
           pdvTokenAccount: partnerDepositTokenAccount,
-          zowTokenAccount: zynkOpTokenAccount,
+          zcvTokenAccount: zcvTokenAccount,
           orderTracker: currentOrderTrackerPDA,
           manager: manager.publicKey,
           mint: tokenMint,
@@ -1770,7 +1978,7 @@ describe("zynk-core", () => {
   });
 
   it("Should fail when trying to replenish a closed order", async () => {
-    const amount = new anchor.BN(1000000)
+    const amount = new anchor.BN(1000000);
     // Attempt to replenish the closed order
     try {
       await program.methods
@@ -1785,7 +1993,7 @@ describe("zynk-core", () => {
           config: configPDA,
           partnerDepositVault: partnerDepositVaultPDA,
           pdvTokenAccount: partnerDepositTokenAccount,
-          zowTokenAccount: zynkOpTokenAccount,
+          zcvTokenAccount: zcvTokenAccount,
           orderTracker: currentOrderTrackerPDA,
           manager: manager.publicKey,
           mint: tokenMint,
@@ -1806,11 +2014,11 @@ describe("zynk-core", () => {
 
   it("Should fail when deposit vault has insufficient balance", async () => {
     const amount = new anchor.BN(100000000000);
-    
+
     // Create a new order since previous one is closed
     const newOrderId = generateOrderId();
     const newOrderTrackerPDA = deriveOrderTrackerPDA(newOrderId);
-    
+
     // Initialize new order
     await program.methods
       .createOrder(
@@ -1825,16 +2033,16 @@ describe("zynk-core", () => {
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: null,
-        zynkOpWallet: zynkOpWallet.publicKey,
-        zowTokenAccount: zynkOpTokenAccount,
+        zynkCoreVault: zynkCoreVault,
+        zcvTokenAccount: zcvTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: newOrderTrackerPDA,
         systemProgram: SystemProgram.programId,
         mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: null
+        sysvarInstructions: null,
       })
-      .signers([manager, zynkOpWallet])
+      .signers([manager])
       .rpc();
 
     // First drain the deposit vault by replenishing the maximum amount
@@ -1853,7 +2061,7 @@ describe("zynk-core", () => {
         config: configPDA,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: partnerDepositTokenAccount,
-        zowTokenAccount: zynkOpTokenAccount,
+        zcvTokenAccount: zcvTokenAccount,
         orderTracker: newOrderTrackerPDA,
         manager: manager.publicKey,
         mint: tokenMint,
@@ -1877,7 +2085,7 @@ describe("zynk-core", () => {
           config: configPDA,
           partnerDepositVault: partnerDepositVaultPDA,
           pdvTokenAccount: partnerDepositTokenAccount,
-          zowTokenAccount: zynkOpTokenAccount,
+          zcvTokenAccount: zcvTokenAccount,
           orderTracker: newOrderTrackerPDA,
           manager: manager.publicKey,
           mint: tokenMint,
@@ -1927,27 +2135,30 @@ describe("zynk-core", () => {
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: null,
-        zynkOpWallet: zynkOpWallet.publicKey,
-        zowTokenAccount: zynkOpTokenAccount,
+        zynkCoreVault: zynkCoreVault,
+        zcvTokenAccount: zcvTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
         mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: null
+        sysvarInstructions: null,
       })
-      .signers([manager, zynkOpWallet])
+      .signers([manager])
       .rpc();
 
     // Verify order was created
-    let orderTrackerAccount = await program.account.orderTracker.fetch(orderTrackerPDA);
+    let orderTrackerAccount = await program.account.orderTracker.fetch(
+      orderTrackerPDA
+    );
     assert.equal(orderTrackerAccount.amountOut.toNumber(), amount.toNumber());
     assert.equal(orderTrackerAccount.amountIn.toNumber(), 0);
 
     // Ensure partnerDepositTokenAccount has sufficient balance for replenish
-    const balanceBeforeReplenish = await provider.connection.getTokenAccountBalance(
-      partnerDepositTokenAccount
-    );
+    const balanceBeforeReplenish =
+      await provider.connection.getTokenAccountBalance(
+        partnerDepositTokenAccount
+      );
     if (+balanceBeforeReplenish.value.amount < +amount) {
       // Mint additional tokens if needed
       await mintTo(
@@ -1973,7 +2184,7 @@ describe("zynk-core", () => {
         config: configPDA,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: partnerDepositTokenAccount,
-        zowTokenAccount: zynkOpTokenAccount,
+        zcvTokenAccount: zcvTokenAccount,
         orderTracker: orderTrackerPDA,
         manager: manager.publicKey,
         mint: tokenMint,
@@ -2017,27 +2228,30 @@ describe("zynk-core", () => {
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: null,
-        zynkOpWallet: zynkOpWallet.publicKey,
-        zowTokenAccount: zynkOpTokenAccount,
+        zynkCoreVault: zynkCoreVault,
+        zcvTokenAccount: zcvTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
         mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: null
+        sysvarInstructions: null,
       })
-      .signers([manager, zynkOpWallet])
+      .signers([manager])
       .rpc();
 
     // Verify order was created
-    let orderTrackerAccount = await program.account.orderTracker.fetch(orderTrackerPDA);
+    let orderTrackerAccount = await program.account.orderTracker.fetch(
+      orderTrackerPDA
+    );
     assert.equal(orderTrackerAccount.amountOut.toNumber(), amount.toNumber());
     assert.equal(orderTrackerAccount.amountIn.toNumber(), 0);
 
     // Ensure partnerDepositTokenAccount2 has sufficient balance for replenish
-    const balanceBeforeReplenish2 = await provider.connection.getTokenAccountBalance(
-      partnerDepositTokenAccount2
-    );
+    const balanceBeforeReplenish2 =
+      await provider.connection.getTokenAccountBalance(
+        partnerDepositTokenAccount2
+      );
     if (+balanceBeforeReplenish2.value.amount < +amount) {
       // Mint additional tokens if needed
       await mintTo(
@@ -2063,7 +2277,7 @@ describe("zynk-core", () => {
         config: configPDA,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: partnerDepositTokenAccount2, // Using tokenMint2
-        zowTokenAccount: zynkOpTokenAccount2, // Using tokenMint2
+        zcvTokenAccount: zcvTokenAccount2, // Using tokenMint2
         orderTracker: orderTrackerPDA,
         manager: manager.publicKey,
         mint: tokenMint2,
@@ -2093,9 +2307,10 @@ describe("zynk-core", () => {
     const now = Math.floor(Date.now() / 1000);
     const validity = now + 3600;
 
-    const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
-      partnerDepositTokenAccount
-    );
+    const sourceBalance_preTx =
+      await provider.connection.getTokenAccountBalance(
+        partnerDepositTokenAccount
+      );
     expect(+sourceBalance_preTx.value.amount).to.be.gte(+amount);
 
     // Pull and create order with tokenMint
@@ -2112,20 +2327,22 @@ describe("zynk-core", () => {
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: partnerDepositTokenAccount,
-        zynkOpWallet: zynkOpWallet.publicKey,
-        zowTokenAccount: zynkOpTokenAccount,
+        zynkCoreVault: zynkCoreVault,
+        zcvTokenAccount: zcvTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
         mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: null
+        sysvarInstructions: null,
       })
-      .signers([manager, zynkOpWallet])
+      .signers([manager])
       .rpc();
 
     // Verify order was created
-    let orderTrackerAccount = await program.account.orderTracker.fetch(orderTrackerPDA);
+    let orderTrackerAccount = await program.account.orderTracker.fetch(
+      orderTrackerPDA
+    );
     assert.equal(orderTrackerAccount.amountOut.toNumber(), amount.toNumber());
     assert.equal(orderTrackerAccount.amountIn.toNumber(), amount.toNumber()); // amount_in equals amount_out after pull
 
@@ -2142,7 +2359,7 @@ describe("zynk-core", () => {
         config: configPDA,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: partnerDepositTokenAccount,
-        zowTokenAccount: zynkOpTokenAccount,
+        zcvTokenAccount: zcvTokenAccount,
         orderTracker: orderTrackerPDA,
         manager: manager.publicKey,
         mint: tokenMint,
@@ -2172,9 +2389,10 @@ describe("zynk-core", () => {
     const now = Math.floor(Date.now() / 1000);
     const validity = now + 3600;
 
-    const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
-      partnerDepositTokenAccount
-    );
+    const sourceBalance_preTx =
+      await provider.connection.getTokenAccountBalance(
+        partnerDepositTokenAccount
+      );
     expect(+sourceBalance_preTx.value.amount).to.be.gte(+amount);
 
     // Pull and create order with tokenMint
@@ -2191,20 +2409,22 @@ describe("zynk-core", () => {
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: partnerDepositTokenAccount,
-        zynkOpWallet: zynkOpWallet.publicKey,
-        zowTokenAccount: zynkOpTokenAccount, // Using tokenMint
+        zynkCoreVault: zynkCoreVault,
+        zcvTokenAccount: zcvTokenAccount, // Using tokenMint
         beneficiaryTokenAccount: partnerOperationalTokenAccount, // Using tokenMint
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
         mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: null
+        sysvarInstructions: null,
       })
-      .signers([manager, zynkOpWallet])
+      .signers([manager])
       .rpc();
 
     // Verify order was created
-    let orderTrackerAccount = await program.account.orderTracker.fetch(orderTrackerPDA);
+    let orderTrackerAccount = await program.account.orderTracker.fetch(
+      orderTrackerPDA
+    );
     assert.equal(orderTrackerAccount.amountOut.toNumber(), amount.toNumber());
     assert.equal(orderTrackerAccount.amountIn.toNumber(), amount.toNumber()); // amount_in equals amount_out after pull
 
@@ -2221,7 +2441,7 @@ describe("zynk-core", () => {
         config: configPDA,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: partnerDepositTokenAccount2, // Using tokenMint2
-        zowTokenAccount: zynkOpTokenAccount2, // Using tokenMint2
+        zcvTokenAccount: zcvTokenAccount2, // Using tokenMint2
         orderTracker: orderTrackerPDA,
         manager: manager.publicKey,
         mint: tokenMint2,
@@ -2262,16 +2482,16 @@ describe("zynk-core", () => {
           config: configPDA,
           manager: manager.publicKey,
           pdvTokenAccount: partnerDepositTokenAccountInvalid, // Using invalid token
-          zynkOpWallet: zynkOpWallet.publicKey,
-          zowTokenAccount: zynkOpTokenAccountInvalid, // Using invalid token
+          zynkCoreVault: zynkCoreVault,
+          zcvTokenAccount: zcvTokenAccountInvalid, // Using invalid token
           beneficiaryTokenAccount: partnerOperationalTokenAccountInvalid, // Using invalid token
           orderTracker: orderTrackerPDA,
           systemProgram: SystemProgram.programId,
           mint: tokenMint,
           tokenProgram: TOKEN_PROGRAM_ID,
-          sysvarInstructions: null
+          sysvarInstructions: null,
         })
-        .signers([manager, zynkOpWallet])
+        .signers([manager])
         .rpc();
       assert.fail("Expected create order to fail with invalid mint token");
     } catch (error) {
@@ -2302,18 +2522,20 @@ describe("zynk-core", () => {
           manager: manager.publicKey,
           partnerDepositVault: partnerDepositVaultPDA,
           pdvTokenAccount: partnerDepositTokenAccountInvalid, // Using invalid token
-          zynkOpWallet: zynkOpWallet.publicKey,
-          zowTokenAccount: zynkOpTokenAccountInvalid, // Using invalid token
+          zynkCoreVault: zynkCoreVault,
+          zcvTokenAccount: zcvTokenAccountInvalid, // Using invalid token
           beneficiaryTokenAccount: partnerOperationalTokenAccountInvalid, // Using invalid token
           orderTracker: orderTrackerPDA,
           systemProgram: SystemProgram.programId,
           mint: tokenMint,
           tokenProgram: TOKEN_PROGRAM_ID,
-          sysvarInstructions: null
+          sysvarInstructions: null,
         })
-        .signers([manager, zynkOpWallet])
+        .signers([manager])
         .rpc();
-      assert.fail("Expected pull and create order to fail with invalid mint token");
+      assert.fail(
+        "Expected pull and create order to fail with invalid mint token"
+      );
     } catch (error) {
       assert.include(
         error.message,
@@ -2342,18 +2564,20 @@ describe("zynk-core", () => {
           manager: manager.publicKey,
           partnerDepositVault: partnerDepositVaultPDA,
           pdvTokenAccount: partnerDepositTokenAccount,
-          zynkOpWallet: zynkOpWallet.publicKey,
-          zowTokenAccount: zynkOpTokenAccount2, // Using tokenMint2 (different from pdv)
+          zynkCoreVault: zynkCoreVault,
+          zcvTokenAccount: zcvTokenAccount2, // Using tokenMint2 (different from pdv)
           beneficiaryTokenAccount: partnerOperationalTokenAccount2, // Using tokenMint2
           orderTracker: orderTrackerPDA,
           systemProgram: SystemProgram.programId,
           mint: tokenMint,
           tokenProgram: TOKEN_PROGRAM_ID,
-          sysvarInstructions: null
+          sysvarInstructions: null,
         })
-        .signers([manager, zynkOpWallet])
+        .signers([manager])
         .rpc();
-      assert.fail("Expected pull and create order to fail when pdv and zow mint tokens are different");
+      assert.fail(
+        "Expected pull and create order to fail when pdv and zow mint tokens are different"
+      );
     } catch (error) {
       assert.include(
         error.message,
@@ -2384,20 +2608,22 @@ describe("zynk-core", () => {
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: null,
-        zynkOpWallet: zynkOpWallet.publicKey,
-        zowTokenAccount: zynkOpTokenAccount,
+        zynkCoreVault: zynkCoreVault,
+        zcvTokenAccount: zcvTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
         mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: null
+        sysvarInstructions: null,
       })
-      .signers([manager, zynkOpWallet])
+      .signers([manager])
       .rpc();
 
     // Verify order was created
-    let orderTrackerAccount = await program.account.orderTracker.fetch(orderTrackerPDA);
+    let orderTrackerAccount = await program.account.orderTracker.fetch(
+      orderTrackerPDA
+    );
     assert.equal(orderTrackerAccount.amountOut.toNumber(), amount.toNumber());
 
     // Ensure partnerDepositTokenAccountInvalid has sufficient balance
@@ -2429,7 +2655,7 @@ describe("zynk-core", () => {
           config: configPDA,
           partnerDepositVault: partnerDepositVaultPDA,
           pdvTokenAccount: partnerDepositTokenAccountInvalid, // Using invalid token
-          zowTokenAccount: zynkOpTokenAccountInvalid, // Using invalid token
+          zcvTokenAccount: zcvTokenAccountInvalid, // Using invalid token
           orderTracker: orderTrackerPDA,
           manager: manager.publicKey,
           mint: tokenMint,
@@ -2469,20 +2695,22 @@ describe("zynk-core", () => {
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: null, // Using tokenMint
-        zynkOpWallet: zynkOpWallet.publicKey,
-        zowTokenAccount: zynkOpTokenAccount, // Using tokenMint
+        zynkCoreVault: zynkCoreVault,
+        zcvTokenAccount: zcvTokenAccount, // Using tokenMint
         beneficiaryTokenAccount: partnerOperationalTokenAccount, // Using tokenMint
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
         mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: null
+        sysvarInstructions: null,
       })
-      .signers([manager, zynkOpWallet])
+      .signers([manager])
       .rpc();
 
     // Verify order was created
-    let orderTrackerAccount = await program.account.orderTracker.fetch(orderTrackerPDA);
+    let orderTrackerAccount = await program.account.orderTracker.fetch(
+      orderTrackerPDA
+    );
     assert.equal(orderTrackerAccount.amountOut.toNumber(), amount.toNumber());
 
     // Ensure partnerDepositTokenAccount2 has sufficient balance
@@ -2514,7 +2742,7 @@ describe("zynk-core", () => {
           config: configPDA,
           partnerDepositVault: partnerDepositVaultPDA,
           pdvTokenAccount: partnerDepositTokenAccount2, // Using tokenMint2
-          zowTokenAccount: zynkOpTokenAccount, // Using tokenMint (different from pdv)
+          zcvTokenAccount: zcvTokenAccount, // Using tokenMint (different from pdv)
           orderTracker: orderTrackerPDA,
           manager: manager.publicKey,
           mint: tokenMint,
@@ -2523,7 +2751,9 @@ describe("zynk-core", () => {
         })
         .signers([manager])
         .rpc();
-      assert.fail("Expected close order to fail when pdv and zow mint tokens are different");
+      assert.fail(
+        "Expected close order to fail when pdv and zow mint tokens are different"
+      );
     } catch (error) {
       assert.include(
         error.message,
@@ -2541,9 +2771,10 @@ describe("zynk-core", () => {
     const validity = now + 3600;
 
     // Ensure partnerDepositTokenAccount has sufficient balance
-    const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
-      partnerDepositTokenAccount
-    );
+    const sourceBalance_preTx =
+      await provider.connection.getTokenAccountBalance(
+        partnerDepositTokenAccount
+      );
     if (+sourceBalance_preTx.value.amount < +amount) {
       await mintTo(
         provider.connection,
@@ -2569,20 +2800,22 @@ describe("zynk-core", () => {
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: partnerDepositTokenAccount,
-        zynkOpWallet: zynkOpWallet.publicKey,
-        zowTokenAccount: zynkOpTokenAccount,
+        zynkCoreVault: zynkCoreVault,
+        zcvTokenAccount: zcvTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
         mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: null
+        sysvarInstructions: null,
       })
-      .signers([manager, zynkOpWallet])
+      .signers([manager])
       .rpc();
 
     // Verify order was created
-    let orderTrackerAccount = await program.account.orderTracker.fetch(orderTrackerPDA);
+    let orderTrackerAccount = await program.account.orderTracker.fetch(
+      orderTrackerPDA
+    );
     assert.equal(orderTrackerAccount.amountOut.toNumber(), amount.toNumber());
     assert.equal(orderTrackerAccount.amountIn.toNumber(), amount.toNumber());
 
@@ -2615,7 +2848,7 @@ describe("zynk-core", () => {
           config: configPDA,
           partnerDepositVault: partnerDepositVaultPDA,
           pdvTokenAccount: partnerDepositTokenAccountInvalid, // Using invalid token
-          zowTokenAccount: zynkOpTokenAccountInvalid, // Using invalid token
+          zcvTokenAccount: zcvTokenAccountInvalid, // Using invalid token
           orderTracker: orderTrackerPDA,
           manager: manager.publicKey,
           mint: tokenMint,
@@ -2642,9 +2875,10 @@ describe("zynk-core", () => {
     const validity = now + 3600;
 
     // Ensure partnerDepositTokenAccount has sufficient balance
-    const sourceBalance_preTx = await provider.connection.getTokenAccountBalance(
-      partnerDepositTokenAccount
-    );
+    const sourceBalance_preTx =
+      await provider.connection.getTokenAccountBalance(
+        partnerDepositTokenAccount
+      );
     if (+sourceBalance_preTx.value.amount < +amount) {
       await mintTo(
         provider.connection,
@@ -2670,20 +2904,22 @@ describe("zynk-core", () => {
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: partnerDepositTokenAccount,
-        zynkOpWallet: zynkOpWallet.publicKey,
-        zowTokenAccount: zynkOpTokenAccount, // Using tokenMint
+        zynkCoreVault: zynkCoreVault,
+        zcvTokenAccount: zcvTokenAccount, // Using tokenMint
         beneficiaryTokenAccount: partnerOperationalTokenAccount, // Using tokenMint
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
         mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: null
+        sysvarInstructions: null,
       })
-      .signers([manager, zynkOpWallet])
+      .signers([manager])
       .rpc();
 
     // Verify order was created
-    let orderTrackerAccount = await program.account.orderTracker.fetch(orderTrackerPDA);
+    let orderTrackerAccount = await program.account.orderTracker.fetch(
+      orderTrackerPDA
+    );
     assert.equal(orderTrackerAccount.amountOut.toNumber(), amount.toNumber());
     assert.equal(orderTrackerAccount.amountIn.toNumber(), amount.toNumber());
 
@@ -2716,7 +2952,7 @@ describe("zynk-core", () => {
           config: configPDA,
           partnerDepositVault: partnerDepositVaultPDA,
           pdvTokenAccount: partnerDepositTokenAccount2, // Using tokenMint2
-          zowTokenAccount: zynkOpTokenAccount, // Using tokenMint (different from pdv)
+          zcvTokenAccount: zcvTokenAccount, // Using tokenMint (different from pdv)
           orderTracker: orderTrackerPDA,
           manager: manager.publicKey,
           mint: tokenMint,
@@ -2725,7 +2961,9 @@ describe("zynk-core", () => {
         })
         .signers([manager])
         .rpc();
-      assert.fail("Expected close order to fail when pdv and zow mint tokens are different");
+      assert.fail(
+        "Expected close order to fail when pdv and zow mint tokens are different"
+      );
     } catch (error) {
       assert.include(
         error.message,
@@ -2757,20 +2995,22 @@ describe("zynk-core", () => {
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: null,
-        zynkOpWallet: zynkOpWallet.publicKey,
-        zowTokenAccount: zynkOpTokenAccount,
+        zynkCoreVault: zynkCoreVault,
+        zcvTokenAccount: zcvTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
         mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: null
+        sysvarInstructions: null,
       })
-      .signers([manager, zynkOpWallet])
+      .signers([manager])
       .rpc();
 
     // Verify order was created
-    let orderTrackerAccount = await program.account.orderTracker.fetch(orderTrackerPDA);
+    let orderTrackerAccount = await program.account.orderTracker.fetch(
+      orderTrackerPDA
+    );
     assert.equal(orderTrackerAccount.amountOut.toNumber(), amount.toNumber());
     assert.equal(orderTrackerAccount.amountIn.toNumber(), 0);
 
@@ -2790,7 +3030,7 @@ describe("zynk-core", () => {
     }
 
     const zowBalance2_preTx = await provider.connection.getTokenAccountBalance(
-      zynkOpTokenAccount2
+      zcvTokenAccount2
     );
 
     // Partially replenish with tokenMint2 (different mint token, but both valid)
@@ -2806,7 +3046,7 @@ describe("zynk-core", () => {
         config: configPDA,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: partnerDepositTokenAccount2, // Using tokenMint2
-        zowTokenAccount: zynkOpTokenAccount2, // Using tokenMint2
+        zcvTokenAccount: zcvTokenAccount2, // Using tokenMint2
         orderTracker: orderTrackerPDA,
         manager: manager.publicKey,
         mint: tokenMint2,
@@ -2826,7 +3066,9 @@ describe("zynk-core", () => {
     );
 
     // Verify amount_in increased
-    orderTrackerAccount = await program.account.orderTracker.fetch(orderTrackerPDA);
+    orderTrackerAccount = await program.account.orderTracker.fetch(
+      orderTrackerPDA
+    );
     assert.equal(
       orderTrackerAccount.amountIn.toNumber(),
       replenishAmount.toNumber(),
@@ -2835,7 +3077,7 @@ describe("zynk-core", () => {
 
     // Verify token transfer occurred
     const zowBalance2_postTx = await provider.connection.getTokenAccountBalance(
-      zynkOpTokenAccount2
+      zcvTokenAccount2
     );
     assert.equal(
       +zowBalance2_postTx.value.amount - +zowBalance2_preTx.value.amount,
@@ -2866,20 +3108,22 @@ describe("zynk-core", () => {
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: null,
-        zynkOpWallet: zynkOpWallet.publicKey,
-        zowTokenAccount: zynkOpTokenAccount,
+        zynkCoreVault: zynkCoreVault,
+        zcvTokenAccount: zcvTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
         mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: null
+        sysvarInstructions: null,
       })
-      .signers([manager, zynkOpWallet])
+      .signers([manager])
       .rpc();
 
     // Verify order was created
-    let orderTrackerAccount = await program.account.orderTracker.fetch(orderTrackerPDA);
+    let orderTrackerAccount = await program.account.orderTracker.fetch(
+      orderTrackerPDA
+    );
     assert.equal(orderTrackerAccount.amountOut.toNumber(), amount.toNumber());
     assert.equal(orderTrackerAccount.amountIn.toNumber(), 0);
 
@@ -2912,7 +3156,7 @@ describe("zynk-core", () => {
           config: configPDA,
           partnerDepositVault: partnerDepositVaultPDA,
           pdvTokenAccount: partnerDepositTokenAccount2, // Using tokenMint2
-          zowTokenAccount: zynkOpTokenAccount, // Using tokenMint (different from pdv)
+          zcvTokenAccount: zcvTokenAccount, // Using tokenMint (different from pdv)
           orderTracker: orderTrackerPDA,
           manager: manager.publicKey,
           mint: tokenMint,
@@ -2921,7 +3165,9 @@ describe("zynk-core", () => {
         })
         .signers([manager])
         .rpc();
-      assert.fail("Expected partial replenish to fail when pdv and zow mint tokens are different");
+      assert.fail(
+        "Expected partial replenish to fail when pdv and zow mint tokens are different"
+      );
     } catch (error) {
       assert.include(
         error.message,
@@ -2938,18 +3184,20 @@ describe("zynk-core", () => {
     // Create 2 orders using create_order (non-zero amount)
     const order1Id = generateOrderId();
     const order1TrackerPDA = deriveOrderTrackerPDA(order1Id);
-    
+
     const order2Id = generateOrderId();
     const order2TrackerPDA = deriveOrderTrackerPDA(order2Id);
 
-    // Ensure zynkOpTokenAccount has enough tokens
-    const zynkOpBalance = await provider.connection.getTokenAccountBalance(zynkOpTokenAccount);
-    if (+zynkOpBalance.value.amount < +amount.mul(new anchor.BN(2))) {
+    // Ensure zcvTokenAccount has enough tokens
+    const zcvBalance = await provider.connection.getTokenAccountBalance(
+      zcvTokenAccount
+    );
+    if (+zcvBalance.value.amount < +amount.mul(new anchor.BN(2))) {
       await mintTo(
         provider.connection,
         admin,
         tokenMint,
-        zynkOpTokenAccount,
+        zcvTokenAccount,
         admin.publicKey,
         amount.mul(new anchor.BN(2)).toNumber()
       );
@@ -2969,16 +3217,16 @@ describe("zynk-core", () => {
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: null,
-        zynkOpWallet: zynkOpWallet.publicKey,
-        zowTokenAccount: zynkOpTokenAccount,
+        zynkCoreVault: zynkCoreVault,
+        zcvTokenAccount: zcvTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: order1TrackerPDA,
         systemProgram: SystemProgram.programId,
         mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: null
+        sysvarInstructions: null,
       })
-      .signers([manager, zynkOpWallet])
+      .signers([manager])
       .rpc();
 
     // Create second order using create_order
@@ -2995,27 +3243,29 @@ describe("zynk-core", () => {
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: null,
-        zynkOpWallet: zynkOpWallet.publicKey,
-        zowTokenAccount: zynkOpTokenAccount,
+        zynkCoreVault: zynkCoreVault,
+        zcvTokenAccount: zcvTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: order2TrackerPDA,
         systemProgram: SystemProgram.programId,
         mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: null
+        sysvarInstructions: null,
       })
-      .signers([manager, zynkOpWallet])
+      .signers([manager])
       .rpc();
 
     // Create 2 orders using pull_and_create_order
     const order3Id = generateOrderId();
     const order3TrackerPDA = deriveOrderTrackerPDA(order3Id);
-    
+
     const order4Id = generateOrderId();
     const order4TrackerPDA = deriveOrderTrackerPDA(order4Id);
 
     // Ensure partnerDepositTokenAccount has enough tokens
-    const pdvBalance = await provider.connection.getTokenAccountBalance(partnerDepositTokenAccount);
+    const pdvBalance = await provider.connection.getTokenAccountBalance(
+      partnerDepositTokenAccount
+    );
     if (+pdvBalance.value.amount < +amount.mul(new anchor.BN(2))) {
       await mintTo(
         provider.connection,
@@ -3041,16 +3291,16 @@ describe("zynk-core", () => {
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: partnerDepositTokenAccount,
-        zynkOpWallet: zynkOpWallet.publicKey,
-        zowTokenAccount: zynkOpTokenAccount,
+        zynkCoreVault: zynkCoreVault,
+        zcvTokenAccount: zcvTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: order3TrackerPDA,
         systemProgram: SystemProgram.programId,
         mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: null
+        sysvarInstructions: null,
       })
-      .signers([manager, zynkOpWallet])
+      .signers([manager])
       .rpc();
 
     // Create fourth order using pull_and_create_order
@@ -3067,22 +3317,22 @@ describe("zynk-core", () => {
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: partnerDepositTokenAccount,
-        zynkOpWallet: zynkOpWallet.publicKey,
-        zowTokenAccount: zynkOpTokenAccount,
+        zynkCoreVault: zynkCoreVault,
+        zcvTokenAccount: zcvTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: order4TrackerPDA,
         systemProgram: SystemProgram.programId,
         mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: null
+        sysvarInstructions: null,
       })
-      .signers([manager, zynkOpWallet])
+      .signers([manager])
       .rpc();
 
     // Create 2 orders using create_order with zero amount
     const order5Id = generateOrderId();
     const order5TrackerPDA = deriveOrderTrackerPDA(order5Id);
-    
+
     const order6Id = generateOrderId();
     const order6TrackerPDA = deriveOrderTrackerPDA(order6Id);
 
@@ -3100,16 +3350,16 @@ describe("zynk-core", () => {
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: null,
-        zynkOpWallet: zynkOpWallet.publicKey,
-        zowTokenAccount: zynkOpTokenAccount,
+        zynkCoreVault: zynkCoreVault,
+        zcvTokenAccount: zcvTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: order5TrackerPDA,
         systemProgram: SystemProgram.programId,
         mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: null
+        sysvarInstructions: null,
       })
-      .signers([manager, zynkOpWallet])
+      .signers([manager])
       .rpc();
 
     // Create sixth order using create_order with zero amount
@@ -3126,25 +3376,37 @@ describe("zynk-core", () => {
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: null,
-        zynkOpWallet: zynkOpWallet.publicKey,
-        zowTokenAccount: zynkOpTokenAccount,
+        zynkCoreVault: zynkCoreVault,
+        zcvTokenAccount: zcvTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: order6TrackerPDA,
         systemProgram: SystemProgram.programId,
         mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: null
+        sysvarInstructions: null,
       })
-      .signers([manager, zynkOpWallet])
+      .signers([manager])
       .rpc();
 
     // Verify all order trackers exist
-    const order1Account = await program.account.orderTracker.fetch(order1TrackerPDA);
-    const order2Account = await program.account.orderTracker.fetch(order2TrackerPDA);
-    const order3Account = await program.account.orderTracker.fetch(order3TrackerPDA);
-    const order4Account = await program.account.orderTracker.fetch(order4TrackerPDA);
-    const order5Account = await program.account.orderTracker.fetch(order5TrackerPDA);
-    const order6Account = await program.account.orderTracker.fetch(order6TrackerPDA);
+    const order1Account = await program.account.orderTracker.fetch(
+      order1TrackerPDA
+    );
+    const order2Account = await program.account.orderTracker.fetch(
+      order2TrackerPDA
+    );
+    const order3Account = await program.account.orderTracker.fetch(
+      order3TrackerPDA
+    );
+    const order4Account = await program.account.orderTracker.fetch(
+      order4TrackerPDA
+    );
+    const order5Account = await program.account.orderTracker.fetch(
+      order5TrackerPDA
+    );
+    const order6Account = await program.account.orderTracker.fetch(
+      order6TrackerPDA
+    );
 
     assert.isNotNull(order1Account, "Order 1 tracker should exist");
     assert.isNotNull(order2Account, "Order 2 tracker should exist");
@@ -3154,14 +3416,26 @@ describe("zynk-core", () => {
     assert.isNotNull(order6Account, "Order 6 tracker should exist");
 
     // Get lamports in each order tracker account before closing
-    const order1Info = await provider.connection.getAccountInfo(order1TrackerPDA);
-    const order2Info = await provider.connection.getAccountInfo(order2TrackerPDA);
-    const order3Info = await provider.connection.getAccountInfo(order3TrackerPDA);
-    const order4Info = await provider.connection.getAccountInfo(order4TrackerPDA);
-    const order5Info = await provider.connection.getAccountInfo(order5TrackerPDA);
-    const order6Info = await provider.connection.getAccountInfo(order6TrackerPDA);
+    const order1Info = await provider.connection.getAccountInfo(
+      order1TrackerPDA
+    );
+    const order2Info = await provider.connection.getAccountInfo(
+      order2TrackerPDA
+    );
+    const order3Info = await provider.connection.getAccountInfo(
+      order3TrackerPDA
+    );
+    const order4Info = await provider.connection.getAccountInfo(
+      order4TrackerPDA
+    );
+    const order5Info = await provider.connection.getAccountInfo(
+      order5TrackerPDA
+    );
+    const order6Info = await provider.connection.getAccountInfo(
+      order6TrackerPDA
+    );
 
-    const totalLamportsToTransfer = 
+    const totalLamportsToTransfer =
       (order1Info?.lamports || 0) +
       (order2Info?.lamports || 0) +
       (order3Info?.lamports || 0) +
@@ -3170,7 +3444,9 @@ describe("zynk-core", () => {
       (order6Info?.lamports || 0);
 
     // Get admin balance before closing
-    const adminBalanceBefore = await provider.connection.getBalance(admin.publicKey);
+    const adminBalanceBefore = await provider.connection.getBalance(
+      admin.publicKey
+    );
 
     // Call closeOrders with all 6 order tracker PDAs in remaining_accounts
     // Note: accounts must be writable to be closed
@@ -3283,7 +3559,9 @@ describe("zynk-core", () => {
     }
 
     // Verify admin balance increased by the lamports from closed accounts
-    const adminBalanceAfter = await provider.connection.getBalance(admin.publicKey);
+    const adminBalanceAfter = await provider.connection.getBalance(
+      admin.publicKey
+    );
     assert.equal(
       adminBalanceAfter - adminBalanceBefore,
       totalLamportsToTransfer,
@@ -3297,18 +3575,20 @@ describe("zynk-core", () => {
     // Create 2 orders
     const order1Id = generateOrderId();
     const order1TrackerPDA = deriveOrderTrackerPDA(order1Id);
-    
+
     const order2Id = generateOrderId();
     const order2TrackerPDA = deriveOrderTrackerPDA(order2Id);
 
-    // Ensure zynkOpTokenAccount has enough tokens
-    const zynkOpBalance = await provider.connection.getTokenAccountBalance(zynkOpTokenAccount);
-    if (+zynkOpBalance.value.amount < +amount.mul(new anchor.BN(2))) {
+    // Ensure zcvTokenAccount has enough tokens
+    const zcvBalance = await provider.connection.getTokenAccountBalance(
+      zcvTokenAccount
+    );
+    if (+zcvBalance.value.amount < +amount.mul(new anchor.BN(2))) {
       await mintTo(
         provider.connection,
         admin,
         tokenMint,
-        zynkOpTokenAccount,
+        zcvTokenAccount,
         admin.publicKey,
         amount.mul(new anchor.BN(2)).toNumber()
       );
@@ -3328,16 +3608,16 @@ describe("zynk-core", () => {
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: null,
-        zynkOpWallet: zynkOpWallet.publicKey,
-        zowTokenAccount: zynkOpTokenAccount,
+        zynkCoreVault: zynkCoreVault,
+        zcvTokenAccount: zcvTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: order1TrackerPDA,
         systemProgram: SystemProgram.programId,
         mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: null
+        sysvarInstructions: null,
       })
-      .signers([manager, zynkOpWallet])
+      .signers([manager])
       .rpc();
 
     // Create second order
@@ -3354,16 +3634,16 @@ describe("zynk-core", () => {
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: null,
-        zynkOpWallet: zynkOpWallet.publicKey,
-        zowTokenAccount: zynkOpTokenAccount,
+        zynkCoreVault: zynkCoreVault,
+        zcvTokenAccount: zcvTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: order2TrackerPDA,
         systemProgram: SystemProgram.programId,
         mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: null
+        sysvarInstructions: null,
       })
-      .signers([manager, zynkOpWallet])
+      .signers([manager])
       .rpc();
 
     // Close the first order using closeOrders
@@ -3413,7 +3693,9 @@ describe("zynk-core", () => {
         ])
         .signers([admin])
         .rpc();
-      assert.fail("Expected closeOrders to fail when one order is already closed");
+      assert.fail(
+        "Expected closeOrders to fail when one order is already closed"
+      );
     } catch (error) {
       // Should fail because order1TrackerPDA is already closed and can't be deserialized
       // The account doesn't exist anymore, so it might fail at transaction level or when trying to deserialize
@@ -3431,14 +3713,16 @@ describe("zynk-core", () => {
     const orderId = generateOrderId();
     const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
 
-    // Ensure zynkOpTokenAccount has enough tokens
-    const zynkOpBalance = await provider.connection.getTokenAccountBalance(zynkOpTokenAccount);
-    if (+zynkOpBalance.value.amount < +amount) {
+    // Ensure zcvTokenAccount has enough tokens
+    const zcvBalance = await provider.connection.getTokenAccountBalance(
+      zcvTokenAccount
+    );
+    if (+zcvBalance.value.amount < +amount) {
       await mintTo(
         provider.connection,
         admin,
         tokenMint,
-        zynkOpTokenAccount,
+        zcvTokenAccount,
         admin.publicKey,
         amount.toNumber()
       );
@@ -3458,16 +3742,16 @@ describe("zynk-core", () => {
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: null,
-        zynkOpWallet: zynkOpWallet.publicKey,
-        zowTokenAccount: zynkOpTokenAccount,
+        zynkCoreVault: zynkCoreVault,
+        zcvTokenAccount: zcvTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
         mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: null
+        sysvarInstructions: null,
       })
-      .signers([manager, zynkOpWallet])
+      .signers([manager])
       .rpc();
 
     // Try with manager - should fail
@@ -3528,7 +3812,7 @@ describe("zynk-core", () => {
       randomWallet.publicKey,
       1000000000
     );
-    await provider.connection.confirmTransaction(airdropSig, 'confirmed');
+    await provider.connection.confirmTransaction(airdropSig, "confirmed");
 
     try {
       await program.methods
@@ -3563,14 +3847,16 @@ describe("zynk-core", () => {
     const orderId = generateOrderId();
     const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
 
-    // Ensure zynkOpTokenAccount has enough tokens
-    const zynkOpBalance = await provider.connection.getTokenAccountBalance(zynkOpTokenAccount);
-    if (+zynkOpBalance.value.amount < +amount) {
+    // Ensure zcvTokenAccount has enough tokens
+    const zcvBalance = await provider.connection.getTokenAccountBalance(
+      zcvTokenAccount
+    );
+    if (+zcvBalance.value.amount < +amount) {
       await mintTo(
         provider.connection,
         admin,
         tokenMint,
-        zynkOpTokenAccount,
+        zcvTokenAccount,
         admin.publicKey,
         amount.toNumber()
       );
@@ -3590,16 +3876,16 @@ describe("zynk-core", () => {
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: null,
-        zynkOpWallet: zynkOpWallet.publicKey,
-        zowTokenAccount: zynkOpTokenAccount,
+        zynkCoreVault: zynkCoreVault,
+        zcvTokenAccount: zcvTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
         mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: null
+        sysvarInstructions: null,
       })
-      .signers([manager, zynkOpWallet])
+      .signers([manager])
       .rpc();
 
     // Pause the contract
@@ -3641,10 +3927,7 @@ describe("zynk-core", () => {
     // Unpause for other tests using executeUnpause with timelock
     const action = TimelockAction.Unpause;
     const [timelockPDA] = PublicKey.findProgramAddressSync(
-      [
-        Buffer.from("timelock"),
-        Buffer.from([action]),
-      ],
+      [Buffer.from("timelock"), Buffer.from([action])],
       program.programId
     );
 
@@ -3654,7 +3937,7 @@ describe("zynk-core", () => {
       .accounts({
         config: configPDA,
         timelock: timelockPDA,
-        manager: manager.publicKey
+        manager: manager.publicKey,
       })
       .signers([manager])
       .rpc();
@@ -3665,7 +3948,7 @@ describe("zynk-core", () => {
       .accounts({
         config: configPDA,
         timelock: timelockPDA,
-        guardian: guardian.publicKey
+        guardian: guardian.publicKey,
       })
       .signers([guardian])
       .rpc();
@@ -3676,7 +3959,7 @@ describe("zynk-core", () => {
       .accounts({
         config: configPDA,
         timelock: timelockPDA,
-        admin: admin.publicKey
+        admin: admin.publicKey,
       })
       .signers([admin])
       .rpc();
@@ -3689,14 +3972,16 @@ describe("zynk-core", () => {
     const orderId = generateOrderId();
     const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
 
-    // Ensure zynkOpTokenAccount has enough tokens
-    const zynkOpBalance = await provider.connection.getTokenAccountBalance(zynkOpTokenAccount);
-    if (+zynkOpBalance.value.amount < +amount) {
+    // Ensure zcvTokenAccount has enough tokens
+    const zcvBalance = await provider.connection.getTokenAccountBalance(
+      zcvTokenAccount
+    );
+    if (+zcvBalance.value.amount < +amount) {
       await mintTo(
         provider.connection,
         admin,
         tokenMint,
-        zynkOpTokenAccount,
+        zcvTokenAccount,
         admin.publicKey,
         amount.toNumber()
       );
@@ -3716,16 +4001,16 @@ describe("zynk-core", () => {
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: null,
-        zynkOpWallet: zynkOpWallet.publicKey,
-        zowTokenAccount: zynkOpTokenAccount,
+        zynkCoreVault: zynkCoreVault,
+        zcvTokenAccount: zcvTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
         mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: null
+        sysvarInstructions: null,
       })
-      .signers([manager, zynkOpWallet])
+      .signers([manager])
       .rpc();
 
     // Try to close with config PDA instead of order tracker - should fail
@@ -3745,7 +4030,9 @@ describe("zynk-core", () => {
         ])
         .signers([admin])
         .rpc();
-      assert.fail("Expected closeOrders to fail when config PDA is passed instead of OrderTracker");
+      assert.fail(
+        "Expected closeOrders to fail when config PDA is passed instead of OrderTracker"
+      );
     } catch (error) {
       assert.include(
         error.message,
@@ -3762,14 +4049,16 @@ describe("zynk-core", () => {
     const orderId = generateOrderId();
     const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
 
-    // Ensure zynkOpTokenAccount has enough tokens
-    const zynkOpBalance = await provider.connection.getTokenAccountBalance(zynkOpTokenAccount);
-    if (+zynkOpBalance.value.amount < +amount) {
+    // Ensure zcvTokenAccount has enough tokens
+    const zcvBalance = await provider.connection.getTokenAccountBalance(
+      zcvTokenAccount
+    );
+    if (+zcvBalance.value.amount < +amount) {
       await mintTo(
         provider.connection,
         admin,
         tokenMint,
-        zynkOpTokenAccount,
+        zcvTokenAccount,
         admin.publicKey,
         amount.toNumber()
       );
@@ -3789,16 +4078,16 @@ describe("zynk-core", () => {
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: null,
-        zynkOpWallet: zynkOpWallet.publicKey,
-        zowTokenAccount: zynkOpTokenAccount,
+        zynkCoreVault: zynkCoreVault,
+        zcvTokenAccount: zcvTokenAccount,
         beneficiaryTokenAccount: partnerOperationalTokenAccount,
         orderTracker: orderTrackerPDA,
         systemProgram: SystemProgram.programId,
         mint: tokenMint,
         tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: null
+        sysvarInstructions: null,
       })
-      .signers([manager, zynkOpWallet])
+      .signers([manager])
       .rpc();
 
     // Try to close with partner deposit vault PDA instead of order tracker - should fail
@@ -3818,60 +4107,61 @@ describe("zynk-core", () => {
         ])
         .signers([admin])
         .rpc();
-      assert.fail("Expected closeOrders to fail when partner deposit vault PDA is passed instead of OrderTracker");
+      assert.fail(
+        "Expected closeOrders to fail when partner deposit vault PDA is passed instead of OrderTracker"
+      );
     } catch (error) {
       // The partner deposit vault is not owned by the program, so it should fail with InvalidOrder
       // Or if it's owned but wrong discriminator, it should fail with AccountDiscriminatorMismatch
       assert.ok(
-        error.message.includes("InvalidOrder") || 
-        error.message.includes("AccountDiscriminatorMismatch"),
+        error.message.includes("InvalidOrder") ||
+          error.message.includes("AccountDiscriminatorMismatch"),
         `Expected InvalidOrder error when partner deposit vault PDA is passed instead of OrderTracker. Got: ${error.message}`
       );
     }
   });
-
 
   it("Should be able to pause by manager", async () => {
     await program.methods
       .pause()
       .accounts({
         config: configPDA,
-        authority: manager.publicKey
+        authority: manager.publicKey,
       })
       .signers([manager])
-      .rpc()
+      .rpc();
 
     const configAccount = await program.account.config.fetch(configPDA);
-    assert.ok(configAccount.paused, "Expected program to be paused!")
-  })
+    assert.ok(configAccount.paused, "Expected program to be paused!");
+  });
 
   it("Should be able to pause by admin", async () => {
     await program.methods
       .pause()
       .accounts({
         config: configPDA,
-        authority: admin.publicKey
+        authority: admin.publicKey,
       })
       .signers([admin])
-      .rpc()
+      .rpc();
 
     const configAccount = await program.account.config.fetch(configPDA);
-    assert.ok(configAccount.paused, "Expected program to be paused!")
-  })
+    assert.ok(configAccount.paused, "Expected program to be paused!");
+  });
 
   it("Should be able to pause by guardian", async () => {
     await program.methods
       .pause()
       .accounts({
         config: configPDA,
-        authority: guardian.publicKey
+        authority: guardian.publicKey,
       })
       .signers([guardian])
-      .rpc()
+      .rpc();
 
     const configAccount = await program.account.config.fetch(configPDA);
-    assert.ok(configAccount.paused, "Expected program to be paused!")
-  })
+    assert.ok(configAccount.paused, "Expected program to be paused!");
+  });
 
   it("Should not be able to pause by non-authority", async () => {
     // Create a wrong keypair for this test
@@ -3880,33 +4170,30 @@ describe("zynk-core", () => {
       wrongAuthority.publicKey,
       1000000000
     );
-    await provider.connection.confirmTransaction(airdropSig, 'confirmed');
-    
+    await provider.connection.confirmTransaction(airdropSig, "confirmed");
+
     try {
       await program.methods
         .pause()
         .accounts({
           config: configPDA,
-          authority: wrongAuthority.publicKey
+          authority: wrongAuthority.publicKey,
         })
         .signers([wrongAuthority])
-        .rpc()
+        .rpc();
     } catch (error) {
       assert.include(
         error.message,
         "UnauthorizedSigner",
         "Expected UnauthorizedSigner error"
-      )
+      );
     }
-  })
+  });
 
   it("Should not be able to request timelock by non-manager", async () => {
-    const action = TimelockAction.UpdateGuardian
+    const action = TimelockAction.UpdateGuardian;
     const [timelockPDA, _] = PublicKey.findProgramAddressSync(
-      [
-        Buffer.from("timelock"),
-        Buffer.from([action]),
-      ],
+      [Buffer.from("timelock"), Buffer.from([action])],
       program.programId
     );
 
@@ -3916,55 +4203,66 @@ describe("zynk-core", () => {
         .accounts({
           config: configPDA,
           timelock: timelockPDA,
-          manager: guardian.publicKey
+          manager: guardian.publicKey,
         })
         .signers([guardian])
-        .rpc()
+        .rpc();
     } catch (error) {
       assert.include(
         error.message,
         "UnauthorizedManager",
         "Expected UnauthorizedManager error"
-      )
+      );
     }
-  })
+  });
 
   it("Should be able to request timelock by manager", async () => {
-    const action = TimelockAction.Unpause
+    const action = TimelockAction.Unpause;
     const result = PublicKey.findProgramAddressSync(
-      [
-        Buffer.from("timelock"),
-        Buffer.from([action]),
-      ],
+      [Buffer.from("timelock"), Buffer.from([action])],
       program.programId
     );
-    timelockPDA = result[0]
+    timelockPDA = result[0];
 
     await program.methods
       .requestTimelock(action, guardian.publicKey)
       .accounts({
         config: configPDA,
         timelock: timelockPDA,
-        manager: manager.publicKey
+        manager: manager.publicKey,
       })
       .signers([manager])
-      .rpc()
+      .rpc();
 
     const timelockAccount = await program.account.request.fetch(timelockPDA);
     assert.equal(timelockAccount.action, action);
-    assert.ok(!timelockAccount.executed, "Timelock should not be in executed state");
+    assert.ok(
+      !timelockAccount.executed,
+      "Timelock should not be in executed state"
+    );
     assert.ok(!timelockAccount.ack, "Timelock should not be in ack'ed state");
-    assert.ok(!timelockAccount.consensus, "Timelock should not be a consensus request");
-    assert.equal(timelockAccount.value.toBase58(), guardian.publicKey.toBase58());
+    assert.ok(
+      !timelockAccount.consensus,
+      "Timelock should not be a consensus request"
+    );
+    assert.equal(
+      timelockAccount.value.toBase58(),
+      guardian.publicKey.toBase58()
+    );
 
     const expectedDelay = timelockDelays[action];
     const now = Math.floor(Date.now() / 1000);
-    assert.ok(Math.abs(timelockAccount.eta.toNumber() - (now + expectedDelay)) < 10);
-  })
+    assert.ok(
+      Math.abs(timelockAccount.eta.toNumber() - (now + expectedDelay)) < 10
+    );
+  });
 
   it("Should not be able to execute timelock before eta", async () => {
     const timelockAccount = await program.account.request.fetch(timelockPDA);
-    assert.ok(Math.floor(Date.now() / 1000) < timelockAccount.eta.toNumber(), "ETA elapsed already.");
+    assert.ok(
+      Math.floor(Date.now() / 1000) < timelockAccount.eta.toNumber(),
+      "ETA elapsed already."
+    );
 
     try {
       await program.methods
@@ -3972,18 +4270,18 @@ describe("zynk-core", () => {
         .accounts({
           config: configPDA,
           timelock: timelockPDA,
-          admin: admin.publicKey
+          admin: admin.publicKey,
         })
         .signers([admin])
-        .rpc()
+        .rpc();
     } catch (error) {
       assert.include(
         error.message,
         "ActionUnderReview",
         "Expected ActionUnderReview error"
-      )
+      );
     }
-  })
+  });
 
   it("Should not be able to ack timelock by non-guardian", async () => {
     try {
@@ -3992,29 +4290,26 @@ describe("zynk-core", () => {
         .accounts({
           config: configPDA,
           timelock: timelockPDA,
-          guardian: admin.publicKey
+          guardian: admin.publicKey,
         })
         .signers([admin])
-        .rpc()
+        .rpc();
     } catch (error) {
       assert.include(
         error.message,
         "UnauthorizedGuardian",
         "Expected UnauthorizedGuardian error"
-      )
+      );
     }
-  })
+  });
 
   it("Should not be able to execute unpause using a wrong timelock request", async () => {
     let configAccount = await program.account.config.fetch(configPDA);
-    assert.ok(configAccount.paused, "Expected program to be paused!")
+    assert.ok(configAccount.paused, "Expected program to be paused!");
 
-    const action = TimelockAction.UpdateZynkOpWallet
-    const [ wrongTimelockPDA, ] = PublicKey.findProgramAddressSync(
-      [
-        Buffer.from("timelock"),
-        Buffer.from([action]),
-      ],
+    const action = TimelockAction.UpdateZynkCoreVault;
+    const [wrongTimelockPDA] = PublicKey.findProgramAddressSync(
+      [Buffer.from("timelock"), Buffer.from([action])],
       program.programId
     );
 
@@ -4024,62 +4319,63 @@ describe("zynk-core", () => {
       .accounts({
         config: configPDA,
         timelock: wrongTimelockPDA,
-        manager: manager.publicKey
+        manager: manager.publicKey,
       })
       .signers([manager])
-      .rpc()
+      .rpc();
 
     ///// Guardian ack for execution readiness /////
     await program.methods
-        .ackTimelock()
-        .accounts({
-          config: configPDA,
-          timelock: wrongTimelockPDA,
-          guardian: guardian.publicKey
-        })
-        .signers([guardian])
-        .rpc()
+      .ackTimelock()
+      .accounts({
+        config: configPDA,
+        timelock: wrongTimelockPDA,
+        guardian: guardian.publicKey,
+      })
+      .signers([guardian])
+      .rpc();
 
-    const timelockAccount = await program.account.request.fetch(wrongTimelockPDA);
+    const timelockAccount = await program.account.request.fetch(
+      wrongTimelockPDA
+    );
     assert.ok(timelockAccount.ack, "Timelock not ack'ed!");
 
-      
     try {
-       ///// Execute unpause with wrong timelock /////
+      ///// Execute unpause with wrong timelock /////
       await program.methods
         .executeUnpause()
         .accounts({
           config: configPDA,
           timelock: wrongTimelockPDA,
-          admin: admin.publicKey
+          admin: admin.publicKey,
         })
         .signers([admin])
-        .rpc()
+        .rpc();
     } catch (error) {
       assert.include(
         error.message,
         "InvalidAction",
         "Expected InvalidAction error"
-      )
+      );
     }
 
     configAccount = await program.account.config.fetch(configPDA);
-    assert.ok(configAccount.paused, "Expected program to be paused!")
-  })
+    assert.ok(configAccount.paused, "Expected program to be paused!");
+  });
 
   it("Should be able to execute timelock by admin before eta, if guardian acks", async () => {
     let configAccount = await program.account.config.fetch(configPDA);
-    assert.ok(configAccount.paused, "Expected program to be paused!")
+    assert.ok(configAccount.paused, "Expected program to be paused!");
 
     await program.methods
-        .ackTimelock()
-        .accounts({
-          config: configPDA,
-          timelock: timelockPDA,
-          guardian: guardian.publicKey
-        })
-        .signers([guardian])
-        .rpc()
+      .ackTimelock()
+      .accounts({
+        config: configPDA,
+        timelock: timelockPDA,
+        guardian: guardian.publicKey,
+      })
+      .signers([guardian])
+      .rpc();
 
     const timelockAccount = await program.account.request.fetch(timelockPDA);
     assert.ok(timelockAccount.ack, "Timelock not ack'ed!");
@@ -4089,33 +4385,30 @@ describe("zynk-core", () => {
       .accounts({
         config: configPDA,
         timelock: timelockPDA,
-        admin: admin.publicKey
+        admin: admin.publicKey,
       })
       .signers([admin])
-      .rpc()
+      .rpc();
 
     configAccount = await program.account.config.fetch(configPDA);
-    assert.ok(!configAccount.paused, "Expected program to be unpaused!")
-    
+    assert.ok(!configAccount.paused, "Expected program to be unpaused!");
+
     try {
       const timelockAccount = await program.account.request.fetch(timelockPDA);
-      console.log(timelockAccount)
+      console.log(timelockAccount);
     } catch (error) {
       assert.include(
         error.message,
         "Account does not exist",
         "Expected `Account does not exist` error"
-      )
+      );
     }
-  })
+  });
 
   it("Should be able to revoke timelock by admin, once guardian acks", async () => {
-    const action = TimelockAction.UpdateGuardian
+    const action = TimelockAction.UpdateGuardian;
     const [timelockPDA, _] = PublicKey.findProgramAddressSync(
-      [
-        Buffer.from("timelock"),
-        Buffer.from([action]),
-      ],
+      [Buffer.from("timelock"), Buffer.from([action])],
       program.programId
     );
 
@@ -4124,23 +4417,23 @@ describe("zynk-core", () => {
       .accounts({
         config: configPDA,
         timelock: timelockPDA,
-        manager: manager.publicKey
+        manager: manager.publicKey,
       })
       .signers([manager])
-      .rpc()
+      .rpc();
 
     let timelockAccount = await program.account.request.fetch(timelockPDA);
     assert.equal(timelockAccount.action, action);
 
     await program.methods
-        .ackTimelock()
-        .accounts({
-          config: configPDA,
-          timelock: timelockPDA,
-          guardian: guardian.publicKey
-        })
-        .signers([guardian])
-        .rpc()
+      .ackTimelock()
+      .accounts({
+        config: configPDA,
+        timelock: timelockPDA,
+        guardian: guardian.publicKey,
+      })
+      .signers([guardian])
+      .rpc();
 
     timelockAccount = await program.account.request.fetch(timelockPDA);
     assert.ok(timelockAccount.ack, "Timelock not ack'ed!");
@@ -4150,232 +4443,248 @@ describe("zynk-core", () => {
       .accounts({
         config: configPDA,
         timelock: timelockPDA,
-        admin: admin.publicKey
+        admin: admin.publicKey,
       })
       .signers([admin])
-      .rpc()
-    
+      .rpc();
+
     try {
       const timelockAccount = await program.account.request.fetch(timelockPDA);
-      console.log(timelockAccount)
+      console.log(timelockAccount);
     } catch (error) {
       assert.include(
         error.message,
         "Account does not exist",
         "Expected `Account does not exist` error"
-      )
+      );
     }
-  })
+  });
 
-  it("Should not be able to request consensus by non-manager", async () => {
-    const action = TimelockAction.TransferAdmin
-    const [timelockPDA, _] = PublicKey.findProgramAddressSync(
-      [
-        Buffer.from("timelock"),
-        Buffer.from([action]),
-      ],
-      program.programId
-    );
+  // it("Should not be able to request consensus by non-manager", async () => {
+  //   const action = TimelockAction.TransferAdmin;
+  //   const [timelockPDA, _] = PublicKey.findProgramAddressSync(
+  //     [Buffer.from("timelock"), Buffer.from([action])],
+  //     program.programId
+  //   );
 
-    try {
-      await program.methods
-        .requestConsensus(action, guardian.publicKey)
-        .accounts({
-          config: configPDA,
-          timelock: timelockPDA,
-          manager: admin.publicKey,
-          zynkOpWallet: zynkOpWallet.publicKey
-        })
-        .signers([admin, zynkOpWallet])
-        .rpc()
-    } catch (error) {
-      assert.include(
-        error.message,
-        "UnauthorizedManager",
-        "Expected UnauthorizedManager error"
-      )
-    }
-  })
+  //   try {
+  //     await program.methods
+  //       .requestConsensus(action, guardian.publicKey)
+  //       .accounts({
+  //         config: configPDA,
+  //         timelock: timelockPDA,
+  //         manager: admin.publicKey,
+  //         zynkCoreVault: zynkCoreVault,
+  //       })
+  //       .signers([admin, zynkCoreVault])
+  //       .rpc();
+  //   } catch (error) {
+  //     assert.include(
+  //       error.message,
+  //       "UnauthorizedManager",
+  //       "Expected UnauthorizedManager error"
+  //     );
+  //   }
+  // });
 
-  it("Should not be able to request consensus by non-zow", async () => {
-    const action = TimelockAction.TransferAdmin
-    const [timelockPDA, _] = PublicKey.findProgramAddressSync(
-      [
-        Buffer.from("timelock"),
-        Buffer.from([action]),
-      ],
-      program.programId
-    );
+  // it("Should not be able to request consensus by non-zow", async () => {
+  //   const action = TimelockAction.TransferAdmin;
+  //   const [timelockPDA, _] = PublicKey.findProgramAddressSync(
+  //     [Buffer.from("timelock"), Buffer.from([action])],
+  //     program.programId
+  //   );
 
-    try {
-      await program.methods
-        .requestConsensus(action, guardian.publicKey)
-        .accounts({
-          config: configPDA,
-          timelock: timelockPDA,
-          manager: manager.publicKey,
-          zynkOpWallet: manager.publicKey 
-        })
-        .signers([manager, manager])
-        .rpc()
-    } catch (error) {
-      assert.include(
-        error.message,
-        "UnauthorizedSigner",
-        "Expected UnauthorizedSigner error"
-      )
-    }
-  })
+  //   try {
+  //     await program.methods
+  //       .requestConsensus(action, guardian.publicKey)
+  //       .accounts({
+  //         config: configPDA,
+  //         timelock: timelockPDA,
+  //         manager: manager.publicKey,
+  //         zynkCoreVault: manager.publicKey,
+  //       })
+  //       .signers([manager, manager])
+  //       .rpc();
+  //   } catch (error) {
+  //     assert.include(
+  //       error.message,
+  //       "UnauthorizedSigner",
+  //       "Expected UnauthorizedSigner error"
+  //     );
+  //   }
+  // });
 
-  it("Should be able to request consensus by valid signers", async () => {
-    const action = TimelockAction.TransferAdmin
-    const result = PublicKey.findProgramAddressSync(
-      [
-        Buffer.from("timelock"),
-        Buffer.from([action]),
-      ],
-      program.programId
-    );
-    timelockPDA = result[0]
+  // it("Should be able to request consensus by valid signers", async () => {
+  //   const action = TimelockAction.TransferAdmin;
+  //   const result = PublicKey.findProgramAddressSync(
+  //     [Buffer.from("timelock"), Buffer.from([action])],
+  //     program.programId
+  //   );
+  //   timelockPDA = result[0];
 
-    await program.methods
-      .requestConsensus(action, guardian.publicKey)
-      .accounts({
-        config: configPDA,
-        timelock: timelockPDA,
-        manager: manager.publicKey,
-        zynkOpWallet: zynkOpWallet.publicKey
-      })
-      .signers([manager, zynkOpWallet])
-      .rpc()
+  //   await program.methods
+  //     .requestConsensus(action, guardian.publicKey)
+  //     .accounts({
+  //       config: configPDA,
+  //       timelock: timelockPDA,
+  //       manager: manager.publicKey,
+  //       zynkCoreVault: zynkCoreVault,
+  //     })
+  //     .signers([manager])
+  //     .rpc();
 
-    let timelockAccount = await program.account.request.fetch(timelockPDA);
-    assert.equal(timelockAccount.action, action);
-    assert.ok(timelockAccount.consensus, "Timelock should be a consensus request");
-    assert.ok(!timelockAccount.executed, "Timelock should not be in executed state");
-    assert.ok(!timelockAccount.ack, "Timelock should not be in ack'ed state");
-    assert.equal(timelockAccount.value.toBase58(), guardian.publicKey.toBase58());
-  })
+  //   let timelockAccount = await program.account.request.fetch(timelockPDA);
+  //   assert.equal(timelockAccount.action, action);
+  //   assert.ok(
+  //     timelockAccount.consensus,
+  //     "Timelock should be a consensus request"
+  //   );
+  //   assert.ok(
+  //     !timelockAccount.executed,
+  //     "Timelock should not be in executed state"
+  //   );
+  //   assert.ok(!timelockAccount.ack, "Timelock should not be in ack'ed state");
+  //   assert.equal(
+  //     timelockAccount.value.toBase58(),
+  //     guardian.publicKey.toBase58()
+  //   );
+  // });
 
-  it("Should be able to execute consensus request by guardian", async () => {
-    let timelockAccount = await program.account.request.fetch(timelockPDA);
-    assert.ok(timelockAccount.consensus, "Timelock should be a consensus request");
+  // it("Should be able to execute consensus request by guardian", async () => {
+  //   let timelockAccount = await program.account.request.fetch(timelockPDA);
+  //   assert.ok(
+  //     timelockAccount.consensus,
+  //     "Timelock should be a consensus request"
+  //   );
 
-    await program.methods
-      .executeConsensus()
-      .accounts({
-        config: configPDA,
-        timelock: timelockPDA,
-        guardian: guardian.publicKey,
-      })
-      .signers([guardian])
-      .rpc()
+  //   await program.methods
+  //     .executeConsensus()
+  //     .accounts({
+  //       config: configPDA,
+  //       timelock: timelockPDA,
+  //       guardian: guardian.publicKey,
+  //     })
+  //     .signers([guardian])
+  //     .rpc();
 
-    // timelock account must be closed
-    try {
-      timelockAccount = await program.account.request.fetch(timelockPDA);
-      console.log(timelockAccount)
-    } catch (error) {
-      assert.include(
-        error.message,
-        "Account does not exist",
-        "Expected `Account does not exist` error"
-      )
-    }
+  //   // timelock account must be closed
+  //   try {
+  //     timelockAccount = await program.account.request.fetch(timelockPDA);
+  //     console.log(timelockAccount);
+  //   } catch (error) {
+  //     assert.include(
+  //       error.message,
+  //       "Account does not exist",
+  //       "Expected `Account does not exist` error"
+  //     );
+  //   }
 
-    const configAccount = await program.account.config.fetch(configPDA);
-    assert.equal(configAccount.admin.toBase58(), guardian.publicKey.toBase58())
-  })
+  //   const configAccount = await program.account.config.fetch(configPDA);
+  //   assert.equal(configAccount.admin.toBase58(), guardian.publicKey.toBase58());
+  // });
 
-  it("Should not be able to execute non-consensus request by guardian", async () => {
-    const action = TimelockAction.TransferAdmin
-    const [timelockPDA, _] = PublicKey.findProgramAddressSync(
-      [
-        Buffer.from("timelock"),
-        Buffer.from([action]),
-      ],
-      program.programId
-    );
+  // it("Should not be able to execute non-consensus request by guardian", async () => {
+  //   const action = TimelockAction.TransferAdmin;
+  //   const [timelockPDA, _] = PublicKey.findProgramAddressSync(
+  //     [Buffer.from("timelock"), Buffer.from([action])],
+  //     program.programId
+  //   );
 
-   await program.methods
-      .requestTimelock(action, guardian.publicKey)
-      .accounts({
-        config: configPDA,
-        timelock: timelockPDA,
-        manager: manager.publicKey
-      })
-      .signers([manager])
-      .rpc()
+  //   await program.methods
+  //     .requestTimelock(action, guardian.publicKey)
+  //     .accounts({
+  //       config: configPDA,
+  //       timelock: timelockPDA,
+  //       manager: manager.publicKey,
+  //     })
+  //     .signers([manager])
+  //     .rpc();
 
-    let timelockAccount = await program.account.request.fetch(timelockPDA);
-    assert.equal(timelockAccount.action, action);
-    assert.ok(!timelockAccount.consensus, "Timelock should not be a consensus request");
-    assert.equal(timelockAccount.value.toBase58(), guardian.publicKey.toBase58());
+  //   let timelockAccount = await program.account.request.fetch(timelockPDA);
+  //   assert.equal(timelockAccount.action, action);
+  //   assert.ok(
+  //     !timelockAccount.consensus,
+  //     "Timelock should not be a consensus request"
+  //   );
+  //   assert.equal(
+  //     timelockAccount.value.toBase58(),
+  //     guardian.publicKey.toBase58()
+  //   );
 
-    try {
-      await program.methods
-        .executeConsensus()
-        .accounts({
-          config: configPDA,
-          timelock: timelockPDA,
-          guardian: guardian.publicKey,
-        })
-        .signers([guardian])
-        .rpc()
-    } catch (error) {
-      assert.include(
-        error.message,
-        "InvalidAction",
-        "Expected InvalidAction error"
-      )
-    }
+  //   try {
+  //     await program.methods
+  //       .executeConsensus()
+  //       .accounts({
+  //         config: configPDA,
+  //         timelock: timelockPDA,
+  //         guardian: guardian.publicKey,
+  //       })
+  //       .signers([guardian])
+  //       .rpc();
+  //   } catch (error) {
+  //     assert.include(
+  //       error.message,
+  //       "InvalidAction",
+  //       "Expected InvalidAction error"
+  //     );
+  //   }
 
-    timelockAccount = await program.account.request.fetch(timelockPDA);
-    assert.ok(!timelockAccount.executed, "Timelock should not be in executed state");
-    assert.ok(!timelockAccount.ack, "Timelock should not be in ack'ed state");
-    assert.ok(!timelockAccount.consensus, "Timelock should not be a consensus request");
-  })
-  
-  const EthereumZynkOpWalletAddress = "0xy82t3g2v3263712863728g3281378232"
-  const EthereumRecipientAddress = "0x12876382t3fg237623r75e121321e21"
-  const EthereumTxnOut = "0xbsyuadgwgd816213f2v2g3v723f2tv327t323f27c1v"
-  const EthereumTxnIn = "0x8723t4gvru3b2yr8327432gb8dy32ieuh38yeb38e382"
-  const BridgeTxnOut = "jidabuibf871yeu3brg3vrg3v3t27vg3vsdfg3"
-  const BridgeTxnIn = "0xjkb32f32d3wh87egy3u2vbrg3v3782dgihbdkjfh9273tg3"
+  //   timelockAccount = await program.account.request.fetch(timelockPDA);
+  //   assert.ok(
+  //     !timelockAccount.executed,
+  //     "Timelock should not be in executed state"
+  //   );
+  //   assert.ok(!timelockAccount.ack, "Timelock should not be in ack'ed state");
+  //   assert.ok(
+  //     !timelockAccount.consensus,
+  //     "Timelock should not be a consensus request"
+  //   );
+  // });
+
+  const EthereumzynkCoreVaultAddress = "0xy82t3g2v3263712863728g3281378232";
+  const EthereumRecipientAddress = "0x12876382t3fg237623r75e121321e21";
+  const EthereumTxnOut = "0xbsyuadgwgd816213f2v2g3v723f2tv327t323f27c1v";
+  const EthereumTxnIn = "0x8723t4gvru3b2yr8327432gb8dy32ieuh38yeb38e382";
+  const BridgeTxnOut = "jidabuibf871yeu3brg3vrg3v3t27vg3vsdfg3";
+  const BridgeTxnIn = "0xjkb32f32d3wh87egy3u2vbrg3v3782dgihbdkjfh9273tg3";
   const attestOrderId = generateOrderId();
   const attestOrderTrackerPDA = deriveOrderTrackerPDA(attestOrderId, "attest");
   const amount = new anchor.BN(100);
-  
-  it("Should attest trans-chain order creation", async () => {
-    const listener = program.addEventListener("orderAttested", (event, _slot) => {
-      if (!Buffer.from(event.orderId).equals(Buffer.from(attestOrderId))) return;
 
-      try {
-        assert.equal(event.originChain, "Solana")
-        assert.equal(event.targetChain, "Ethereum")
-        assert.equal(event.origin, zynkOpWallet.publicKey.toString())
-        assert.equal(event.proxy, EthereumZynkOpWalletAddress)
-        assert.equal(event.target, EthereumRecipientAddress)
-        assert.equal(event.txn, EthereumTxnOut)
-        assert.equal(event.proxyTxn, BridgeTxnOut)
-        assert.equal(event.asset, "USDC")
-        assert.equal(event.proxyAsset, "USDT")
-        assert.equal(event.amount.toNumber(), amount.toNumber())
-      } catch (err) {
-        throw err;
+  it("Should attest cross-chain order creation", async () => {
+    const listener = program.addEventListener(
+      "orderAttested",
+      (event, _slot) => {
+        if (!Buffer.from(event.orderId).equals(Buffer.from(attestOrderId)))
+          return;
+
+        try {
+          assert.equal(event.originChain, "Solana");
+          assert.equal(event.targetChain, "Ethereum");
+          assert.equal(event.origin, zynkCoreVault.toString());
+          assert.equal(event.proxy, EthereumzynkCoreVaultAddress);
+          assert.equal(event.target, EthereumRecipientAddress);
+          assert.equal(event.txn, EthereumTxnOut);
+          assert.equal(event.proxyTxn, BridgeTxnOut);
+          assert.equal(event.asset, "USDC");
+          assert.equal(event.proxyAsset, "USDT");
+          assert.equal(event.amount.toNumber(), amount.toNumber());
+        } catch (err) {
+          throw err;
+        }
       }
-    });
-    
-    const message = `${DOMAIN_SEPARATOR}::${zynkOpWallet.publicKey.toString()}::${EthereumZynkOpWalletAddress}::${EthereumRecipientAddress}::${EthereumTxnOut}::${amount}`
-    const { ed25519Ix, signature } = buildEd25519Ix(message, manager)
-    
+    );
+
+    const message = `${DOMAIN_SEPARATOR}::${zynkCoreVault.toString()}::${EthereumzynkCoreVaultAddress}::${EthereumRecipientAddress}::${EthereumTxnOut}::${amount}`;
+    const { ed25519Ix, signature } = buildEd25519Ix(message, manager);
+
     await program.methods
       .attestOrder(
         Array.from(attestOrderId),
         "Solana",
         "Ethereum",
-        zynkOpWallet.publicKey.toString(),
-        EthereumZynkOpWalletAddress,
+        zynkCoreVault.toString(),
+        EthereumzynkCoreVaultAddress,
         EthereumRecipientAddress,
         EthereumTxnOut,
         BridgeTxnOut,
@@ -4395,58 +4704,88 @@ describe("zynk-core", () => {
       .preInstructions([ed25519Ix])
       .signers([manager])
       .rpc();
-    
-    const orderTrackerAccount = await program.account.orderTracker.fetch(attestOrderTrackerPDA);
-    assert.ok(Buffer.from(orderTrackerAccount.orderId).equals(Buffer.from(attestOrderId)))
-   
-    const orderAmountIn = orderTrackerAccount.amountIn
-    const orderAmountOut = orderTrackerAccount.amountOut
+
+    const orderTrackerAccount = await program.account.orderTracker.fetch(
+      attestOrderTrackerPDA
+    );
+    assert.ok(
+      Buffer.from(orderTrackerAccount.orderId).equals(
+        Buffer.from(attestOrderId)
+      )
+    );
+
+    const orderAmountIn = orderTrackerAccount.amountIn;
+    const orderAmountOut = orderTrackerAccount.amountOut;
     assert.equal(orderAmountOut.toNumber(), amount.toNumber());
     assert.equal(orderAmountIn.toNumber(), 0);
-    
-    assert.equal(orderTrackerAccount.partnerDepositVault.toBase58(), PublicKey.default.toBase58())
-    assert.equal(orderTrackerAccount.beneficiaryWallet.toBase58(), PublicKey.default.toBase58())
-    
-    assert.ok(Buffer.from(orderTrackerAccount.partnerId).equals(sha256(Buffer.from(EthereumZynkOpWalletAddress))))
-    
-    await program.removeEventListener(listener);
-  })
-  
-  it("Should attest trans-chain order closure", async () => {
-    const orderTrackerAccount = await program.account.orderTracker.fetch(attestOrderTrackerPDA);
-    assert.ok(Buffer.from(orderTrackerAccount.orderId).equals(Buffer.from(attestOrderId)))
-    assert.ok(Buffer.from(orderTrackerAccount.partnerId).equals(sha256(Buffer.from(EthereumZynkOpWalletAddress))))
-    
-    const listener = program.addEventListener("orderAttested", (event, _slot) => {
-      if (!Buffer.from(event.orderId).equals(Buffer.from(attestOrderId))) return;
 
-      try {
-        assert.equal(event.originChain, "Ethereum")
-        assert.equal(event.targetChain, "Solana")
-        assert.equal(event.origin, EthereumRecipientAddress)
-        assert.equal(event.proxy, EthereumZynkOpWalletAddress)
-        assert.equal(event.target, zynkOpWallet.publicKey.toString())
-        assert.equal(event.txn, EthereumTxnIn)
-        assert.equal(event.proxyTxn, BridgeTxnIn)
-        assert.equal(event.asset, "USDT")
-        assert.equal(event.proxyAsset, "USDG")
-        assert.equal(event.amount.toNumber(), amount.toNumber())
-      } catch (err) {
-        throw err;
+    assert.equal(
+      orderTrackerAccount.partnerDepositVault.toBase58(),
+      PublicKey.default.toBase58()
+    );
+    assert.equal(
+      orderTrackerAccount.beneficiaryWallet.toBase58(),
+      PublicKey.default.toBase58()
+    );
+
+    assert.ok(
+      Buffer.from(orderTrackerAccount.partnerId).equals(
+        sha256(Buffer.from(EthereumzynkCoreVaultAddress))
+      )
+    );
+
+    await program.removeEventListener(listener);
+  });
+
+  it("Should attest cross-chain order closure", async () => {
+    const orderTrackerAccount = await program.account.orderTracker.fetch(
+      attestOrderTrackerPDA
+    );
+    assert.ok(
+      Buffer.from(orderTrackerAccount.orderId).equals(
+        Buffer.from(attestOrderId)
+      )
+    );
+    assert.ok(
+      Buffer.from(orderTrackerAccount.partnerId).equals(
+        sha256(Buffer.from(EthereumzynkCoreVaultAddress))
+      )
+    );
+
+    const listener = program.addEventListener(
+      "orderAttested",
+      (event, _slot) => {
+        if (!Buffer.from(event.orderId).equals(Buffer.from(attestOrderId)))
+          return;
+
+        try {
+          assert.equal(event.originChain, "Ethereum");
+          assert.equal(event.targetChain, "Solana");
+          assert.equal(event.origin, EthereumRecipientAddress);
+          assert.equal(event.proxy, EthereumzynkCoreVaultAddress);
+          assert.equal(event.target, zynkCoreVault.toString());
+          assert.equal(event.txn, EthereumTxnIn);
+          assert.equal(event.proxyTxn, BridgeTxnIn);
+          assert.equal(event.asset, "USDT");
+          assert.equal(event.proxyAsset, "USDG");
+          assert.equal(event.amount.toNumber(), amount.toNumber());
+        } catch (err) {
+          throw err;
+        }
       }
-    });
-    
-    const message = `${DOMAIN_SEPARATOR}::${EthereumRecipientAddress}::${EthereumZynkOpWalletAddress}::${zynkOpWallet.publicKey.toString()}::${EthereumTxnIn}::${amount}`
-    const { ed25519Ix, signature } = buildEd25519Ix(message, manager)
-    
+    );
+
+    const message = `${DOMAIN_SEPARATOR}::${EthereumRecipientAddress}::${EthereumzynkCoreVaultAddress}::${zynkCoreVault.toString()}::${EthereumTxnIn}::${amount}`;
+    const { ed25519Ix, signature } = buildEd25519Ix(message, manager);
+
     await program.methods
       .attestOrder(
         Array.from(attestOrderId),
         "Ethereum",
         "Solana",
         EthereumRecipientAddress,
-        EthereumZynkOpWalletAddress,
-        zynkOpWallet.publicKey.toString(),
+        EthereumzynkCoreVaultAddress,
+        zynkCoreVault.toString(),
         EthereumTxnIn,
         BridgeTxnIn,
         "USDT",
@@ -4465,7 +4804,7 @@ describe("zynk-core", () => {
       .preInstructions([ed25519Ix])
       .signers([manager])
       .rpc();
-    
+
     try {
       await program.account.request.fetch(attestOrderTrackerPDA);
     } catch (error) {
@@ -4473,9 +4812,9 @@ describe("zynk-core", () => {
         error.message,
         "Account does not exist",
         "Expected `Account does not exist` error"
-      )
+      );
     }
-    
+
     await program.removeEventListener(listener);
-  })
+  });
 });
