@@ -1165,19 +1165,20 @@ pub struct CreateOrder<'info> {
     )]
     pub zov_token_account: InterfaceAccount<'info, TokenAccount>,
 
-    // Tokens sent out to
     #[account(
         mut,
         seeds = [BENEFICIARY_SEED, partner_id.as_ref(), beneficiary_token_account.owner.key().as_ref()],
         bump,
         constraint = beneficiary.is_active && ( beneficiary.allow_transient || !transient ) @ CustomError::InvalidBeneficiaryState,
+        constraint = beneficiary.public_key == beneficiary_token_account.owner @ CustomError::InvalidAccount,
     )]
     pub beneficiary: Account<'info, Beneficiary>,
+
+    // Tokens sent out to
     #[account(
         mut,
         constraint = beneficiary_token_account.mint == zov_token_account.mint @ CustomError::InvalidTokenMint,
         constraint = beneficiary_token_account.owner != zynk_op_vault.key() @ CustomError::InvalidAccount,
-        constraint = beneficiary_token_account.owner == beneficiary.public_key @ CustomError::InvalidAccount,
     )]
     pub beneficiary_token_account: InterfaceAccount<'info, TokenAccount>,
 
