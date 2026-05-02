@@ -50,7 +50,7 @@ const DOMAIN_SEPARATOR = 1151111081099710;
 const MAX_U64 = "18446744073709551615";
 
 const TimelockAction = {
-  TransferAdmin: 0,
+  UpdateAdmin: 0,
   UpdateManager: 1,
   UpdateGuardian: 2,
   UpdateAttester: 3,
@@ -59,7 +59,7 @@ const TimelockAction = {
 };
 
 const timelockDelays = {
-  [TimelockAction.TransferAdmin]: 24 * 60 * 60,
+  [TimelockAction.UpdateAdmin]: 24 * 60 * 60,
   [TimelockAction.UpdateManager]: 12 * 60 * 60,
   [TimelockAction.UpdateGuardian]: 48 * 60 * 60,
   [TimelockAction.UpdateAttester]: 12 * 60 * 60,
@@ -74,7 +74,7 @@ describe("zynk-core", () => {
 
   const program = anchor.workspace.ZynkCore as Program<ZynkCore>;
 
-  const admin = provider.wallet.payer;
+  const admin = Keypair.generate();
   const manager = provider.wallet.payer;
   const guardian = Keypair.generate();
   const attester = provider.wallet.payer;
@@ -1872,10 +1872,10 @@ describe("zynk-core", () => {
 
     await mintTo(
       provider.connection,
-      admin,
+      manager,
       tokenMint,
       wrongTokenAccount,
-      admin.publicKey,
+      manager.publicKey,
       100000000000
     );
 
@@ -2182,10 +2182,10 @@ describe("zynk-core", () => {
     // Mint tokens to atas.partnerDepositTokenAccount for this test
     await mintTo(
       provider.connection,
-      admin,
+      manager,
       tokenMint,
       atas.partnerDepositTokenAccount,
-      admin.publicKey,
+      manager.publicKey,
       10000000000000 // Mint sufficient tokens for the test
     );
 
@@ -2841,10 +2841,10 @@ describe("zynk-core", () => {
     if (+sourceBalance_preTx.value.amount < +amount) {
       await mintTo(
         provider.connection,
-        admin,
+        manager,
         tokenMint,
         atas.partnerDepositTokenAccount,
-        admin.publicKey,
+        manager.publicKey,
         +amount - +sourceBalance_preTx.value.amount + 1000000000
       );
     }
@@ -2944,10 +2944,10 @@ describe("zynk-core", () => {
     if (+sourceBalance_preTx.value.amount < +amount) {
       await mintTo(
         provider.connection,
-        admin,
+        manager,
         tokenMint,
         atas.partnerDepositTokenAccount,
-        admin.publicKey,
+        manager.publicKey,
         +amount - +sourceBalance_preTx.value.amount + 1000000000
       );
     }
@@ -4222,14 +4222,14 @@ describe("zynk-core", () => {
     assert.ok(configAccount.paused, "Expected program to be paused!");
   });
 
-  it("Should be able to pause by guardian", async () => {
+  it("Should be able to pause by attester", async () => {
     await program.methods
       .pause()
       .accounts({
         config: configPDA,
-        authority: guardian.publicKey,
+        authority: attester.publicKey,
       })
-      .signers([guardian])
+      .signers([attester])
       .rpc();
 
     const configAccount = await program.account.config.fetch(configPDA);
@@ -4527,6 +4527,187 @@ describe("zynk-core", () => {
         "Expected `Account does not exist` error"
       );
     }
+  });
+
+  it("Should not be able to request consensus by non-manager", async () => {
+    const action = TimelockAction.UpdateAdmin;
+    const [timelockPDA, _] = PublicKey.findProgramAddressSync(
+      [Buffer.from("timelock"), Buffer.from([action])],
+      program.programId
+    );
+
+    try {
+      await program.methods
+        .requestConsensus(action, guardian.publicKey)
+        .accounts({
+          config: configPDA,
+          timelock: timelockPDA,
+          manager: admin.publicKey,
+          attester: attester.publicKey,
+        })
+        .signers([admin, attester])
+        .rpc();
+    } catch (error) {
+      assert.include(
+        error.message,
+        "UnauthorizedManager",
+        "Expected UnauthorizedManager error"
+      );
+    }
+  });
+
+  it("Should not be able to request consensus by non-attester", async () => {
+    const action = TimelockAction.UpdateAdmin;
+    const [timelockPDA, _] = PublicKey.findProgramAddressSync(
+      [Buffer.from("timelock"), Buffer.from([action])],
+      program.programId
+    );
+
+    try {
+      await program.methods
+        .requestConsensus(action, guardian.publicKey)
+        .accounts({
+          config: configPDA,
+          timelock: timelockPDA,
+          manager: manager.publicKey,
+          attester: admin.publicKey,
+        })
+        .signers([manager, admin])
+        .rpc();
+    } catch (error) {
+      assert.include(
+        error.message,
+        "UnauthorizedSigner",
+        "Expected UnauthorizedSigner error"
+      );
+    }
+  });
+
+  it("Should be able to request consensus by valid signers", async () => {
+    const action = TimelockAction.UpdateAdmin;
+    const result = PublicKey.findProgramAddressSync(
+      [Buffer.from("timelock"), Buffer.from([action])],
+      program.programId
+    );
+    timelockPDA = result[0];
+
+    await program.methods
+      .requestConsensus(action, guardian.publicKey)
+      .accounts({
+        config: configPDA,
+        timelock: timelockPDA,
+        manager: manager.publicKey,
+        attester: attester.publicKey,
+      })
+      .signers([manager, attester])
+      .rpc();
+
+    let timelockAccount = await program.account.request.fetch(timelockPDA);
+    assert.equal(timelockAccount.action, action);
+    assert.ok(
+      timelockAccount.consensus,
+      "Timelock should be a consensus request"
+    );
+    assert.ok(
+      !timelockAccount.executed,
+      "Timelock should not be in executed state"
+    );
+    assert.ok(!timelockAccount.ack, "Timelock should not be in ack'ed state");
+    assert.equal(
+      timelockAccount.value.toBase58(),
+      guardian.publicKey.toBase58()
+    );
+  });
+
+  it("Should be able to execute consensus request by guardian", async () => {
+    let timelockAccount = await program.account.request.fetch(timelockPDA);
+    assert.ok(
+      timelockAccount.consensus,
+      "Timelock should be a consensus request"
+    );
+
+    await program.methods
+      .executeConsensus()
+      .accounts({
+        config: configPDA,
+        timelock: timelockPDA,
+        guardian: guardian.publicKey,
+      })
+      .signers([guardian])
+      .rpc();
+
+    // timelock account must be closed
+    try {
+      timelockAccount = await program.account.request.fetch(timelockPDA);
+      console.log(timelockAccount);
+    } catch (error) {
+      assert.include(
+        error.message,
+        "Account does not exist",
+        "Expected `Account does not exist` error"
+      );
+    }
+
+    const configAccount = await program.account.config.fetch(configPDA);
+    assert.equal(configAccount.admin.toBase58(), guardian.publicKey.toBase58());
+  });
+
+  it("Should not be able to execute non-consensus request by guardian", async () => {
+    const action = TimelockAction.UpdateAdmin;
+    const [timelockPDA, _] = PublicKey.findProgramAddressSync(
+      [Buffer.from("timelock"), Buffer.from([action])],
+      program.programId
+    );
+
+    await program.methods
+      .requestTimelock(action, guardian.publicKey)
+      .accounts({
+        config: configPDA,
+        timelock: timelockPDA,
+        manager: manager.publicKey,
+      })
+      .signers([manager])
+      .rpc();
+
+    let timelockAccount = await program.account.request.fetch(timelockPDA);
+    assert.equal(timelockAccount.action, action);
+    assert.ok(
+      !timelockAccount.consensus,
+      "Timelock should not be a consensus request"
+    );
+    assert.equal(
+      timelockAccount.value.toBase58(),
+      guardian.publicKey.toBase58()
+    );
+
+    try {
+      await program.methods
+        .executeConsensus()
+        .accounts({
+          config: configPDA,
+          timelock: timelockPDA,
+          guardian: guardian.publicKey,
+        })
+        .signers([guardian])
+        .rpc();
+    } catch (error) {
+      assert.include(
+        error.message,
+        "InvalidAction",
+        "Expected InvalidAction error"
+      );
+    }
+
+    timelockAccount = await program.account.request.fetch(timelockPDA);
+    assert.ok(
+      !timelockAccount.executed,
+      "Timelock should not be in executed state"
+    );
+    assert.ok(!timelockAccount.ack, "Timelock should not be in ack'ed state");
+    assert.ok(
+      !timelockAccount.consensus,
+      "Timelock should not be a consensus request"
+    );
   });
 
   const EthereumzynkOpVaultAddress = "0xy82t3g2v3263712863728g3281378232";
