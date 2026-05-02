@@ -13,8 +13,8 @@ import {
   createMint,
   mintTo,
   ASSOCIATED_TOKEN_PROGRAM_ID,
-  createAssociatedTokenAccount,
   getOrCreateAssociatedTokenAccount,
+  createAssociatedTokenAccount,
 } from "@solana/spl-token";
 import { ZynkCore } from "../target/types/zynk_core";
 import { assert, expect } from "chai";
@@ -482,7 +482,7 @@ describe("zynk-core", () => {
     }
   });
 
-  it("Should be able to create transient pull order even with transient disabled - when attester signature provided", async () => {
+  it("Should be able to create transient pull order with attester signature provided - even when transient disabled", async () => {
     const amount = new anchor.BN(100000000000);
 
     const transientOrderId = generateOrderId();
@@ -562,17 +562,8 @@ describe("zynk-core", () => {
 
     // try to replenish and/or close a transient order
     try {
-      const now = Math.floor(Date.now() / 1000);
-      const validity = now + 3600;
-
       await program.methods
-        .replenish(
-          Array.from(transientOrderId),
-          new anchor.BN(validity),
-          new anchor.BN(1),
-          true,
-          null
-        )
+        .replenish(Array.from(transientOrderId), new anchor.BN(1), true, null)
         .accounts({
           config: configPDA,
           partnerDepositVault: partnerDepositVaultPDA,
@@ -594,37 +585,6 @@ describe("zynk-core", () => {
         "Expected AccountNotInitialized error when replenishing a closed order"
       );
     }
-
-    // const amount = new anchor.BN(0);
-
-    // currentOrderId = generateOrderId();
-    // currentOrderTrackerPDA = deriveOrderTrackerPDA(currentOrderId);
-
-    // await program.methods
-    //   .createOrder(
-    //     Array.from(partnerId),
-    //     Array.from(currentOrderId),
-    //     true, // transient
-    //     amount,
-    //     null
-    //   )
-    //   .accounts({
-    //     config: configPDA,
-    //     manager: manager.publicKey,
-    //     partnerDepositVault: partnerDepositVaultPDA,
-    //     pdvTokenAccount: atas.partnerDepositTokenAccount,
-    //     zynkOpVault: zynkOpVault,
-    //     zovTokenAccount: atas.zovTokenAccount,
-    //     beneficiary: defaultBeneficiaryPDA,
-    //     beneficiaryTokenAccount: atas.partnerOperationalTokenAccount,
-    //     orderTracker: currentOrderTrackerPDA,
-    //     systemProgram: SystemProgram.programId,
-    //     mint: tokenMint,
-    //     tokenProgram: TOKEN_PROGRAM_ID,
-    //     sysvarInstructions: null,
-    //   })
-    //   .signers([manager])
-    //   .rpc();
   });
 
   it("Should fail pullAndCreateOrder when amount is zero", async () => {
@@ -1169,17 +1129,8 @@ describe("zynk-core", () => {
 
     // try to replenish and/or close a transient order
     try {
-      const now = Math.floor(Date.now() / 1000);
-      const validity = now + 3600;
-
       await program.methods
-        .replenish(
-          Array.from(transientOrderId),
-          new anchor.BN(validity),
-          new anchor.BN(1),
-          true,
-          null
-        )
+        .replenish(Array.from(transientOrderId), new anchor.BN(1), true, null)
         .accounts({
           config: configPDA,
           partnerDepositVault: partnerDepositVaultPDA,
@@ -1279,17 +1230,8 @@ describe("zynk-core", () => {
 
     // try to replenish and/or close a transient order
     try {
-      const now = Math.floor(Date.now() / 1000);
-      const validity = now + 3600;
-
       await program.methods
-        .replenish(
-          Array.from(transientOrderId),
-          new anchor.BN(validity),
-          new anchor.BN(1),
-          true,
-          null
-        )
+        .replenish(Array.from(transientOrderId), new anchor.BN(1), true, null)
         .accounts({
           config: configPDA,
           partnerDepositVault: partnerDepositVaultPDA,
@@ -1384,17 +1326,8 @@ describe("zynk-core", () => {
 
     // try to replenish and/or close a transient order
     try {
-      const now = Math.floor(Date.now() / 1000);
-      const validity = now + 3600;
-
       await program.methods
-        .replenish(
-          Array.from(transientOrderId),
-          new anchor.BN(validity),
-          new anchor.BN(1),
-          true,
-          null
-        )
+        .replenish(Array.from(transientOrderId), new anchor.BN(1), true, null)
         .accounts({
           config: configPDA,
           partnerDepositVault: partnerDepositVaultPDA,
@@ -1489,17 +1422,8 @@ describe("zynk-core", () => {
 
     // try to replenish and/or close a transient order
     try {
-      const now = Math.floor(Date.now() / 1000);
-      const validity = now + 3600;
-
       await program.methods
-        .replenish(
-          Array.from(transientOrderId),
-          new anchor.BN(validity),
-          new anchor.BN(1),
-          true,
-          null
-        )
+        .replenish(Array.from(transientOrderId), new anchor.BN(1), true, null)
         .accounts({
           config: configPDA,
           partnerDepositVault: partnerDepositVaultPDA,
@@ -1552,13 +1476,10 @@ describe("zynk-core", () => {
       .rpc();
 
     const amount = new anchor.BN(50000000000);
-    const now = Math.floor(Date.now() / 1000);
-    const validity = now + 3600;
 
     await program.methods
       .replenish(
         Array.from(currentOrderId),
-        new anchor.BN(validity),
         amount,
         false, // close_order = false (partial replenish)
         null
@@ -1583,7 +1504,6 @@ describe("zynk-core", () => {
       await program.methods
         .replenish(
           Array.from(currentOrderId),
-          new anchor.BN(validity),
           new anchor.BN(1), // Small amount, but total amount_in (50 + 1 = 51) < amount_out (100)
           true, // close_order = true
           null
@@ -1613,9 +1533,8 @@ describe("zynk-core", () => {
     }
   });
 
+  ////// NOTE: Test case disabled temporarily, as it will require some manuevering of the test cases before.
   // it("Should fail replenishment when amount surpasses MAX_U64", async () => {
-  //   const now = Math.floor(Date.now() / 1000);
-  //   const validity = now + 3600; // Valid for 1 hour
 
   //   let amount = new anchor.BN(100000000000);
   //   const sourceBalance_preTx =
@@ -1636,7 +1555,6 @@ describe("zynk-core", () => {
   //   await program.methods
   //     .replenish(
   //       Array.from(currentOrderId),
-  //       new anchor.BN(validity),
   //       amount,
   //       false,
   //       null
@@ -1699,7 +1617,6 @@ describe("zynk-core", () => {
   //     await program.methods
   //       .replenish(
   //         Array.from(currentOrderId),
-  //         new anchor.BN(validity),
   //         amount,
   //         true,
   //         null
@@ -1729,8 +1646,6 @@ describe("zynk-core", () => {
 
   it("Replenishes tokens from partner_deposit_vault to zynk_op_wallet", async () => {
     const amount = new anchor.BN(100000000000);
-    const now = Math.floor(Date.now() / 1000);
-    const validity = now + 3600; // Valid for 1 hour
 
     const sourceBalance_preTx =
       await provider.connection.getTokenAccountBalance(
@@ -1748,13 +1663,7 @@ describe("zynk-core", () => {
     const orderAmountIn_preTx = orderTrackerAccount.amountIn;
 
     await program.methods
-      .replenish(
-        Array.from(currentOrderId),
-        new anchor.BN(validity),
-        amount,
-        false,
-        null
-      )
+      .replenish(Array.from(currentOrderId), amount, false, null)
       .accounts({
         config: configPDA,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -1810,8 +1719,6 @@ describe("zynk-core", () => {
 
   it("Replenishes tokens from partner_deposit_vault to zynk_op_wallet - Token2022", async () => {
     const amount = new anchor.BN(100000000000);
-    const now = Math.floor(Date.now() / 1000);
-    const validity = now + 3600; // Valid for 1 hour
 
     const sourceBalance_preTx =
       await provider.connection.getTokenAccountBalance(
@@ -1828,13 +1735,7 @@ describe("zynk-core", () => {
     );
     const orderAmountIn_preTx = orderTrackerAccount.amountIn;
     await program.methods
-      .replenish(
-        Array.from(currentOrderId),
-        new anchor.BN(validity),
-        amount,
-        false,
-        null
-      )
+      .replenish(Array.from(currentOrderId), amount, false, null)
       .accounts({
         config: configPDA,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -1888,48 +1789,8 @@ describe("zynk-core", () => {
     );
   });
 
-  it("Should fail when replenishing with past validity timestamp", async () => {
-    const amount = new anchor.BN(50000000000); // 50 token
-    const pastTimestamp = Math.floor(Date.now() / 1000) - 3600; // 1 hour ago
-
-    try {
-      await program.methods
-        .replenish(
-          Array.from(currentOrderId),
-          new anchor.BN(pastTimestamp),
-          amount,
-          false,
-          null
-        )
-        .accounts({
-          config: configPDA,
-          partnerDepositVault: partnerDepositVaultPDA,
-          pdvTokenAccount: atas.partnerDepositTokenAccount,
-          zovTokenAccount: atas.zovTokenAccount,
-          orderTracker: currentOrderTrackerPDA,
-          manager: manager.publicKey,
-          mint: tokenMint,
-          tokenProgram: TOKEN_PROGRAM_ID,
-          systemProgram: SystemProgram.programId,
-        })
-        .signers([manager])
-        .rpc();
-      assert.fail("Expected replenish to fail with past timestamp");
-    } catch (error) {
-      // Anchor error codes are returned in a specific format
-      // Either match on the error number or a more generic portion of the message
-      assert.include(
-        error.message,
-        "Validity must be in future",
-        "Expected 'Validity must be in future' error"
-      );
-    }
-  });
-
   it("Can replenish tokens multiple times before order is closed", async () => {
     const amount = new anchor.BN(50000000000);
-    const now = Math.floor(Date.now() / 1000);
-    const validity = now + 3600; // Valid for 1 hour
 
     const sourceBalance_preTx =
       await provider.connection.getTokenAccountBalance(
@@ -1943,13 +1804,7 @@ describe("zynk-core", () => {
 
     // Second replenish operation
     await program.methods
-      .replenish(
-        Array.from(currentOrderId),
-        new anchor.BN(validity),
-        amount,
-        false,
-        null
-      )
+      .replenish(Array.from(currentOrderId), amount, false, null)
       .accounts({
         config: configPDA,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -1993,59 +1848,67 @@ describe("zynk-core", () => {
     );
   });
 
-  // it("Should fail when wrong PDV is used to replenish", async () => {
-  //   // Create a wrong token account (not the one stored in orderTracker)
-  //   // Must manually create since PDA can't own an ATA
-  //   const partnerId = Buffer.alloc(32);
-  //   partnerId.write("test-id", 0, "utf-8");
+  it("Should fail when wrong PDV is used to replenish", async () => {
+    // Create a wrong token account (not the one stored in orderTracker)
+    // Must manually create since PDA can't own an ATA
+    const partnerId = Buffer.alloc(32);
+    partnerId.write("test-id", 0, "utf-8");
 
-  //   const [wrongPartnerDepositVaultPDA] = PublicKey.findProgramAddressSync(
-  //     [Buffer.from("partner_deposit_vault"), partnerId],
-  //     program.programId
-  //   );
+    const [wrongPartnerDepositVaultPDA] = PublicKey.findProgramAddressSync(
+      [Buffer.from("partner_deposit_vault"), partnerId],
+      program.programId
+    );
 
-  //   const wrongTokenAccount = await createAssociatedTokenAccount(
-  //     provider.connection,
-  //     partnerOperationalWallet,
-  //     tokenMint,
-  //     wrongPartnerDepositVaultPDA,
-  //     undefined,
-  //     TOKEN_PROGRAM_ID,
-  //     ASSOCIATED_TOKEN_PROGRAM_ID,
-  //     true // allowOwnerOffCurve
-  //   );
+    const wrongTokenAccount = await createAssociatedTokenAccount(
+      provider.connection,
+      partnerOperationalWallet,
+      tokenMint,
+      wrongPartnerDepositVaultPDA,
+      undefined,
+      TOKEN_PROGRAM_ID,
+      ASSOCIATED_TOKEN_PROGRAM_ID,
+      true // allowOwnerOffCurve
+    );
 
-  //   try {
-  //     await program.methods
-  //       .replenish(
-  //         Array.from(currentOrderId),
-  //         new anchor.BN(Math.floor(Date.now() / 1000) + 3600),
-  //         new anchor.BN(1000000),
-  //         false,
-  //         null
-  //       )
-  //       .accounts({
-  //         config: configPDA,
-  //         partnerDepositVault: wrongPartnerDepositVaultPDA,
-  //         pdvTokenAccount: wrongTokenAccount, // Wrong token account (not the one in orderTracker)
-  //         zovTokenAccount: atas.zovTokenAccount,
-  //         orderTracker: currentOrderTrackerPDA,
-  //         manager: manager.publicKey,
-  //         mint: tokenMint,
-  //         tokenProgram: TOKEN_PROGRAM_ID,
-  //         systemProgram: SystemProgram.programId,
-  //       })
-  //       .signers([manager])
-  //       .rpc();
-  //     assert.fail("Expected replenish to fail with wrong PDV");
-  //   } catch (error) {
-  //     assert.include(
-  //       error.message,
-  //       "ConstraintSeeds",
-  //       "Expected ConstraintSeeds error"
-  //     );
-  //   }
-  // });
+    await mintTo(
+      provider.connection,
+      admin,
+      tokenMint,
+      wrongTokenAccount,
+      admin.publicKey,
+      100000000000
+    );
+
+    try {
+      await program.methods
+        .replenish(
+          Array.from(currentOrderId),
+          new anchor.BN(1000000),
+          false,
+          null
+        )
+        .accounts({
+          config: configPDA,
+          partnerDepositVault: wrongPartnerDepositVaultPDA,
+          pdvTokenAccount: wrongTokenAccount,
+          zovTokenAccount: atas.zovTokenAccount,
+          orderTracker: currentOrderTrackerPDA,
+          manager: manager.publicKey,
+          mint: tokenMint,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([manager])
+        .rpc();
+      assert.fail("Expected replenish to fail with wrong PDV");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "ConstraintSeeds",
+        "Expected ConstraintSeeds error"
+      );
+    }
+  });
 
   it("Should be able close the order by manager via replenish", async () => {
     // First, replenish enough to meet amount_out requirement
@@ -2055,14 +1918,11 @@ describe("zynk-core", () => {
     const remainingAmount = orderTrackerAccount.amountOut.sub(
       orderTrackerAccount.amountIn
     );
-    const now = Math.floor(Date.now() / 1000);
-    const validity = now + 3600;
 
     // Replenish the remaining amount and close the order
     await program.methods
       .replenish(
         Array.from(currentOrderId),
-        new anchor.BN(validity),
         remainingAmount,
         true, // close_order = true
         null
@@ -2135,14 +1995,10 @@ describe("zynk-core", () => {
     );
     await provider.connection.confirmTransaction(airdropSig, "confirmed");
 
-    const now = Math.floor(Date.now() / 1000);
-    const validity = now + 3600;
-
     try {
       await program.methods
         .replenish(
           Array.from(newOrderId),
-          new anchor.BN(validity),
           new anchor.BN(1),
           true, // close_order = true (requires manager authorization)
           null
@@ -2172,13 +2028,10 @@ describe("zynk-core", () => {
 
   it("Should fail when trying to close an already closed order via replenish", async () => {
     // Attempt to close the already closed order
-    const now = Math.floor(Date.now() / 1000);
-    const validity = now + 3600;
     try {
       await program.methods
         .replenish(
           Array.from(currentOrderId),
-          new anchor.BN(validity),
           new anchor.BN(0),
           true, // close_order = true
           null
@@ -2211,13 +2064,7 @@ describe("zynk-core", () => {
     // Attempt to replenish the closed order
     try {
       await program.methods
-        .replenish(
-          Array.from(currentOrderId),
-          new anchor.BN(Math.floor(Date.now() / 1000) + 3600),
-          amount,
-          false,
-          null
-        )
+        .replenish(Array.from(currentOrderId), amount, false, null)
         .accounts({
           config: configPDA,
           partnerDepositVault: partnerDepositVaultPDA,
@@ -2282,7 +2129,6 @@ describe("zynk-core", () => {
     await program.methods
       .replenish(
         Array.from(newOrderId),
-        new anchor.BN(Math.floor(Date.now() / 1000) + 3600),
         new anchor.BN(currentBalance.value.amount),
         false,
         null
@@ -2304,13 +2150,7 @@ describe("zynk-core", () => {
     // Now try to replenish more than the available balance
     try {
       await program.methods
-        .replenish(
-          Array.from(newOrderId),
-          new anchor.BN(Math.floor(Date.now() / 1000) + 3600),
-          new anchor.BN(1000000),
-          false,
-          null
-        )
+        .replenish(Array.from(newOrderId), new anchor.BN(1000000), false, null)
         .accounts({
           config: configPDA,
           partnerDepositVault: partnerDepositVaultPDA,
@@ -2338,8 +2178,6 @@ describe("zynk-core", () => {
     const amount = new anchor.BN(100000000000);
     const orderId = generateOrderId();
     const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
-    const now = Math.floor(Date.now() / 1000);
-    const validity = now + 3600;
 
     // Mint tokens to atas.partnerDepositTokenAccount for this test
     await mintTo(
@@ -2406,7 +2244,6 @@ describe("zynk-core", () => {
     await program.methods
       .replenish(
         Array.from(orderId),
-        new anchor.BN(validity),
         amount,
         true, // close_order = true
         null
@@ -2442,8 +2279,6 @@ describe("zynk-core", () => {
     const amount = new anchor.BN(100000000000);
     const orderId = generateOrderId();
     const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
-    const now = Math.floor(Date.now() / 1000);
-    const validity = now + 3600;
 
     // Create order with tokenMint (first token)
     await program.methods
@@ -2500,7 +2335,6 @@ describe("zynk-core", () => {
     await program.methods
       .replenish(
         Array.from(orderId),
-        new anchor.BN(validity),
         amount,
         true, // close_order = true
         null
@@ -2536,8 +2370,6 @@ describe("zynk-core", () => {
     const amount = new anchor.BN(100000000000);
     const orderId = generateOrderId();
     const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
-    const now = Math.floor(Date.now() / 1000);
-    const validity = now + 3600;
 
     const sourceBalance_preTx =
       await provider.connection.getTokenAccountBalance(
@@ -2584,7 +2416,6 @@ describe("zynk-core", () => {
     await program.methods
       .replenish(
         Array.from(orderId),
-        new anchor.BN(validity),
         new anchor.BN(0), // No additional amount needed
         true, // close_order = true
         null
@@ -2620,8 +2451,6 @@ describe("zynk-core", () => {
     const amount = new anchor.BN(100000000000);
     const orderId = generateOrderId();
     const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
-    const now = Math.floor(Date.now() / 1000);
-    const validity = now + 3600;
 
     const sourceBalance_preTx =
       await provider.connection.getTokenAccountBalance(
@@ -2668,7 +2497,6 @@ describe("zynk-core", () => {
     await program.methods
       .replenish(
         Array.from(orderId),
-        new anchor.BN(validity),
         new anchor.BN(0), // No additional amount needed since amount_in already equals amount_out
         true, // close_order = true
         null
@@ -2832,8 +2660,6 @@ describe("zynk-core", () => {
     const amount = new anchor.BN(100000000000);
     const orderId = generateOrderId();
     const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
-    const now = Math.floor(Date.now() / 1000);
-    const validity = now + 3600;
 
     // Create order correctly with valid tokenMint
     await program.methods
@@ -2888,7 +2714,6 @@ describe("zynk-core", () => {
       await program.methods
         .replenish(
           Array.from(orderId),
-          new anchor.BN(validity),
           amount,
           true, // close_order = true
           null
@@ -2920,8 +2745,6 @@ describe("zynk-core", () => {
     const amount = new anchor.BN(100000000000);
     const orderId = generateOrderId();
     const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
-    const now = Math.floor(Date.now() / 1000);
-    const validity = now + 3600;
 
     // Create order correctly with tokenMint
     await program.methods
@@ -2976,7 +2799,6 @@ describe("zynk-core", () => {
       await program.methods
         .replenish(
           Array.from(orderId),
-          new anchor.BN(validity),
           amount,
           true, // close_order = true
           null
@@ -3010,8 +2832,6 @@ describe("zynk-core", () => {
     const amount = new anchor.BN(100000000000);
     const orderId = generateOrderId();
     const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
-    const now = Math.floor(Date.now() / 1000);
-    const validity = now + 3600;
 
     // Ensure atas.partnerDepositTokenAccount has sufficient balance
     const sourceBalance_preTx =
@@ -3084,7 +2904,6 @@ describe("zynk-core", () => {
       await program.methods
         .replenish(
           Array.from(orderId),
-          new anchor.BN(validity),
           new anchor.BN(0), // No additional amount needed since amount_in already equals amount_out
           true, // close_order = true
           null
@@ -3116,8 +2935,6 @@ describe("zynk-core", () => {
     const amount = new anchor.BN(100000000000);
     const orderId = generateOrderId();
     const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
-    const now = Math.floor(Date.now() / 1000);
-    const validity = now + 3600;
 
     // Ensure atas.partnerDepositTokenAccount has sufficient balance
     const sourceBalance_preTx =
@@ -3190,7 +3007,6 @@ describe("zynk-core", () => {
       await program.methods
         .replenish(
           Array.from(orderId),
-          new anchor.BN(validity),
           new anchor.BN(0), // No additional amount needed since amount_in already equals amount_out
           true, // close_order = true
           null
@@ -3225,8 +3041,6 @@ describe("zynk-core", () => {
     const replenishAmount = new anchor.BN(50000000000); // Partial replenish
     const orderId = generateOrderId();
     const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
-    const now = Math.floor(Date.now() / 1000);
-    const validity = now + 3600;
 
     // Create order with tokenMint
     await program.methods
@@ -3285,7 +3099,6 @@ describe("zynk-core", () => {
     await program.methods
       .replenish(
         Array.from(orderId),
-        new anchor.BN(validity),
         replenishAmount,
         false, // close_order = false (partial replenish)
         null
@@ -3339,8 +3152,6 @@ describe("zynk-core", () => {
     const replenishAmount = new anchor.BN(50000000000);
     const orderId = generateOrderId();
     const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
-    const now = Math.floor(Date.now() / 1000);
-    const validity = now + 3600;
 
     // Create order with tokenMint
     await program.methods
@@ -3396,7 +3207,6 @@ describe("zynk-core", () => {
       await program.methods
         .replenish(
           Array.from(orderId),
-          new anchor.BN(validity),
           replenishAmount,
           false, // close_order = false (partial replenish)
           null
