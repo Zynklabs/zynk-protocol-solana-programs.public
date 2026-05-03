@@ -15,7 +15,7 @@ use anchor_lang::solana_program::{
     hash::hash,
 };
 
-declare_id!("ZynkcJyxiBTs9ePTQzHh7ckDDnwrLjuNVUbisF6hC7K");
+declare_id!("8GNoWZwvXeT1wMkMHwu35rww21t9e5oe9zT8yXFzNa7D");
 
 pub const DOMAIN_SEPARATOR: u64 = 1151111081099710;
 pub const INITIAL_MANAGER: Pubkey = pubkey!("9MepxaatLd2EnwDJrEALaQQRJUtMY1rsF7GjXFgWeCbm");
@@ -53,8 +53,6 @@ pub enum CustomError {
     AlreadyExecuted,
     #[msg("Invalid action")]
     InvalidAction,
-    #[msg("Invalid partner deposit vault authority")]
-    InvalidPdvAuthority,
     #[msg("Whitelisted token mints must be non-empty")]
     EmptyWhitelistedTokenMints,
     #[msg("Whitelisted token mints must be unique")]
@@ -123,7 +121,6 @@ pub enum TimelockAction {
     UpdateManager,
     UpdateGuardian,
     UpdateAttester,
-    UpdateZynkOpVault,
     Unpause,
 }
 
@@ -134,7 +131,6 @@ impl TimelockAction {
             TimelockAction::UpdateManager => 12 * 60 * 60,         // 12 hours
             TimelockAction::UpdateGuardian => 48 * 60 * 60,        // 48 hours
             TimelockAction::UpdateAttester => 12 * 60 * 60,        // 12 hours
-            TimelockAction::UpdateZynkOpVault => 12 * 60 * 60,     // 12 hours
             TimelockAction::Unpause => 6 * 60 * 60,                // 6 hours
         }
     }
@@ -149,8 +145,7 @@ impl TryFrom<u8> for TimelockAction {
             1 => Ok(TimelockAction::UpdateManager),
             2 => Ok(TimelockAction::UpdateGuardian),
             3 => Ok(TimelockAction::UpdateAttester),
-            4 => Ok(TimelockAction::UpdateZynkOpVault),
-            5 => Ok(TimelockAction::Unpause),
+            4 => Ok(TimelockAction::Unpause),
             _ => Err(CustomError::InvalidAction.into()),
         }
     }
@@ -397,9 +392,9 @@ pub mod zynk_core {
 
         let beneficiary_wallet = ctx.accounts.beneficiary_token_account.owner.key();
         let partner_deposit_vault = &ctx.accounts.partner_deposit_vault;
-        let pdv_token_account = ctx.accounts.pdv_token_account.as_ref().ok_or(CustomError::InvalidPdvAuthority)?;
+        let pdv_token_account = ctx.accounts.pdv_token_account.as_ref().ok_or(CustomError::InvalidAccount)?;
 
-        require!(pdv_token_account.owner == partner_deposit_vault.key(), CustomError::InvalidPdvAuthority);
+        require!(pdv_token_account.owner == partner_deposit_vault.key(), CustomError::InvalidAccount);
         require!(pdv_token_account.mint == ctx.accounts.zov_token_account.mint, CustomError::InvalidTokenMint);
 
         let mut is_transient = transient;
@@ -929,7 +924,6 @@ pub mod zynk_core {
             TimelockAction::UpdateAdmin => config.admin = value,
             TimelockAction::UpdateManager => config.manager = value,
             TimelockAction::UpdateGuardian => config.guardian = value,
-            TimelockAction::UpdateZynkOpVault => config.zynk_op_vault = value,
             _ => return Err(error!(CustomError::InvalidAction)),
         }
 
@@ -988,21 +982,13 @@ pub mod zynk_core {
     /// * `ctx` - The [`Pause`] context containing the authority and config accounts.
     ///
     /// # Authorization
-    /// May be called by the admin, manager, or guardian.
+    /// May be called by the admin, manager, or attester.
     ///
     /// # Behavior
     /// - Sets the contract paused state to `true`.
     /// - Fails if the signer is not an authorized role.
-    ///
-    /// # Authorization
-    /// May be called by the admin, manager, or guardian.
     pub fn pause(ctx: Context<Pause>) -> Result<()> {
         let config = &mut ctx.accounts.config;
-        let authority = ctx.accounts.authority.key;
-
-        if authority != &config.admin && authority != &config.manager && authority != &config.attester {
-            return Err(error!(CustomError::UnauthorizedSigner));
-        }
 
         config.paused = true;
         Ok(())
@@ -1068,7 +1054,6 @@ pub mod zynk_core {
             TimelockAction::UpdateAdmin => config.admin = value,
             TimelockAction::UpdateManager => config.manager = value,
             TimelockAction::UpdateAttester => config.attester = value,
-            TimelockAction::UpdateZynkOpVault => config.zynk_op_vault = value,
             _ => return Err(error!(CustomError::InvalidAction)),
         }
 
@@ -1155,12 +1140,12 @@ pub struct CreateOrder<'info> {
     #[account(
         seeds = [ZYNK_OP_VAULT_SEED],
         bump,
-        constraint = zynk_op_vault.key() == config.zynk_op_vault @ CustomError::InvalidPdvAuthority,
+        constraint = zynk_op_vault.key() == config.zynk_op_vault @ CustomError::InvalidAccount,
     )]
     pub zynk_op_vault: UncheckedAccount<'info>,
     #[account(
         mut,
-        constraint = zov_token_account.owner == zynk_op_vault.key() @ CustomError::InvalidPdvAuthority,
+        constraint = zov_token_account.owner == zynk_op_vault.key() @ CustomError::InvalidAccount,
         constraint = zov_token_account.mint == mint.key() @ CustomError::InvalidTokenMint
     )]
     pub zov_token_account: InterfaceAccount<'info, TokenAccount>,
@@ -1177,7 +1162,7 @@ pub struct CreateOrder<'info> {
     // Tokens sent out to
     #[account(
         mut,
-        constraint = beneficiary_token_account.mint == zov_token_account.mint @ CustomError::InvalidTokenMint,
+        constraint = beneficiary_token_account.mint == zov_token_account.mint @ CustomError::InvalidAccount,
         constraint = beneficiary_token_account.owner != zynk_op_vault.key() @ CustomError::InvalidAccount,
     )]
     pub beneficiary_token_account: InterfaceAccount<'info, TokenAccount>,
@@ -1231,12 +1216,12 @@ pub struct Replenish<'info> {
     #[account(
         seeds = [PARTNER_DEPOSIT_VAULT_SEED, order_tracker.partner_id.as_ref()],
         bump,
-        constraint = partner_deposit_vault.key() == order_tracker.partner_deposit_vault @ CustomError::InvalidPdvAuthority,
+        constraint = partner_deposit_vault.key() == order_tracker.partner_deposit_vault @ CustomError::InvalidAccount,
     )]
     pub partner_deposit_vault: UncheckedAccount<'info>,
     #[account(
         mut,
-        constraint = pdv_token_account.owner == partner_deposit_vault.key() @ CustomError::InvalidPdvAuthority,
+        constraint = pdv_token_account.owner == partner_deposit_vault.key() @ CustomError::InvalidAccount,
         constraint = pdv_token_account.mint == zov_token_account.mint @ CustomError::InvalidTokenMint
     )]
     pub pdv_token_account: InterfaceAccount<'info, TokenAccount>,
@@ -1244,7 +1229,7 @@ pub struct Replenish<'info> {
     // Tokens pulled in to
     #[account(
         mut,
-        constraint = zov_token_account.owner == config.zynk_op_vault @ CustomError::InvalidTokenMint,
+        constraint = zov_token_account.owner == config.zynk_op_vault @ CustomError::InvalidAccount,
         constraint = zov_token_account.mint == mint.key() @ CustomError::InvalidTokenMint
     )]
     pub zov_token_account: InterfaceAccount<'info, TokenAccount>,
@@ -1309,21 +1294,23 @@ pub struct WhitelistBeneficiary<'info> {
         mut,
         seeds = [CONFIG_SEED],
         bump,
-        has_one = admin @ CustomError::UnauthorizedAdmin
     )]
     pub config: Account<'info, Config>,
 
     #[account(
         init,
-        payer = admin,
+        payer = authority,
         space = 8 + Beneficiary::INIT_SPACE,
         seeds = [BENEFICIARY_SEED, partner_id.as_ref(), public_key.as_ref()],
         bump
     )]
     pub beneficiary: Account<'info, Beneficiary>,
 
-    #[account(mut)]
-    pub admin: Signer<'info>,
+    #[account(
+        mut,
+        constraint = authority.key() == config.admin || authority.key() == config.guardian @ CustomError::UnauthorizedSigner,
+    )]
+    pub authority: Signer<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -1334,7 +1321,6 @@ pub struct ToggleBeneficiary<'info> {
         mut,
         seeds = [CONFIG_SEED],
         bump,
-        has_one = admin @ CustomError::UnauthorizedAdmin
     )]
     pub config: Account<'info, Config>,
 
@@ -1345,8 +1331,11 @@ pub struct ToggleBeneficiary<'info> {
     )]
     pub beneficiary: Account<'info, Beneficiary>,
 
-    #[account(mut)]
-    pub admin: Signer<'info>,
+    #[account(
+        mut,
+        constraint = authority.key() == config.admin || authority.key() == config.guardian @ CustomError::UnauthorizedSigner,
+    )]
+    pub authority: Signer<'info>,
 }
 
 #[derive(Accounts)]
@@ -1355,7 +1344,6 @@ pub struct RevokeBeneficiary<'info> {
         mut,
         seeds = [CONFIG_SEED],
         bump,
-        has_one = admin @ CustomError::UnauthorizedAdmin
     )]
     pub config: Account<'info, Config>,
 
@@ -1363,12 +1351,15 @@ pub struct RevokeBeneficiary<'info> {
         mut,
         seeds = [BENEFICIARY_SEED, beneficiary.partner_id.as_ref(), beneficiary.public_key.as_ref()],
         bump,
-        close = admin
+        close = authority
     )]
     pub beneficiary: Account<'info, Beneficiary>,
 
-    #[account(mut)]
-    pub admin: Signer<'info>,
+    #[account(
+        mut,
+        constraint = authority.key() == config.admin || authority.key() == config.guardian @ CustomError::UnauthorizedSigner,
+    )]
+    pub authority: Signer<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -1453,6 +1444,9 @@ pub struct Pause<'info> {
     )]
     pub config: Account<'info, Config>,
 
+    #[account(
+        constraint = authority.key() == config.manager || authority.key() == config.admin || authority.key() == config.attester @ CustomError::UnauthorizedSigner,
+    )]
     pub authority: Signer<'info>,
 }
 

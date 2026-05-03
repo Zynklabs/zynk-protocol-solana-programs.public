@@ -54,8 +54,7 @@ const TimelockAction = {
   UpdateManager: 1,
   UpdateGuardian: 2,
   UpdateAttester: 3,
-  UpdateZynkOpVault: 4,
-  Unpause: 5,
+  Unpause: 4,
 };
 
 const timelockDelays = {
@@ -63,7 +62,6 @@ const timelockDelays = {
   [TimelockAction.UpdateManager]: 12 * 60 * 60,
   [TimelockAction.UpdateGuardian]: 48 * 60 * 60,
   [TimelockAction.UpdateAttester]: 12 * 60 * 60,
-  [TimelockAction.UpdateZynkOpVault]: 12 * 60 * 60,
   [TimelockAction.Unpause]: 6 * 60 * 60,
 };
 
@@ -428,10 +426,10 @@ describe("zynk-core", () => {
       .accounts({
         config: configPDA,
         beneficiary: defaultBeneficiaryPDA,
-        admin: admin.publicKey,
+        authority: guardian.publicKey,
         systemProgram: SystemProgram.programId,
       })
-      .signers([admin])
+      .signers([guardian])
       .rpc();
 
     const beneficiary = await program.account.beneficiary.fetch(
@@ -943,7 +941,7 @@ describe("zynk-core", () => {
       .accounts({
         config: configPDA,
         beneficiary: defaultBeneficiaryPDA,
-        admin: admin.publicKey,
+        authority: admin.publicKey,
         systemProgram: SystemProgram.programId,
       })
       .signers([admin])
@@ -1003,7 +1001,7 @@ describe("zynk-core", () => {
       .accounts({
         config: configPDA,
         beneficiary: defaultBeneficiaryPDA,
-        admin: admin.publicKey,
+        authority: admin.publicKey,
         systemProgram: SystemProgram.programId,
       })
       .signers([admin])
@@ -1040,7 +1038,7 @@ describe("zynk-core", () => {
       .accounts({
         config: configPDA,
         beneficiary: defaultBeneficiaryPDA,
-        admin: admin.publicKey,
+        authority: admin.publicKey,
         systemProgram: SystemProgram.programId,
       })
       .signers([admin])
@@ -1635,7 +1633,6 @@ describe("zynk-core", () => {
   //       .signers([manager])
   //       .rpc();
   //   } catch (error) {
-  //     console.error(error);
   //     assert.include(
   //       error.message,
   //       "ArithmeticOverflow",
@@ -4376,7 +4373,7 @@ describe("zynk-core", () => {
     let configAccount = await program.account.config.fetch(configPDA);
     assert.ok(configAccount.paused, "Expected program to be paused!");
 
-    const action = TimelockAction.UpdateZynkOpVault;
+    const action = TimelockAction.UpdateAttester;
     const [wrongTimelockPDA] = PublicKey.findProgramAddressSync(
       [Buffer.from("timelock"), Buffer.from([action])],
       program.programId
