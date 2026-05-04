@@ -15,7 +15,7 @@ use anchor_lang::solana_program::{
     hash::hash,
 };
 
-declare_id!("8GNoWZwvXeT1wMkMHwu35rww21t9e5oe9zT8yXFzNa7D");
+declare_id!("CDhMbu6bYMLPxCEDv4V7AXBvgx4gqaMfLit4JTZFtd6y");
 
 pub const DOMAIN_SEPARATOR: u64 = 1151111081099710;
 pub const INITIAL_MANAGER: Pubkey = pubkey!("9MepxaatLd2EnwDJrEALaQQRJUtMY1rsF7GjXFgWeCbm");
@@ -41,8 +41,8 @@ pub enum CustomError {
     InvalidAccount,
     #[msg("Invalid token mint")]
     InvalidTokenMint,
-    #[msg("Invalid beneficiary state - is_active / allow_transient")]
-    InvalidBeneficiaryState,
+    #[msg("Invalid beneficiary or it's state")]
+    InvalidBeneficiary,
     #[msg("Deployed amount must be replenished")]
     DeficientOrder,
     #[msg("Invalid message in Ed25519 instruction")]
@@ -68,7 +68,6 @@ pub struct Config {
     pub manager: Pubkey,
     pub guardian: Pubkey,
     pub attester: Pubkey,
-    pub zynk_op_vault: Pubkey,
     #[max_len(8)]
     pub whitelisted_token_mints: Vec<Pubkey>,
 }
@@ -80,6 +79,7 @@ pub struct OrderTracker {
     pub partner_id: [u8; 32],
     pub amount_in: u64,
     pub amount_out: u64,
+    pub zynk_op_vault: Pubkey,
     pub beneficiary_wallet: Pubkey,
     pub partner_deposit_vault: Pubkey,
 }
@@ -127,7 +127,7 @@ pub enum TimelockAction {
 impl TimelockAction {
     pub fn delay(&self) -> i64 {
         match self {
-            TimelockAction::UpdateAdmin => 24 * 60 * 60,         // 24 hours
+            TimelockAction::UpdateAdmin => 24 * 60 * 60,           // 24 hours
             TimelockAction::UpdateManager => 12 * 60 * 60,         // 12 hours
             TimelockAction::UpdateGuardian => 48 * 60 * 60,        // 48 hours
             TimelockAction::UpdateAttester => 12 * 60 * 60,        // 12 hours
@@ -169,8 +169,9 @@ pub struct Action {
 #[event]
 pub struct OrderCreated {
     pub order_id: [u8; 32],
-    pub beneficiary_wallet: Pubkey,
     pub token: Pubkey,
+    pub zynk_op_vault: Pubkey,
+    pub beneficiary_wallet: Pubkey,
     pub partner_deposit_vault: Pubkey,
     pub amount: u64,
     pub transient: bool,
@@ -182,6 +183,7 @@ pub struct OrderCreated {
 pub struct OrderReplenished {
     pub order_id: [u8; 32],
     pub token: Pubkey,
+    pub zynk_op_vault: Pubkey,
     pub partner_deposit_vault: Pubkey,
     pub amount: u64,
     pub order_closed: bool,
@@ -286,6 +288,36 @@ pub fn validate_unique_token_mints(token_mints: &[Pubkey]) -> Result<()> {
     Ok(())
 }
 
+pub fn validate_beneficiary(
+    program_id: &Pubkey,
+    beneficiary: Option<&Account<Beneficiary>>,
+    beneficiary_wallet: &Pubkey,
+    partner_id: &[u8; 32],
+    zov_id: &[u8; 32],
+    transient: bool,
+) -> Result<()> {
+    if *zov_id == [0u8; 32] { return Ok(()) }
+
+    let beneficiary = beneficiary.ok_or(CustomError::InvalidBeneficiary)?;
+
+    require!(beneficiary.is_active, CustomError::InvalidBeneficiary);
+    require!(beneficiary.allow_transient || !transient, CustomError::InvalidBeneficiary);
+    require!(beneficiary.public_key == *beneficiary_wallet, CustomError::InvalidBeneficiary);
+
+    let (expected, _) = Pubkey::find_program_address(
+        &[
+            BENEFICIARY_SEED,
+            partner_id.as_ref(),
+            beneficiary_wallet.as_ref(),
+        ],
+        program_id,
+    );
+
+    require!(beneficiary.key() == expected, CustomError::InvalidAccount);
+
+    Ok(())
+}
+
 /// Closes an account and transfers lamports to the given destination.
 /// Also zeroes out the account data to prevent reuse.
 pub fn close_account<'a, 'b>(from: impl ToAccountInfo<'a>, to: impl ToAccountInfo<'b>) -> Result<()> {
@@ -338,7 +370,6 @@ pub mod zynk_core {
         config.admin = admin;
         config.guardian = guardian;
         config.attester = attester;
-        config.zynk_op_vault = Pubkey::find_program_address(&[ZYNK_OP_VAULT_SEED], ctx.program_id).0;
 
         require!(whitelisted_token_mints.len() > 0, CustomError::EmptyWhitelistedTokenMints);
         for token_mint in whitelisted_token_mints.iter() {
@@ -356,17 +387,19 @@ pub mod zynk_core {
     ///
     /// # Arguments
     /// * `ctx` - The [`CreateOrder`] context containing all required accounts.
-    /// * `partner_id` - The unique identifier of the partner.
+    /// * `partner_id` - The unique identifier of the partner (32 bytes, hashed off-chain).
     /// * `order_id` - The unique identifier of the order (32 bytes, hashed off-chain).
+    /// * `zov_id` - The unique identifier of the ZOV to use (32 bytes, hashed off-chain).
+    /// * `transient` - Flag to create (and close) transient orders.
     /// * `amount` - The amount of tokens to transfer.
-    /// * `signature` - Optional manager signature enabling explicit transient execution
+    /// * `signature` - Optional attested signature enabling explicit transient execution
     ///                 (irrespective of the `allow_transient` attribute in beneficiary PDA)
     /// * `meta` - Optional metadata emitted with the event.
     ///
     /// # Behavior
     /// - Fails if the program is paused.
     /// - Validates the partner deposit vault token authority and token mint.
-    /// - Optionally verifies a manager signature for transient execution.
+    /// - Optionally verifies a attester signature for transient execution.
     /// - Transfers tokens from the partner deposit vault to the Zynk Operational vault.
     /// - Transfers tokens from the Zynk Operational vault to the beneficiary.
     /// - Records order details in an `OrderTracker` PDA unless executed transiently.
@@ -380,6 +413,7 @@ pub mod zynk_core {
         ctx: Context<CreateOrder>,
         partner_id: [u8; 32],
         order_id: [u8; 32],
+        zov_id: [u8; 32],
         transient: bool,
         amount: u64,
         signature: Option<[u8; 64]>,
@@ -392,14 +426,24 @@ pub mod zynk_core {
 
         let beneficiary_wallet = ctx.accounts.beneficiary_token_account.owner.key();
         let partner_deposit_vault = &ctx.accounts.partner_deposit_vault;
+        let zynk_op_vault = &ctx.accounts.zynk_op_vault;
         let pdv_token_account = ctx.accounts.pdv_token_account.as_ref().ok_or(CustomError::InvalidAccount)?;
+
+        validate_beneficiary(
+            ctx.program_id,
+            ctx.accounts.beneficiary.as_ref(),
+            &beneficiary_wallet,
+            &partner_id,
+            &zov_id,
+            transient,
+        )?;
 
         require!(pdv_token_account.owner == partner_deposit_vault.key(), CustomError::InvalidAccount);
         require!(pdv_token_account.mint == ctx.accounts.zov_token_account.mint, CustomError::InvalidTokenMint);
 
         let mut is_transient = transient;
         if let Some(signature) = signature {
-            let message = format!("{}::{}::{}", DOMAIN_SEPARATOR, beneficiary_wallet, partner_deposit_vault.key());
+            let message = format!("{}::{}::{}::{}", DOMAIN_SEPARATOR, beneficiary_wallet, partner_deposit_vault.key(), zynk_op_vault.key());
             verify_signature_syscall(
                 ctx.accounts.sysvar_instructions.as_ref().ok_or(ProgramError::MissingRequiredSignature)?,
                 &config.attester,
@@ -435,11 +479,12 @@ pub mod zynk_core {
             from: ctx.accounts.zov_token_account.to_account_info(),
             to: ctx.accounts.beneficiary_token_account.to_account_info(),
             mint: ctx.accounts.mint.to_account_info(),
-            authority: ctx.accounts.zynk_op_vault.to_account_info(),
+            authority: zynk_op_vault.to_account_info(),
         };
 
         let seeds = &[
             ZYNK_OP_VAULT_SEED,
+            zov_id.as_ref(),
             &[ctx.bumps.zynk_op_vault],
         ];
         let signer_seeds = &[&seeds[..]];
@@ -458,14 +503,16 @@ pub mod zynk_core {
             order_tracker.order_id = order_id;
             order_tracker.amount_in = amount;
             order_tracker.amount_out = amount;
+            order_tracker.zynk_op_vault = zynk_op_vault.key();
             order_tracker.beneficiary_wallet = beneficiary_wallet;
             order_tracker.partner_deposit_vault = partner_deposit_vault.key();
         }
 
         emit!(OrderCreated {
             order_id,
+            zynk_op_vault: zynk_op_vault.key(),
             beneficiary_wallet,
-            token: pdv_token_account.mint,
+            token: ctx.accounts.mint.key(),
             partner_deposit_vault: partner_deposit_vault.key(),
             amount,
             transient: is_transient,
@@ -481,10 +528,11 @@ pub mod zynk_core {
     ///
     /// # Arguments
     /// * `ctx` - The [`CreateOrder`] context containing all required accounts.
-    /// * `partner_id` - The unique identifier of the partner.
+    /// * `partner_id` - The unique identifier of the partner (32 bytes, hashed off-chain).
     /// * `order_id` - The unique identifier of the order (32 bytes, hashed off-chain).
+    /// * `zov_id` - The unique identifier of the ZOV to use (32 bytes, hashed off-chain).
+    /// * `transient` - Flag to create (and close) transient orders.
     /// * `amount` - The amount of tokens to transfer.
-    /// * `transient` - Flag to create (and close) transient orders
     /// * `meta` - Optional metadata emitted with the event.
     ///
     /// # Behavior
@@ -502,6 +550,7 @@ pub mod zynk_core {
         ctx: Context<CreateOrder>,
         partner_id: [u8; 32],
         order_id: [u8; 32],
+        zov_id: [u8; 32],
         transient: bool,
         amount: u64,
         meta: Option<Vec<EventArg>>
@@ -512,6 +561,16 @@ pub mod zynk_core {
 
         let beneficiary_wallet = ctx.accounts.beneficiary_token_account.owner.key();
         let partner_deposit_vault = ctx.accounts.partner_deposit_vault.key();
+        let zynk_op_vault = ctx.accounts.zynk_op_vault.key();
+
+        validate_beneficiary(
+            ctx.program_id,
+            ctx.accounts.beneficiary.as_ref(),
+            &beneficiary_wallet,
+            &partner_id,
+            &zov_id,
+            transient,
+        )?;
 
         if amount != 0 {
             // Perform token transfer from zov_token_account to beneficiary_token_account.
@@ -524,6 +583,7 @@ pub mod zynk_core {
 
             let seeds = &[
                 ZYNK_OP_VAULT_SEED,
+                zov_id.as_ref(),
                 &[ctx.bumps.zynk_op_vault],
             ];
             let signer_seeds = &[&seeds[..]];
@@ -542,14 +602,16 @@ pub mod zynk_core {
             order_tracker.partner_id = partner_id;
             order_tracker.order_id = order_id;
             order_tracker.amount_out = amount;
+            order_tracker.zynk_op_vault = zynk_op_vault;
             order_tracker.beneficiary_wallet = beneficiary_wallet;
             order_tracker.partner_deposit_vault = partner_deposit_vault;
         }
 
         emit!(OrderCreated {
             order_id,
+            zynk_op_vault,
             beneficiary_wallet,
-            token: ctx.accounts.zov_token_account.mint,
+            token: ctx.accounts.mint.key(),
             partner_deposit_vault,
             amount,
             transient,
@@ -586,6 +648,7 @@ pub mod zynk_core {
         require!(!ctx.accounts.config.paused, CustomError::ContractPaused);
 
         let order_tracker = &mut ctx.accounts.order_tracker;
+        let partner_deposit_vault = &ctx.accounts.partner_deposit_vault;
 
         if amount > 0 {
             // Perform token transfer from pdv_token_account to zov_token_account.
@@ -593,7 +656,7 @@ pub mod zynk_core {
                 from: ctx.accounts.pdv_token_account.to_account_info(),
                 to: ctx.accounts.zov_token_account.to_account_info(),
                 mint: ctx.accounts.mint.to_account_info(),
-                authority: ctx.accounts.partner_deposit_vault.to_account_info(),
+                authority: partner_deposit_vault.to_account_info(),
             };
             let seeds = &[
                 PARTNER_DEPOSIT_VAULT_SEED,
@@ -621,13 +684,14 @@ pub mod zynk_core {
             require!(order_tracker.amount_in >= order_tracker.amount_out, CustomError::DeficientOrder);
 
             // Close the order_tracker account (transfer lamports to manager and clear data)
-            close_account(order_tracker, &ctx.accounts.manager)?;
+            close_account(&mut *order_tracker, &ctx.accounts.manager)?;
         }
 
         emit!(OrderReplenished {
             order_id,
-            token: ctx.accounts.pdv_token_account.mint,
-            partner_deposit_vault: ctx.accounts.partner_deposit_vault.key(),
+            zynk_op_vault: order_tracker.zynk_op_vault,
+            token: ctx.accounts.mint.key(),
+            partner_deposit_vault: partner_deposit_vault.key(),
             amount,
             order_closed: close_order,
             domain_separator: DOMAIN_SEPARATOR,
@@ -782,7 +846,7 @@ pub mod zynk_core {
         Ok(())
     }
 
-    pub fn toggle_beneficiary_status(ctx: Context<ToggleBeneficiary>) -> Result<()> {
+    pub fn toggle_beneficiary(ctx: Context<ToggleBeneficiary>) -> Result<()> {
         let beneficiary = &mut ctx.accounts.beneficiary;
 
         beneficiary.is_active = !beneficiary.is_active;
@@ -1112,7 +1176,7 @@ pub struct Initialize<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(partner_id: [u8; 32], order_id: [u8; 32], transient: bool)]
+#[instruction(partner_id: [u8; 32], order_id: [u8; 32], zov_id: [u8; 32], transient: bool)]
 pub struct CreateOrder<'info> {
     #[account(
         mut,
@@ -1138,9 +1202,8 @@ pub struct CreateOrder<'info> {
 
     /// CHECK: Zynk Operational vault PDA - verified by seeds
     #[account(
-        seeds = [ZYNK_OP_VAULT_SEED],
+        seeds = [ZYNK_OP_VAULT_SEED, zov_id.as_ref()],
         bump,
-        constraint = zynk_op_vault.key() == config.zynk_op_vault @ CustomError::InvalidAccount,
     )]
     pub zynk_op_vault: UncheckedAccount<'info>,
     #[account(
@@ -1150,14 +1213,7 @@ pub struct CreateOrder<'info> {
     )]
     pub zov_token_account: InterfaceAccount<'info, TokenAccount>,
 
-    #[account(
-        mut,
-        seeds = [BENEFICIARY_SEED, partner_id.as_ref(), beneficiary_token_account.owner.key().as_ref()],
-        bump,
-        constraint = beneficiary.is_active && ( beneficiary.allow_transient || !transient ) @ CustomError::InvalidBeneficiaryState,
-        constraint = beneficiary.public_key == beneficiary_token_account.owner @ CustomError::InvalidAccount,
-    )]
-    pub beneficiary: Account<'info, Beneficiary>,
+    pub beneficiary: Option<Account<'info, Beneficiary>>,
 
     // Tokens sent out to
     #[account(
@@ -1229,7 +1285,7 @@ pub struct Replenish<'info> {
     // Tokens pulled in to
     #[account(
         mut,
-        constraint = zov_token_account.owner == config.zynk_op_vault @ CustomError::InvalidAccount,
+        constraint = zov_token_account.owner == order_tracker.zynk_op_vault @ CustomError::InvalidAccount,
         constraint = zov_token_account.mint == mint.key() @ CustomError::InvalidTokenMint
     )]
     pub zov_token_account: InterfaceAccount<'info, TokenAccount>,

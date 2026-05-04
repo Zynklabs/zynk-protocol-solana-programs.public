@@ -78,8 +78,16 @@ describe("zynk-core", () => {
   const attester = provider.wallet.payer;
   const partnerOperationalWallet = Keypair.generate();
 
+  const defaultZovId = Buffer.alloc(32);
+  defaultZovId.write("default", 0, "utf-8");
   const [zynkOpVault] = PublicKey.findProgramAddressSync(
-    [Buffer.from("zynk_op_vault")],
+    [Buffer.from("zynk_op_vault"), defaultZovId],
+    program.programId
+  );
+
+  const zeroZovId = Buffer.alloc(32);
+  const [zZynkOpVault] = PublicKey.findProgramAddressSync(
+    [Buffer.from("zynk_op_vault"), zeroZovId],
     program.programId
   );
 
@@ -246,6 +254,7 @@ describe("zynk-core", () => {
 
     const owners = {
       zov: zynkOpVault,
+      zZov: zZynkOpVault,
       partnerOperational: partnerOperationalWallet.publicKey,
       partnerDeposit: partnerDepositVaultPDA,
     };
@@ -387,7 +396,6 @@ describe("zynk-core", () => {
     assert.ok(configAccount.manager.equals(manager.publicKey));
     assert.ok(configAccount.guardian.equals(guardian.publicKey));
     assert.ok(configAccount.attester.equals(attester.publicKey));
-    assert.ok(configAccount.zynkOpVault.equals(zynkOpVault));
     assert.equal(configAccount.paused, false);
 
     // Verify all token mints are stored correctly
@@ -450,6 +458,7 @@ describe("zynk-core", () => {
         .createOrder(
           Array.from(partnerId),
           Array.from(currentOrderId),
+          Array.from(defaultZovId),
           true, // transient
           amount,
           null
@@ -474,8 +483,8 @@ describe("zynk-core", () => {
     } catch (error) {
       assert.include(
         error.message,
-        "InvalidBeneficiaryState",
-        "Expected `InvalidBeneficiaryState` error"
+        "InvalidBeneficiary",
+        "Expected `InvalidBeneficiary` error"
       );
     }
   });
@@ -496,13 +505,14 @@ describe("zynk-core", () => {
       atas.partnerOperationalTokenAccount
     );
 
-    const message = `${DOMAIN_SEPARATOR}::${partnerOperationalWallet.publicKey.toString()}::${partnerDepositVaultPDA.toString()}`;
+    const message = `${DOMAIN_SEPARATOR}::${partnerOperationalWallet.publicKey.toString()}::${partnerDepositVaultPDA.toString()}::${zynkOpVault.toString()}`;
     const { ed25519Ix, signature } = buildEd25519Ix(message, attester);
 
     await program.methods
       .pullAndCreateOrder(
         Array.from(partnerId),
         Array.from(transientOrderId),
+        Array.from(defaultZovId),
         false,
         amount,
         Buffer.from(signature).toJSON().data,
@@ -596,6 +606,7 @@ describe("zynk-core", () => {
         .pullAndCreateOrder(
           Array.from(partnerId),
           Array.from(currentOrderId),
+          Array.from(defaultZovId),
           false,
           amount,
           null,
@@ -647,6 +658,7 @@ describe("zynk-core", () => {
       .pullAndCreateOrder(
         Array.from(partnerId),
         Array.from(currentOrderId),
+        Array.from(defaultZovId),
         false,
         amount,
         null,
@@ -726,6 +738,7 @@ describe("zynk-core", () => {
       .createOrder(
         Array.from(partnerId),
         Array.from(currentOrderId),
+        Array.from(defaultZovId),
         false,
         amount,
         null
@@ -804,6 +817,7 @@ describe("zynk-core", () => {
           assert.equal(event.domainSeparator.toNumber(), DOMAIN_SEPARATOR);
           assert.equal(event.token.toBase58(), tokenMint.toBase58());
           assert.equal(event.amount.toNumber(), amount.toNumber());
+          // assert.equal(event.zynkOpVault.toBase58(), zynkOpVault.toBase58());
           assert.equal(
             event.partnerDepositVault.toBase58(),
             partnerDepositVaultPDA.toBase58()
@@ -833,6 +847,7 @@ describe("zynk-core", () => {
       .createOrder(
         Array.from(partnerId),
         Array.from(tempOrderId),
+        Array.from(defaultZovId),
         false,
         amount,
         meta
@@ -877,6 +892,7 @@ describe("zynk-core", () => {
       .createOrder(
         Array.from(partnerId),
         Array.from(currentOrderId),
+        Array.from(defaultZovId),
         false, // !transient
         amount,
         null
@@ -937,7 +953,7 @@ describe("zynk-core", () => {
 
   it("Should temporarily disable whitelisted partnerOperationalWallet as beneficiary", async () => {
     await program.methods
-      .toggleBeneficiaryStatus()
+      .toggleBeneficiary()
       .accounts({
         config: configPDA,
         beneficiary: defaultBeneficiaryPDA,
@@ -965,6 +981,7 @@ describe("zynk-core", () => {
         .createOrder(
           Array.from(partnerId),
           Array.from(currentOrderId),
+          Array.from(defaultZovId),
           false,
           amount,
           null
@@ -989,8 +1006,8 @@ describe("zynk-core", () => {
     } catch (error) {
       assert.include(
         error.message,
-        "InvalidBeneficiaryState",
-        "Expected `InvalidBeneficiaryState` error"
+        "InvalidBeneficiary",
+        "Expected `InvalidBeneficiary` error"
       );
     }
   });
@@ -1071,6 +1088,7 @@ describe("zynk-core", () => {
       .pullAndCreateOrder(
         Array.from(partnerId),
         Array.from(transientOrderId),
+        Array.from(defaultZovId),
         true,
         amount,
         null,
@@ -1172,6 +1190,7 @@ describe("zynk-core", () => {
       .pullAndCreateOrder(
         Array.from(partnerId),
         Array.from(transientOrderId),
+        Array.from(defaultZovId),
         true, // transient
         amount,
         null,
@@ -1271,6 +1290,7 @@ describe("zynk-core", () => {
       .createOrder(
         Array.from(partnerId),
         Array.from(transientOrderId),
+        Array.from(defaultZovId),
         true, // transient
         amount,
         null
@@ -1367,6 +1387,7 @@ describe("zynk-core", () => {
       .createOrder(
         Array.from(partnerId),
         Array.from(transientOrderId),
+        Array.from(defaultZovId),
         true, // transient
         amount,
         null
@@ -1451,6 +1472,7 @@ describe("zynk-core", () => {
       .createOrder(
         Array.from(partnerId),
         Array.from(currentOrderId),
+        Array.from(defaultZovId),
         false, // !transient
         new anchor.BN(1000000000000),
         null
@@ -1472,6 +1494,8 @@ describe("zynk-core", () => {
       })
       .signers([manager])
       .rpc();
+
+    const ot = await program.account.orderTracker.fetch(currentOrderTrackerPDA);
 
     const amount = new anchor.BN(50000000000);
 
@@ -1962,6 +1986,7 @@ describe("zynk-core", () => {
       .createOrder(
         Array.from(partnerId),
         Array.from(newOrderId),
+        Array.from(defaultZovId),
         false,
         amount,
         null
@@ -2097,6 +2122,7 @@ describe("zynk-core", () => {
       .createOrder(
         Array.from(partnerId),
         Array.from(newOrderId),
+        Array.from(defaultZovId),
         false,
         amount,
         null
@@ -2191,6 +2217,7 @@ describe("zynk-core", () => {
       .createOrder(
         Array.from(partnerId),
         Array.from(orderId),
+        Array.from(defaultZovId),
         false,
         amount,
         null
@@ -2282,6 +2309,7 @@ describe("zynk-core", () => {
       .createOrder(
         Array.from(partnerId),
         Array.from(orderId),
+        Array.from(defaultZovId),
         false,
         amount,
         null
@@ -2379,6 +2407,7 @@ describe("zynk-core", () => {
       .pullAndCreateOrder(
         Array.from(partnerId),
         Array.from(orderId),
+        Array.from(defaultZovId),
         false,
         amount,
         null,
@@ -2460,6 +2489,7 @@ describe("zynk-core", () => {
       .pullAndCreateOrder(
         Array.from(partnerId),
         Array.from(orderId),
+        Array.from(defaultZovId),
         false,
         amount,
         null,
@@ -2535,6 +2565,7 @@ describe("zynk-core", () => {
         .createOrder(
           Array.from(partnerId),
           Array.from(orderId),
+          Array.from(defaultZovId),
           false,
           amount,
           null
@@ -2575,6 +2606,7 @@ describe("zynk-core", () => {
         .pullAndCreateOrder(
           Array.from(partnerId),
           Array.from(orderId),
+          Array.from(defaultZovId),
           false,
           amount,
           null,
@@ -2619,6 +2651,7 @@ describe("zynk-core", () => {
         .pullAndCreateOrder(
           Array.from(partnerId),
           Array.from(orderId),
+          Array.from(defaultZovId),
           false,
           amount,
           null,
@@ -2663,6 +2696,7 @@ describe("zynk-core", () => {
       .createOrder(
         Array.from(partnerId),
         Array.from(orderId),
+        Array.from(defaultZovId),
         false,
         amount,
         null
@@ -2748,6 +2782,7 @@ describe("zynk-core", () => {
       .createOrder(
         Array.from(partnerId),
         Array.from(orderId),
+        Array.from(defaultZovId),
         false,
         amount,
         null
@@ -2851,6 +2886,7 @@ describe("zynk-core", () => {
       .pullAndCreateOrder(
         Array.from(partnerId),
         Array.from(orderId),
+        Array.from(defaultZovId),
         false,
         amount,
         null,
@@ -2954,6 +2990,7 @@ describe("zynk-core", () => {
       .pullAndCreateOrder(
         Array.from(partnerId),
         Array.from(orderId),
+        Array.from(defaultZovId),
         false,
         amount,
         null,
@@ -3044,6 +3081,7 @@ describe("zynk-core", () => {
       .createOrder(
         Array.from(partnerId),
         Array.from(orderId),
+        Array.from(defaultZovId),
         false,
         amount,
         null
@@ -3155,6 +3193,7 @@ describe("zynk-core", () => {
       .createOrder(
         Array.from(partnerId),
         Array.from(orderId),
+        Array.from(defaultZovId),
         false,
         amount,
         null
@@ -3264,6 +3303,7 @@ describe("zynk-core", () => {
   //     .createOrder(
   //       Array.from(partnerId),
   //       Array.from(order1Id),
+  //       Array.from(defaultZovId),
   //       false,
   //       amount,
   //       null
@@ -3291,6 +3331,7 @@ describe("zynk-core", () => {
   //     .createOrder(
   //       Array.from(partnerId),
   //       Array.from(order2Id),
+  //       Array.from(defaultZovId),
   //       false,
   //       amount,
   //       null
@@ -3340,6 +3381,7 @@ describe("zynk-core", () => {
   //     .pullAndCreateOrder(
   //       Array.from(partnerId),
   //       Array.from(order3Id),
+  //       Array.from(defaultZovId),
   //       false,
   //       amount,
   //       null,
@@ -3368,6 +3410,7 @@ describe("zynk-core", () => {
   //     .pullAndCreateOrder(
   //       Array.from(partnerId),
   //       Array.from(order4Id),
+  //       Array.from(defaultZovId),
   //       false,
   //       amount,
   //       null,
@@ -3403,6 +3446,7 @@ describe("zynk-core", () => {
   //     .createOrder(
   //       Array.from(partnerId),
   //       Array.from(order5Id),
+  //       Array.from(defaultZovId),
   //       false,
   //       zeroAmount,
   //       null
@@ -3430,6 +3474,7 @@ describe("zynk-core", () => {
   //     .createOrder(
   //       Array.from(partnerId),
   //       Array.from(order6Id),
+  //       Array.from(defaultZovId),
   //       false,
   //       zeroAmount,
   //       null
@@ -3663,6 +3708,7 @@ describe("zynk-core", () => {
       .createOrder(
         Array.from(partnerId),
         Array.from(order1Id),
+        Array.from(defaultZovId),
         false,
         amount,
         null
@@ -3690,6 +3736,7 @@ describe("zynk-core", () => {
       .createOrder(
         Array.from(partnerId),
         Array.from(order2Id),
+        Array.from(defaultZovId),
         false,
         amount,
         null
@@ -3799,6 +3846,7 @@ describe("zynk-core", () => {
       .createOrder(
         Array.from(partnerId),
         Array.from(orderId),
+        Array.from(defaultZovId),
         false,
         amount,
         null
@@ -3935,6 +3983,7 @@ describe("zynk-core", () => {
       .createOrder(
         Array.from(partnerId),
         Array.from(orderId),
+        Array.from(defaultZovId),
         false,
         amount,
         null
@@ -4060,6 +4109,7 @@ describe("zynk-core", () => {
       .createOrder(
         Array.from(partnerId),
         Array.from(orderId),
+        Array.from(defaultZovId),
         false,
         amount,
         null
@@ -4138,6 +4188,7 @@ describe("zynk-core", () => {
       .createOrder(
         Array.from(partnerId),
         Array.from(orderId),
+        Array.from(defaultZovId),
         false,
         amount,
         null
@@ -4882,5 +4933,141 @@ describe("zynk-core", () => {
     }
 
     await program.removeEventListener(listener);
+  });
+
+  it("**Whitelisting disabled ZOV flow**", async () => {
+    currentOrderId = generateOrderId();
+    currentOrderTrackerPDA = deriveOrderTrackerPDA(currentOrderId);
+
+    const zZovBalance_preTx = await provider.connection.getTokenAccountBalance(
+      atas.zZovTokenAccount
+    );
+
+    const sourceBalance_preTx =
+      await provider.connection.getTokenAccountBalance(
+        atas.partnerDepositTokenAccount
+      );
+
+    const destBalance_preTx = await provider.connection.getTokenAccountBalance(
+      atas.partnerOperationalTokenAccount
+    );
+
+    ///////////// pullAndCreateOrder ////////////////
+
+    const amount = new anchor.BN(100000000000);
+
+    expect(+sourceBalance_preTx.value.amount).to.be.gte(+amount);
+
+    await program.methods
+      .pullAndCreateOrder(
+        Array.from(partnerId),
+        Array.from(currentOrderId),
+        Array.from(zeroZovId),
+        false,
+        amount,
+        null,
+        null
+      )
+      .accounts({
+        config: configPDA,
+        manager: manager.publicKey,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: atas.partnerDepositTokenAccount,
+        zynkOpVault: zZynkOpVault,
+        zovTokenAccount: atas.zZovTokenAccount,
+        beneficiary: null,
+        beneficiaryTokenAccount: atas.partnerOperationalTokenAccount,
+        orderTracker: currentOrderTrackerPDA,
+        systemProgram: SystemProgram.programId,
+        mint: tokenMint,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: null,
+      })
+      .signers([manager])
+      .rpc();
+
+    // Verify token pull
+    const sourceBalance_postTx =
+      await provider.connection.getTokenAccountBalance(
+        atas.partnerDepositTokenAccount
+      );
+    assert.equal(
+      +sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount,
+      +amount
+    );
+
+    // Verify token transfer
+    const destBalance_postTx = await provider.connection.getTokenAccountBalance(
+      atas.partnerOperationalTokenAccount
+    );
+    assert.equal(
+      +destBalance_postTx.value.amount - +destBalance_preTx.value.amount,
+      +amount
+    );
+
+    // Verify OrderTracker stores correct details
+    const orderTrackerAccount = await program.account.orderTracker.fetch(
+      currentOrderTrackerPDA
+    );
+    assert.equal(
+      orderTrackerAccount.partnerDepositVault.toBase58(),
+      partnerDepositVaultPDA.toBase58()
+    );
+    assert.equal(
+      orderTrackerAccount.beneficiaryWallet.toBase58(),
+      partnerOperationalWallet.publicKey.toBase58()
+    );
+
+    const orderAmountIn = orderTrackerAccount.amountIn;
+    const orderAmountOut = orderTrackerAccount.amountOut;
+    assert.equal(orderAmountIn.toNumber(), amount.toNumber());
+    assert.equal(orderAmountOut.toNumber(), amount.toNumber());
+
+    ///////////// replenish ////////////////
+
+    const feeAmount = new anchor.BN(1000000000);
+
+    // Replenish the remaining amount and close the order
+    await program.methods
+      .replenish(
+        Array.from(currentOrderId),
+        feeAmount,
+        true, // close_order = true
+        null
+      )
+      .accounts({
+        config: configPDA,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: atas.partnerDepositTokenAccount,
+        zovTokenAccount: atas.zZovTokenAccount,
+        orderTracker: currentOrderTrackerPDA,
+        manager: manager.publicKey,
+        mint: tokenMint,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([manager])
+      .rpc();
+
+    const zZovBalance_postTx = await provider.connection.getTokenAccountBalance(
+      atas.zZovTokenAccount
+    );
+
+    assert.equal(
+      +zZovBalance_postTx.value.amount - +zZovBalance_preTx.value.amount,
+      +feeAmount
+    );
+
+    // Verify order is closed
+    try {
+      await program.account.orderTracker.fetch(currentOrderTrackerPDA);
+      assert.fail("Expected order to be closed");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "Account does not exist",
+        "Expected account to be closed"
+      );
+    }
   });
 });
