@@ -773,7 +773,10 @@ pub mod zynk_core {
                 CustomError::InvalidOrder);
 
             require!(
-                order_tracker.amount_in + amount >= order_tracker.amount_out,
+                order_tracker.amount_in
+                    .checked_add(amount)
+                    .ok_or(ProgramError::ArithmeticOverflow)?
+                    >= order_tracker.amount_out,
                 CustomError::DeficientOrder
             );
 
