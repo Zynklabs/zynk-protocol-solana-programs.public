@@ -371,6 +371,10 @@ pub mod zynk_core {
         attester: Pubkey,
         whitelisted_token_mints: Vec<Pubkey>
     ) -> Result<()> {
+        validate_address(&admin)?;
+        validate_address(&guardian)?;
+        validate_address(&attester)?;
+
         let config = &mut ctx.accounts.config;
         config.paused = false;
 
