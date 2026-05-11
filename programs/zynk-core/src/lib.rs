@@ -809,14 +809,17 @@ pub mod zynk_core {
         let config = &mut ctx.accounts.config;
         require!(!config.paused, CustomError::ContractPaused);
 
+        let mut seen_accounts = Vec::<Pubkey>::new();
         let mut order_ids = Vec::<[u8; 32]>::new();
         for account_info in ctx.remaining_accounts.iter() {
             require!(account_info.owner == ctx.program_id, CustomError::InvalidOrder);
 
+            let account_key = account_info.key();
+            if seen_accounts.contains(&account_key) { continue; }
+            seen_accounts.push(account_key);
+
             let order_tracker = OrderTracker::try_deserialize(&mut &account_info.data.borrow()[..])?;
-            let order_id = order_tracker.order_id;
-            if order_ids.contains(&order_id) { continue; }
-            order_ids.push(order_id);
+            order_ids.push(order_tracker.order_id);
 
             close_account(account_info, &ctx.accounts.admin)?;
         }
