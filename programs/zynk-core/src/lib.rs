@@ -638,7 +638,6 @@ pub mod zynk_core {
     ///
     /// # Arguments
     /// * `ctx` - The [`Replenish`] context containing all required accounts.
-    /// * `order_id` - The unique identifier of the order being replenished.
     /// * `amount` - The amount of tokens to transfer into the order.
     /// * `close_order` - Whether the order should be closed after replenishment.
     /// * `meta` - Optional metadata emitted with the event.
@@ -651,7 +650,6 @@ pub mod zynk_core {
     /// - Emits an `OrderReplenished` event.
     pub fn replenish(
         ctx: Context<Replenish>,
-        order_id: [u8; 32],
         amount: u64,
         close_order: bool,
         meta: Option<Vec<EventArg>>
@@ -700,7 +698,7 @@ pub mod zynk_core {
         }
 
         emit!(OrderReplenished {
-            order_id,
+            order_id: order_tracker.order_id,
             zynk_op_vault: order_tracker.zynk_op_vault,
             token: ctx.accounts.mint.key(),
             partner_deposit_vault: partner_deposit_vault.key(),
@@ -1291,7 +1289,6 @@ pub struct CreateOrder<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(order_id: [u8; 32])]
 pub struct Replenish<'info> {
     #[account(
         mut,

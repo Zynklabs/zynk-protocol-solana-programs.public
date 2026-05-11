@@ -571,7 +571,7 @@ describe("zynk-core", () => {
     // try to replenish and/or close a transient order
     try {
       await program.methods
-        .replenish(Array.from(transientOrderId), new anchor.BN(1), true, null)
+        .replenish(new anchor.BN(1), true, null)
         .accounts({
           config: configPDA,
           partnerDepositVault: partnerDepositVaultPDA,
@@ -1206,7 +1206,7 @@ describe("zynk-core", () => {
     // try to replenish and/or close a transient order
     try {
       await program.methods
-        .replenish(Array.from(transientOrderId), new anchor.BN(1), true, null)
+        .replenish(new anchor.BN(1), true, null)
         .accounts({
           config: configPDA,
           partnerDepositVault: partnerDepositVaultPDA,
@@ -1308,7 +1308,7 @@ describe("zynk-core", () => {
     // try to replenish and/or close a transient order
     try {
       await program.methods
-        .replenish(Array.from(transientOrderId), new anchor.BN(1), true, null)
+        .replenish(new anchor.BN(1), true, null)
         .accounts({
           config: configPDA,
           partnerDepositVault: partnerDepositVaultPDA,
@@ -1405,7 +1405,7 @@ describe("zynk-core", () => {
     // try to replenish and/or close a transient order
     try {
       await program.methods
-        .replenish(Array.from(transientOrderId), new anchor.BN(1), true, null)
+        .replenish(new anchor.BN(1), true, null)
         .accounts({
           config: configPDA,
           partnerDepositVault: partnerDepositVaultPDA,
@@ -1502,7 +1502,7 @@ describe("zynk-core", () => {
     // try to replenish and/or close a transient order
     try {
       await program.methods
-        .replenish(Array.from(transientOrderId), new anchor.BN(1), true, null)
+        .replenish(new anchor.BN(1), true, null)
         .accounts({
           config: configPDA,
           partnerDepositVault: partnerDepositVaultPDA,
@@ -1561,7 +1561,6 @@ describe("zynk-core", () => {
 
     await program.methods
       .replenish(
-        Array.from(currentOrderId),
         amount,
         false, // close_order = false (partial replenish)
         null
@@ -1585,7 +1584,6 @@ describe("zynk-core", () => {
     try {
       await program.methods
         .replenish(
-          Array.from(currentOrderId),
           new anchor.BN(1), // Small amount, but total amount_in (50 + 1 = 51) < amount_out (100)
           true, // close_order = true
           null
@@ -1744,7 +1742,7 @@ describe("zynk-core", () => {
     const orderAmountIn_preTx = orderTrackerAccount.amountIn;
 
     await program.methods
-      .replenish(Array.from(currentOrderId), amount, false, null)
+      .replenish(amount, false, null)
       .accounts({
         config: configPDA,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -1816,7 +1814,7 @@ describe("zynk-core", () => {
     );
     const orderAmountIn_preTx = orderTrackerAccount.amountIn;
     await program.methods
-      .replenish(Array.from(currentOrderId), amount, false, null)
+      .replenish(amount, false, null)
       .accounts({
         config: configPDA,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -1885,7 +1883,7 @@ describe("zynk-core", () => {
 
     // Second replenish operation
     await program.methods
-      .replenish(Array.from(currentOrderId), amount, false, null)
+      .replenish(amount, false, null)
       .accounts({
         config: configPDA,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -1962,12 +1960,7 @@ describe("zynk-core", () => {
 
     try {
       await program.methods
-        .replenish(
-          Array.from(currentOrderId),
-          new anchor.BN(1000000),
-          false,
-          null
-        )
+        .replenish(new anchor.BN(1000000), false, null)
         .accounts({
           config: configPDA,
           partnerDepositVault: wrongPartnerDepositVaultPDA,
@@ -2003,7 +1996,6 @@ describe("zynk-core", () => {
     // Replenish the remaining amount and close the order
     await program.methods
       .replenish(
-        Array.from(currentOrderId),
         remainingAmount,
         true, // close_order = true
         null
@@ -2080,7 +2072,6 @@ describe("zynk-core", () => {
     try {
       await program.methods
         .replenish(
-          Array.from(newOrderId),
           new anchor.BN(1),
           true, // close_order = true (requires manager authorization)
           null
@@ -2113,7 +2104,6 @@ describe("zynk-core", () => {
     try {
       await program.methods
         .replenish(
-          Array.from(currentOrderId),
           new anchor.BN(0),
           true, // close_order = true
           null
@@ -2146,7 +2136,7 @@ describe("zynk-core", () => {
     // Attempt to replenish the closed order
     try {
       await program.methods
-        .replenish(Array.from(currentOrderId), amount, false, null)
+        .replenish(amount, false, null)
         .accounts({
           config: configPDA,
           partnerDepositVault: partnerDepositVaultPDA,
@@ -2210,12 +2200,7 @@ describe("zynk-core", () => {
       atas.partnerDepositTokenAccount
     );
     await program.methods
-      .replenish(
-        Array.from(newOrderId),
-        new anchor.BN(currentBalance.value.amount),
-        false,
-        null
-      )
+      .replenish(new anchor.BN(currentBalance.value.amount), false, null)
       .accounts({
         config: configPDA,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -2233,7 +2218,7 @@ describe("zynk-core", () => {
     // Now try to replenish more than the available balance
     try {
       await program.methods
-        .replenish(Array.from(newOrderId), new anchor.BN(1000000), false, null)
+        .replenish(new anchor.BN(1000000), false, null)
         .accounts({
           config: configPDA,
           partnerDepositVault: partnerDepositVaultPDA,
@@ -2327,7 +2312,6 @@ describe("zynk-core", () => {
     // Replenish and close order with same tokenMint
     await program.methods
       .replenish(
-        Array.from(orderId),
         amount,
         true, // close_order = true
         null
@@ -2419,7 +2403,6 @@ describe("zynk-core", () => {
     // Close order with tokenMint2 (second token)
     await program.methods
       .replenish(
-        Array.from(orderId),
         amount,
         true, // close_order = true
         null
@@ -2501,7 +2484,6 @@ describe("zynk-core", () => {
     // Close order with same tokenMint (no additional replenish needed since amount_in already equals amount_out)
     await program.methods
       .replenish(
-        Array.from(orderId),
         new anchor.BN(0), // No additional amount needed
         true, // close_order = true
         null
@@ -2583,7 +2565,6 @@ describe("zynk-core", () => {
     // Close order with tokenMint2 (different mint token)
     await program.methods
       .replenish(
-        Array.from(orderId),
         new anchor.BN(0), // No additional amount needed since amount_in already equals amount_out
         true, // close_order = true
         null
@@ -2804,7 +2785,6 @@ describe("zynk-core", () => {
     try {
       await program.methods
         .replenish(
-          Array.from(orderId),
           amount,
           true, // close_order = true
           null
@@ -2890,7 +2870,6 @@ describe("zynk-core", () => {
     try {
       await program.methods
         .replenish(
-          Array.from(orderId),
           amount,
           true, // close_order = true
           null
@@ -2996,7 +2975,6 @@ describe("zynk-core", () => {
     try {
       await program.methods
         .replenish(
-          Array.from(orderId),
           new anchor.BN(0), // No additional amount needed since amount_in already equals amount_out
           true, // close_order = true
           null
@@ -3100,7 +3078,6 @@ describe("zynk-core", () => {
     try {
       await program.methods
         .replenish(
-          Array.from(orderId),
           new anchor.BN(0), // No additional amount needed since amount_in already equals amount_out
           true, // close_order = true
           null
@@ -3193,7 +3170,6 @@ describe("zynk-core", () => {
     // Partially replenish with tokenMint2 (different mint token, but both valid)
     await program.methods
       .replenish(
-        Array.from(orderId),
         replenishAmount,
         false, // close_order = false (partial replenish)
         null
@@ -3302,7 +3278,6 @@ describe("zynk-core", () => {
     try {
       await program.methods
         .replenish(
-          Array.from(orderId),
           replenishAmount,
           false, // close_order = false (partial replenish)
           null
@@ -5090,7 +5065,6 @@ describe("zynk-core", () => {
     // Replenish the remaining amount and close the order
     await program.methods
       .replenish(
-        Array.from(currentOrderId),
         feeAmount,
         true, // close_order = true
         null
