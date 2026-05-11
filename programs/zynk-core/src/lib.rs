@@ -157,13 +157,21 @@ pub struct EventArg {
     pub value: String,
 }
 
-
 #[event]
 pub struct Action {
     pub action: u8,
     pub timelock: Pubkey,
     pub status: ActionStatus,
     pub timestamp: i64,
+}
+
+#[event]
+pub struct BeneficiaryAction {
+    pub action: String,
+    pub partner_id: [u8; 32],
+    pub public_key: Pubkey,
+    pub is_active: bool,
+    pub domain_separator: u64,
 }
 
 #[event]
@@ -841,10 +849,19 @@ pub mod zynk_core {
     pub fn whitelist_beneficiary(ctx: Context<WhitelistBeneficiary>, partner_id: [u8; 32], public_key: Pubkey, allow_transient: bool) -> Result<()> {
         let beneficiary = &mut ctx.accounts.beneficiary;
 
+        let is_active = true;
         beneficiary.public_key = public_key;
         beneficiary.partner_id = partner_id;
-        beneficiary.is_active = true;
+        beneficiary.is_active = is_active;
         beneficiary.allow_transient = allow_transient;
+
+        emit!(BeneficiaryAction {
+            action: String::from("whitelist"),
+            partner_id,
+            public_key,
+            is_active,
+            domain_separator: DOMAIN_SEPARATOR
+        });
 
         Ok(())
     }
@@ -852,12 +869,30 @@ pub mod zynk_core {
     pub fn toggle_beneficiary(ctx: Context<ToggleBeneficiary>) -> Result<()> {
         let beneficiary = &mut ctx.accounts.beneficiary;
 
-        beneficiary.is_active = !beneficiary.is_active;
+        let is_active = !beneficiary.is_active;
+        beneficiary.is_active = is_active;
+
+        emit!(BeneficiaryAction {
+            action: String::from("toggle"),
+            partner_id: beneficiary.partner_id,
+            public_key: beneficiary.public_key,
+            is_active,
+            domain_separator: DOMAIN_SEPARATOR
+        });
 
         Ok(())
     }
 
-    pub fn revoke_beneficiary(_ctx: Context<RevokeBeneficiary>) -> Result<()> {
+    pub fn revoke_beneficiary(ctx: Context<RevokeBeneficiary>) -> Result<()> {
+        let beneficiary = &ctx.accounts.beneficiary;
+
+        emit!(BeneficiaryAction {
+            action: String::from("revoke"),
+            partner_id: beneficiary.partner_id,
+            public_key: beneficiary.public_key,
+            is_active: false,
+            domain_separator: DOMAIN_SEPARATOR
+        });
 
         Ok(())
     }
@@ -1155,7 +1190,7 @@ pub const ORDER_TRACKER_SEED: &[u8] = b"order_tracker";
 pub const PARTNER_DEPOSIT_VAULT_SEED: &[u8] = b"partner_deposit_vault";
 /// Seed for Zynk Operational vault PDA
 pub const ZYNK_OP_VAULT_SEED: &[u8] = b"zynk_op_vault";
-/// Seed for Beneficairy PDA
+/// Seed for Beneficiary PDA
 pub const BENEFICIARY_SEED: &[u8] = b"beneficiary";
 
 

@@ -952,6 +952,24 @@ describe("zynk-core", () => {
   });
 
   it("Should temporarily disable whitelisted partnerOperationalWallet as beneficiary", async () => {
+    const listener = program.addEventListener(
+      "beneficiaryAction",
+      (event, _slot) => {
+        try {
+          assert.equal(event.action, "toggle");
+          assert.isOk(Buffer.from(event.partnerId).equals(partnerId));
+          assert.equal(
+            event.publicKey.toBase58(),
+            partnerOperationalWallet.publicKey.toBase58()
+          );
+          assert.isOk(!event.isActive);
+          assert.equal(event.domainSeparator.toNumber(), DOMAIN_SEPARATOR);
+        } catch (err) {
+          throw err;
+        }
+      }
+    );
+
     await program.methods
       .toggleBeneficiary()
       .accounts({
@@ -968,6 +986,8 @@ describe("zynk-core", () => {
     );
     assert.ok(beneficiary.publicKey.equals(partnerOperationalWallet.publicKey));
     assert.ok(!beneficiary.isActive);
+
+    await program.removeEventListener(listener);
   });
 
   it("Should fail creating order when beneficiary status is disabled", async () => {
@@ -1013,6 +1033,24 @@ describe("zynk-core", () => {
   });
 
   it("Should revoke whitelisted partnerOperationalWallet as beneficiary", async () => {
+    const listener = program.addEventListener(
+      "beneficiaryAction",
+      (event, _slot) => {
+        try {
+          assert.equal(event.action, "revoke");
+          assert.isOk(Buffer.from(event.partnerId).equals(partnerId));
+          assert.equal(
+            event.publicKey.toBase58(),
+            partnerOperationalWallet.publicKey.toBase58()
+          );
+          assert.isOk(!event.isActive);
+          assert.equal(event.domainSeparator.toNumber(), DOMAIN_SEPARATOR);
+        } catch (err) {
+          throw err;
+        }
+      }
+    );
+
     await program.methods
       .revokeBeneficiary()
       .accounts({
@@ -1033,6 +1071,8 @@ describe("zynk-core", () => {
         "Expected `Account does not exist` error"
       );
     }
+
+    await program.removeEventListener(listener);
   });
 
   it("Should whitelist partnerOperationalWallet as beneficiary - transient enabled", async () => {
@@ -1045,6 +1085,24 @@ describe("zynk-core", () => {
         "Expected `Account does not exist` error"
       );
     }
+
+    const listener = program.addEventListener(
+      "beneficiaryAction",
+      (event, _slot) => {
+        try {
+          assert.equal(event.action, "whitelist");
+          assert.isOk(Buffer.from(event.partnerId).equals(partnerId));
+          assert.equal(
+            event.publicKey.toBase58(),
+            partnerOperationalWallet.publicKey.toBase58()
+          );
+          assert.isOk(event.isActive);
+          assert.equal(event.domainSeparator.toNumber(), DOMAIN_SEPARATOR);
+        } catch (err) {
+          throw err;
+        }
+      }
+    );
 
     await program.methods
       .whitelistBeneficiary(
@@ -1066,6 +1124,8 @@ describe("zynk-core", () => {
     );
     assert.ok(beneficiary.publicKey.equals(partnerOperationalWallet.publicKey));
     assert.ok(beneficiary.isActive);
+
+    await program.removeEventListener(listener);
   });
 
   it("Creates a transient pull order for partner_deposit_vault -> zynkOpVault -> partner_operational_wallet one-way txn - with no attester override", async () => {
