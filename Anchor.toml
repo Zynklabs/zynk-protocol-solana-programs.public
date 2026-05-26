@@ -3,10 +3,10 @@ seeds = false
 skip-lint = false
 
 [programs.localnet]
-zynk_core = "3AfnoobubxiCpVuFXALzDfNSaD4AjgWvFuqKJGm5Nay3"
+zynk_core = "CDhMbu6bYMLPxCEDv4V7AXBvgx4gqaMfLit4JTZFtd6y"
 
 [programs.devnet]
-zynk_core = "4JKLFbtb3B8JNB82PsNwH5FjHG9pX8awPSRiMLXYy7Br"
+zynk_core = "CDhMbu6bYMLPxCEDv4V7AXBvgx4gqaMfLit4JTZFtd6y"
 
 [registry]
 url = "https://api.apr.dev"
@@ -24,5 +24,6 @@ confirm_timeout_ms = 10000
 startup_wait = 10000
 
 [scripts]
-test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
+tests = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
+test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000"
 client = "yarn run ts-node client/*.ts"
