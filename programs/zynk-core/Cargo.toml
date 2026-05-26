@@ -1,6 +1,6 @@
 [package]
 name = "zynk-core"
-version = "3.0.0"
+version = "4.0.0"
 description = "Zynk Protocol's Core Solana Program"
 edition = "2021"
 
