@@ -24,6 +24,5 @@ confirm_timeout_ms = 10000
 startup_wait = 10000
 
 [scripts]
-tests = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
-test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000"
+test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
 client = "yarn run ts-node client/*.ts"
