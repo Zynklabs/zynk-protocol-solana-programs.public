@@ -1,6 +1,6 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
-import { PublicKey, Keypair, SystemProgram, Transaction,Ed25519Program, SYSVAR_INSTRUCTIONS_PUBKEY  } from "@solana/web3.js";
+import { PublicKey, Keypair, SystemProgram, Transaction, Ed25519Program, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
 import { managerWalletKeypair } from "./managerWallet";
 import {
   TOKEN_PROGRAM_ID,
@@ -10,7 +10,7 @@ import {
   mintTo,
   getAccount,
   approve,
-   getAssociatedTokenAddressSync,
+  getAssociatedTokenAddressSync,
   createAssociatedTokenAccountInstruction,
 } from "@solana/spl-token";
 import { BN } from "bn.js";
@@ -70,7 +70,7 @@ describe("zynk-orbit", () => {
       mint,
       approver.publicKey
     );
-    
+
     // Mint some tokens to approver
     await mintTo(
       provider.connection,
@@ -279,415 +279,415 @@ describe("zynk-orbit", () => {
 });
 
 describe("PDA spend tests", () => {
-    const provider = anchor.AnchorProvider.env();
-    anchor.setProvider(provider);
-  
-    const program = anchor.workspace.ZynkOrbit as Program;
-  
-    let mint: PublicKey;
-    let approverTokenAccount: PublicKey;
-    let recipientTokenAccount: PublicKey;
-    let delegatePda: PublicKey;
-    let delegateBump: number;
-    let user2TokenAccount: PublicKey;
-  
-    const approver = Keypair.generate(); // owns source ATA
-    const user2 = Keypair.generate();
-    const recipientOwner = new PublicKey(
-      "GbNjfHHBLFn3epGUwKQacbTD4YBqAMLNHHtKRNATHaep"
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+
+  const program = anchor.workspace.ZynkOrbit as Program;
+
+  let mint: PublicKey;
+  let approverTokenAccount: PublicKey;
+  let recipientTokenAccount: PublicKey;
+  let delegatePda: PublicKey;
+  let delegateBump: number;
+  let user2TokenAccount: PublicKey;
+
+  const approver = Keypair.generate(); // owns source ATA
+  const user2 = Keypair.generate();
+  const recipientOwner = new PublicKey(
+    "GbNjfHHBLFn3epGUwKQacbTD4YBqAMLNHHtKRNATHaep"
+  );
+
+  let customerPda: PublicKey;
+  let customerBump: number;
+  let customerPdaTokenAccount: PublicKey;
+  let testMint: PublicKey;
+  let testRecipientTokenAccount: PublicKey;
+  let customerPda3: PublicKey;
+  let customerPda3TokenAccount: PublicKey;
+  let customerPda3Bump: number;
+  let randomSeed3: string;
+
+  const pdaRoot = "spender";
+
+  before(async () => {
+    // Create a new customer PDA with a random seed
+    const randomSeed = `customer_${Math.random().toString(36).substring(7)}`;
+    [customerPda, customerBump] = PublicKey.findProgramAddressSync(
+      [Buffer.from(randomSeed)],
+      program.programId
     );
-  
-    let customerPda: PublicKey;
-    let customerBump: number;
-    let customerPdaTokenAccount: PublicKey;
-    let testMint: PublicKey;
-    let testRecipientTokenAccount: PublicKey;
-    let customerPda3: PublicKey;
-    let customerPda3TokenAccount: PublicKey;
-    let customerPda3Bump: number;
-    let randomSeed3: string;
-  
-    const pdaRoot = "spender";
-  
-    before(async () => {
-      // Create a new customer PDA with a random seed
-      const randomSeed = `customer_${Math.random().toString(36).substring(7)}`;
-      [customerPda, customerBump] = PublicKey.findProgramAddressSync(
-        [Buffer.from(randomSeed)],
-        program.programId
-      );
-  
-      // Airdrop to approver and manager wallet for transaction fees
-      await provider.connection.confirmTransaction(
-        await provider.connection.requestAirdrop(
-          approver.publicKey,
-          2 * anchor.web3.LAMPORTS_PER_SOL
-        )
-      );
-      await provider.connection.confirmTransaction(
-        await provider.connection.requestAirdrop(
-          managerWalletKeypair.publicKey,
-          2 * anchor.web3.LAMPORTS_PER_SOL
-        )
-      );
-  
-      // Create a new mint for this test
-      testMint = await createMint(
-        provider.connection,
-        approver,
+
+    // Airdrop to approver and manager wallet for transaction fees
+    await provider.connection.confirmTransaction(
+      await provider.connection.requestAirdrop(
         approver.publicKey,
-        null,
-        6 // decimals
-      );
-  
-      // Get the ATA address for the customer PDA
-      // allowOwnerOffCurve must be true for PDAs (which are off-curve addresses)
-      customerPdaTokenAccount = getAssociatedTokenAddressSync(
-        testMint,
-        customerPda,
-        true, // allowOwnerOffCurve: true for PDA
+        2 * anchor.web3.LAMPORTS_PER_SOL
+      )
+    );
+    await provider.connection.confirmTransaction(
+      await provider.connection.requestAirdrop(
+        managerWalletKeypair.publicKey,
+        2 * anchor.web3.LAMPORTS_PER_SOL
+      )
+    );
+
+    // Create a new mint for this test
+    testMint = await createMint(
+      provider.connection,
+      approver,
+      approver.publicKey,
+      null,
+      6 // decimals
+    );
+
+    // Get the ATA address for the customer PDA
+    // allowOwnerOffCurve must be true for PDAs (which are off-curve addresses)
+    customerPdaTokenAccount = getAssociatedTokenAddressSync(
+      testMint,
+      customerPda,
+      true, // allowOwnerOffCurve: true for PDA
+      TOKEN_PROGRAM_ID,
+      ASSOCIATED_TOKEN_PROGRAM_ID
+    );
+
+    // Check if ATA exists, if not create it
+    try {
+      await getAccount(provider.connection, customerPdaTokenAccount);
+    } catch (error: any) {
+      // ATA doesn't exist, create it
+      // createAssociatedTokenAccountInstruction creates an ATA owned by the customer PDA
+      const createAtaIx = createAssociatedTokenAccountInstruction(
+        approver.publicKey, // payer
+        customerPdaTokenAccount, // ata
+        customerPda, // owner (customer PDA)
+        testMint, // mint
         TOKEN_PROGRAM_ID,
         ASSOCIATED_TOKEN_PROGRAM_ID
       );
-  
-      // Check if ATA exists, if not create it
-      try {
-        await getAccount(provider.connection, customerPdaTokenAccount);
-      } catch (error: any) {
-        // ATA doesn't exist, create it
-        // createAssociatedTokenAccountInstruction creates an ATA owned by the customer PDA
-        const createAtaIx = createAssociatedTokenAccountInstruction(
-          approver.publicKey, // payer
-          customerPdaTokenAccount, // ata
-          customerPda, // owner (customer PDA)
-          testMint, // mint
-          TOKEN_PROGRAM_ID,
-          ASSOCIATED_TOKEN_PROGRAM_ID
-        );
-  
-        const createTx = new Transaction().add(createAtaIx);
-        await provider.sendAndConfirm(createTx, [approver]);
-      }
-  
-      // Mint tokens directly to the customer PDA's ATA
-      await mintTo(
-        provider.connection,
-        approver,
-        testMint,
-        customerPdaTokenAccount,
-        approver, // mint authority
-        2_000_000 // 2,000 tokens
-      );
-  
-      // Create recipient token account for the test mint
-      testRecipientTokenAccount = await createAccount(
-        provider.connection,
-        approver,
-        testMint,
-        recipientOwner
-      );
-  
-      // Create a new customer PDA with pdaRoot seed for spendTokens tests
-      randomSeed3 = `customer_${Math.random().toString(36).substring(7)}`;
-      [customerPda3, customerPda3Bump] = PublicKey.findProgramAddressSync(
-        [Buffer.from(pdaRoot), Buffer.from(randomSeed3)],
-        program.programId
-      );
-  
-      // Create ATA for this customer PDA
-      customerPda3TokenAccount = getAssociatedTokenAddressSync(
-        testMint,
-        customerPda3, // owner is customer PDA
-        true, // allowOwnerOffCurve: true for PDA
-        TOKEN_PROGRAM_ID,
-        ASSOCIATED_TOKEN_PROGRAM_ID
-      );
-  
-      // Check if ATA exists, if not create it
-      try {
-        await getAccount(provider.connection, customerPda3TokenAccount);
-      } catch (error: any) {
-        const createAtaIx = createAssociatedTokenAccountInstruction(
-          approver.publicKey,
-          customerPda3TokenAccount,
-          customerPda3, // owned by customer PDA
-          testMint,
-          TOKEN_PROGRAM_ID,
-          ASSOCIATED_TOKEN_PROGRAM_ID
-        );
-        const createTx = new Transaction().add(createAtaIx);
-        await provider.sendAndConfirm(createTx, [approver]);
-      }
-  
-      // Mint tokens to this ATA
-      await mintTo(
-        provider.connection,
-        approver,
-        testMint,
+
+      const createTx = new Transaction().add(createAtaIx);
+      await provider.sendAndConfirm(createTx, [approver]);
+    }
+
+    // Mint tokens directly to the customer PDA's ATA
+    await mintTo(
+      provider.connection,
+      approver,
+      testMint,
+      customerPdaTokenAccount,
+      approver, // mint authority
+      2_000_000 // 2,000 tokens
+    );
+
+    // Create recipient token account for the test mint
+    testRecipientTokenAccount = await createAccount(
+      provider.connection,
+      approver,
+      testMint,
+      recipientOwner
+    );
+
+    // Create a new customer PDA with pdaRoot seed for spendTokens tests
+    randomSeed3 = `customer_${Math.random().toString(36).substring(7)}`;
+    [customerPda3, customerPda3Bump] = PublicKey.findProgramAddressSync(
+      [Buffer.from(pdaRoot), Buffer.from(randomSeed3)],
+      program.programId
+    );
+
+    // Create ATA for this customer PDA
+    customerPda3TokenAccount = getAssociatedTokenAddressSync(
+      testMint,
+      customerPda3, // owner is customer PDA
+      true, // allowOwnerOffCurve: true for PDA
+      TOKEN_PROGRAM_ID,
+      ASSOCIATED_TOKEN_PROGRAM_ID
+    );
+
+    // Check if ATA exists, if not create it
+    try {
+      await getAccount(provider.connection, customerPda3TokenAccount);
+    } catch (error: any) {
+      const createAtaIx = createAssociatedTokenAccountInstruction(
+        approver.publicKey,
         customerPda3TokenAccount,
-        approver,
-        1_500_000
+        customerPda3, // owned by customer PDA
+        testMint,
+        TOKEN_PROGRAM_ID,
+        ASSOCIATED_TOKEN_PROGRAM_ID
       );
-    });
-  
-    it("Happy path: New customer PDA ATA as approver_token_account", async () => {
-      const initialBalance = await getAccount(provider.connection, customerPda3TokenAccount);
-      const initialRecipientBalance = await getAccount(provider.connection, testRecipientTokenAccount);
-  
-      const transferAmount = 200_000;
-  
-      // Transfer using customer's ATA as approver_token_account
-      // The ATA is owned by delegate PDA, so it can transfer directly
+      const createTx = new Transaction().add(createAtaIx);
+      await provider.sendAndConfirm(createTx, [approver]);
+    }
+
+    // Mint tokens to this ATA
+    await mintTo(
+      provider.connection,
+      approver,
+      testMint,
+      customerPda3TokenAccount,
+      approver,
+      1_500_000
+    );
+  });
+
+  it("Happy path: New customer PDA ATA as approver_token_account", async () => {
+    const initialBalance = await getAccount(provider.connection, customerPda3TokenAccount);
+    const initialRecipientBalance = await getAccount(provider.connection, testRecipientTokenAccount);
+
+    const transferAmount = 200_000;
+
+    // Transfer using customer's ATA as approver_token_account
+    // The ATA is owned by delegate PDA, so it can transfer directly
+    await program.methods
+      .spendTokens(randomSeed3, new BN(transferAmount))
+      .accounts({
+        orbitWallet: provider.wallet.publicKey,
+        managerWallet: managerWalletKeypair.publicKey,
+        approverTokenAccount: customerPda3TokenAccount, // Customer's ATA owned by delegate
+        recipientTokenAccount: testRecipientTokenAccount,
+        spender: customerPda3,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([provider.wallet.payer, managerWalletKeypair])
+      .rpc();
+
+    const finalBalance = await getAccount(provider.connection, customerPda3TokenAccount);
+    const finalRecipientBalance = await getAccount(provider.connection, testRecipientTokenAccount);
+
+    assert.equal(
+      Number(finalBalance.amount),
+      Number(initialBalance.amount) - transferAmount,
+      "Customer ATA balance should decrease"
+    );
+    assert.equal(
+      Number(finalRecipientBalance.amount),
+      Number(initialRecipientBalance.amount) + transferAmount,
+      "Recipient balance should increase"
+    );
+  });
+
+  it("Sad path: wrong recipient token account", async () => {
+    const transferAmount = 200_000;
+    // Create a wrong recipient (different from the expected recipientOwner)
+    const wrongRecipientOwner = Keypair.generate().publicKey;
+    const wrongRecipientTokenAccountAta = getAssociatedTokenAddressSync(
+      testMint,
+      wrongRecipientOwner,
+      false, // allowOwnerOffCurve: false for regular keypair
+      TOKEN_PROGRAM_ID,
+      ASSOCIATED_TOKEN_PROGRAM_ID
+    );
+
+    // Create and initialize the ATA for the wrong recipient
+    try {
+      await getAccount(provider.connection, wrongRecipientTokenAccountAta);
+    } catch (error: any) {
+      // ATA doesn't exist, create it
+      const createAtaIx = createAssociatedTokenAccountInstruction(
+        approver.publicKey, // payer
+        wrongRecipientTokenAccountAta, // ata
+        wrongRecipientOwner, // owner (wrong recipient)
+        testMint,
+        TOKEN_PROGRAM_ID,
+        ASSOCIATED_TOKEN_PROGRAM_ID
+      );
+      const createTx = new Transaction().add(createAtaIx);
+      await provider.sendAndConfirm(createTx, [approver]);
+    }
+
+    try {
       await program.methods
         .spendTokens(randomSeed3, new BN(transferAmount))
         .accounts({
           orbitWallet: provider.wallet.publicKey,
           managerWallet: managerWalletKeypair.publicKey,
-          approverTokenAccount: customerPda3TokenAccount, // Customer's ATA owned by delegate
+          approverTokenAccount: customerPda3TokenAccount,
+          recipientTokenAccount: wrongRecipientTokenAccountAta,
+          spender: customerPda3,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([provider.wallet.payer, managerWalletKeypair])
+        .rpc();
+      assert.fail("Should have failed with wrong recipient token account");
+    } catch (err: any) {
+      assert(
+        err.logs.some((l: string) => l.includes("ConstraintOwner") || l.includes("failed")),
+        "Expected recipient token account owner constraint violation"
+      );
+    }
+  });
+
+  it("Sad path: wrong PDA", async () => {
+    const transferAmount = 200_000;
+    // Create a wrong PDA with different seeds (not matching the user_id)
+    const wrongSeed = `wrong_customer_${Math.random().toString(36).substring(7)}`;
+    const [wrongPda, _] = PublicKey.findProgramAddressSync(
+      [Buffer.from(pdaRoot), Buffer.from(wrongSeed)],
+      program.programId
+    );
+
+    // Create ATA for the wrong PDA
+    const wrongPdaTokenAccount = getAssociatedTokenAddressSync(
+      testMint,
+      wrongPda,
+      true, // allowOwnerOffCurve: true for PDA
+      TOKEN_PROGRAM_ID,
+      ASSOCIATED_TOKEN_PROGRAM_ID
+    );
+
+    // Check if ATA exists, if not create it
+    try {
+      await getAccount(provider.connection, wrongPdaTokenAccount);
+    } catch (error: any) {
+      const createAtaIx = createAssociatedTokenAccountInstruction(
+        approver.publicKey,
+        wrongPdaTokenAccount,
+        wrongPda, // owned by wrong PDA
+        testMint,
+        TOKEN_PROGRAM_ID,
+        ASSOCIATED_TOKEN_PROGRAM_ID
+      );
+      const createTx = new Transaction().add(createAtaIx);
+      await provider.sendAndConfirm(createTx, [approver]);
+    }
+
+    // Mint tokens to the wrong PDA's ATA
+    await mintTo(
+      provider.connection,
+      approver,
+      testMint,
+      wrongPdaTokenAccount,
+      approver,
+      1_000_000 // 1,000 tokens
+    );
+
+    try {
+      await program.methods
+        .spendTokens(randomSeed3, new BN(transferAmount))
+        .accounts({
+          orbitWallet: provider.wallet.publicKey,
+          managerWallet: managerWalletKeypair.publicKey,
+          approverTokenAccount: wrongPdaTokenAccount,
+          recipientTokenAccount: testRecipientTokenAccount,
+          spender: wrongPda,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([provider.wallet.payer, managerWalletKeypair])
+        .rpc();
+      assert.fail("Should have failed with wrong PDA");
+    } catch (err: any) {
+      assert(
+        err.logs.some((l: string) => l.includes("failed") || l.includes("ConstraintSeeds") || l.includes("seeds")),
+        "Expected PDA mismatch"
+      );
+    }
+
+    try {
+      await program.methods
+        .spendTokens(randomSeed3, new BN(transferAmount))
+        .accounts({
+          orbitWallet: provider.wallet.publicKey,
+          managerWallet: managerWalletKeypair.publicKey,
+          approverTokenAccount: customerPda3TokenAccount,
+          recipientTokenAccount: testRecipientTokenAccount,
+          spender: wrongPda,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([provider.wallet.payer, managerWalletKeypair])
+        .rpc();
+      assert.fail("Should have failed with wrong PDA");
+    } catch (err: any) {
+      const logs = err.logs ?? [];
+      assert(
+        logs.some((l: string) => l.includes("failed") || l.includes("ConstraintSeeds") || l.includes("seeds")),
+        "Expected PDA mismatch"
+      );
+    }
+
+    try {
+      await program.methods
+        .spendTokens(randomSeed3, new BN(transferAmount))
+        .accounts({
+          orbitWallet: provider.wallet.publicKey,
+          managerWallet: managerWalletKeypair.publicKey,
+          approverTokenAccount: wrongPdaTokenAccount,
           recipientTokenAccount: testRecipientTokenAccount,
           spender: customerPda3,
           tokenProgram: TOKEN_PROGRAM_ID,
         })
         .signers([provider.wallet.payer, managerWalletKeypair])
         .rpc();
-  
-      const finalBalance = await getAccount(provider.connection, customerPda3TokenAccount);
-      const finalRecipientBalance = await getAccount(provider.connection, testRecipientTokenAccount);
-  
-      assert.equal(
-        Number(finalBalance.amount),
-        Number(initialBalance.amount) - transferAmount,
-        "Customer ATA balance should decrease"
+      assert.fail("Should have failed with wrong PDA");
+    } catch (err: any) {
+      assert(
+        err.logs.some((l: string) => l.includes("failed") || l.includes("ConstraintSeeds") || l.includes("seeds")),
+        "Expected PDA mismatch"
       );
-      assert.equal(
-        Number(finalRecipientBalance.amount),
-        Number(initialRecipientBalance.amount) + transferAmount,
-        "Recipient balance should increase"
-      );
-    });
-  
-    it("Sad path: wrong recipient token account", async () => {
-      const transferAmount = 200_000;
-      // Create a wrong recipient (different from the expected recipientOwner)
-      const wrongRecipientOwner = Keypair.generate().publicKey;
-      const wrongRecipientTokenAccountAta = getAssociatedTokenAddressSync(
-        testMint,
-        wrongRecipientOwner,
-        false, // allowOwnerOffCurve: false for regular keypair
-        TOKEN_PROGRAM_ID,
-        ASSOCIATED_TOKEN_PROGRAM_ID
-      );
-  
-      // Create and initialize the ATA for the wrong recipient
-      try {
-        await getAccount(provider.connection, wrongRecipientTokenAccountAta);
-      } catch (error: any) {
-        // ATA doesn't exist, create it
-        const createAtaIx = createAssociatedTokenAccountInstruction(
-          approver.publicKey, // payer
-          wrongRecipientTokenAccountAta, // ata
-          wrongRecipientOwner, // owner (wrong recipient)
-          testMint,
-          TOKEN_PROGRAM_ID,
-          ASSOCIATED_TOKEN_PROGRAM_ID
-        );
-        const createTx = new Transaction().add(createAtaIx);
-        await provider.sendAndConfirm(createTx, [approver]);
-      }
-  
-      try {
-        await program.methods
-          .spendTokens(randomSeed3, new BN(transferAmount))
-          .accounts({
-            orbitWallet: provider.wallet.publicKey,
-            managerWallet: managerWalletKeypair.publicKey,
-            approverTokenAccount: customerPda3TokenAccount,
-            recipientTokenAccount: wrongRecipientTokenAccountAta,
-            spender: customerPda3,
-            tokenProgram: TOKEN_PROGRAM_ID,
-          })
-          .signers([provider.wallet.payer, managerWalletKeypair])
-          .rpc();
-        assert.fail("Should have failed with wrong recipient token account");
-      } catch (err: any) {
-        assert(
-          err.logs.some((l: string) => l.includes("ConstraintOwner") || l.includes("failed")),
-          "Expected recipient token account owner constraint violation"
-        );
-      }
-    });
-  
-    it("Sad path: wrong PDA", async () => {
-      const transferAmount = 200_000;
-      // Create a wrong PDA with different seeds (not matching the user_id)
-      const wrongSeed = `wrong_customer_${Math.random().toString(36).substring(7)}`;
-      const [wrongPda, _] = PublicKey.findProgramAddressSync(
-        [Buffer.from(pdaRoot), Buffer.from(wrongSeed)],
-        program.programId
-      );
-  
-      // Create ATA for the wrong PDA
-      const wrongPdaTokenAccount = getAssociatedTokenAddressSync(
-        testMint,
-        wrongPda,
-        true, // allowOwnerOffCurve: true for PDA
-        TOKEN_PROGRAM_ID,
-        ASSOCIATED_TOKEN_PROGRAM_ID
-      );
-  
-      // Check if ATA exists, if not create it
-      try {
-        await getAccount(provider.connection, wrongPdaTokenAccount);
-      } catch (error: any) {
-        const createAtaIx = createAssociatedTokenAccountInstruction(
-          approver.publicKey,
-          wrongPdaTokenAccount,
-          wrongPda, // owned by wrong PDA
-          testMint,
-          TOKEN_PROGRAM_ID,
-          ASSOCIATED_TOKEN_PROGRAM_ID
-        );
-        const createTx = new Transaction().add(createAtaIx);
-        await provider.sendAndConfirm(createTx, [approver]);
-      }
-  
-      // Mint tokens to the wrong PDA's ATA
-      await mintTo(
-        provider.connection,
-        approver,
-        testMint,
-        wrongPdaTokenAccount,
-        approver,
-        1_000_000 // 1,000 tokens
-      );
-      
-      try {
-        await program.methods
-          .spendTokens(randomSeed3, new BN(transferAmount))
-          .accounts({
-            orbitWallet: provider.wallet.publicKey,
-            managerWallet: managerWalletKeypair.publicKey,
-            approverTokenAccount: wrongPdaTokenAccount,
-            recipientTokenAccount: testRecipientTokenAccount,
-            spender: wrongPda,
-            tokenProgram: TOKEN_PROGRAM_ID,
-          })
-          .signers([provider.wallet.payer, managerWalletKeypair])
-          .rpc();
-        assert.fail("Should have failed with wrong PDA");
-      } catch (err: any) {
-        assert(
-          err.logs.some((l: string) => l.includes("failed") || l.includes("ConstraintSeeds") || l.includes("seeds")),
-          "Expected PDA mismatch"
-        );
-      }
-  
-      try {
-        await program.methods
-          .spendTokens(randomSeed3, new BN(transferAmount))
-          .accounts({
-            orbitWallet: provider.wallet.publicKey,
-            managerWallet: managerWalletKeypair.publicKey,
-            approverTokenAccount: customerPda3TokenAccount,
-            recipientTokenAccount: testRecipientTokenAccount,
-            spender: wrongPda,
-            tokenProgram: TOKEN_PROGRAM_ID,
-          })
-          .signers([provider.wallet.payer, managerWalletKeypair])
-          .rpc();
-        assert.fail("Should have failed with wrong PDA");
-      } catch (err: any) {
-        const logs = err.logs ?? [];
-        assert(
-          logs.some((l: string) => l.includes("failed") || l.includes("ConstraintSeeds") || l.includes("seeds")),
-          "Expected PDA mismatch"
-        );
-      }
-  
-      try {
-        await program.methods
-          .spendTokens(randomSeed3, new BN(transferAmount))
-          .accounts({
-            orbitWallet: provider.wallet.publicKey,
-            managerWallet: managerWalletKeypair.publicKey,
-            approverTokenAccount: wrongPdaTokenAccount,
-            recipientTokenAccount: testRecipientTokenAccount,
-            spender: customerPda3,
-            tokenProgram: TOKEN_PROGRAM_ID,
-          })
-          .signers([provider.wallet.payer, managerWalletKeypair])
-          .rpc();
-        assert.fail("Should have failed with wrong PDA");
-      } catch (err: any) {
-        assert(
-          err.logs.some((l: string) => l.includes("failed") || l.includes("ConstraintSeeds") || l.includes("seeds")),
-          "Expected PDA mismatch"
-        );
-      }
-    });
-  
-    it("Sad path: transaction not signed by the contract owner", async () => {
-      const transferAmount = 200_000;
-      // Create a capable signer (with funds) who is NOT the contract owner
-      const capableSigner = Keypair.generate();
-      const contractOwner = provider.wallet.publicKey;
-      
-      // Ensure the capable signer is not the contract owner
-      assert.notEqual(
-        capableSigner.publicKey.toString(),
-        contractOwner.toString(),
-        "Capable signer should be different from contract owner"
-      );
-      
-      // Airdrop funds to the capable signer so they can sign transactions
-      await provider.connection.confirmTransaction(
-        await provider.connection.requestAirdrop(
-          capableSigner.publicKey,
-          2 * anchor.web3.LAMPORTS_PER_SOL
-        )
-      );
-      
-      try {
-        // Build the instruction with capableSigner as orbitWallet (should fail)
-        const instruction = await program.methods
-          .spendTokens(randomSeed3, new BN(transferAmount))
-          .accounts({
-            orbitWallet: capableSigner.publicKey, // Wrong owner - should fail
-            managerWallet: managerWalletKeypair.publicKey,
-            approverTokenAccount: customerPda3TokenAccount,
-            recipientTokenAccount: testRecipientTokenAccount,
-            spender: customerPda3,
-            tokenProgram: TOKEN_PROGRAM_ID,
-          })
-          .instruction();
-        
-        // Build transaction with capableSigner as fee payer
-        const transaction = new Transaction().add(instruction);
-        transaction.feePayer = capableSigner.publicKey;
-        
-        // Get recent blockhash
-        const { blockhash } = await provider.connection.getLatestBlockhash();
-        transaction.recentBlockhash = blockhash;
-        
-        // Sign and send the transaction (manager signs, but orbit wallet is wrong)
-        transaction.sign(capableSigner, managerWalletKeypair);
-        const signature = await provider.connection.sendRawTransaction(transaction.serialize());
-        await provider.connection.confirmTransaction(signature);
-        
-        assert.fail("Should have failed with transaction not signed by the contract owner");
-      } catch (err: any) {
-        assert(
-          err.logs?.some((l: string) => l.includes("failed") || l.includes("ConstraintSigner") || l.includes("signer")) || 
-          err.message?.includes("failed") || 
-          err.message?.includes("ConstraintSigner") ||
-          err.message?.includes("signer"),
-          "Expected transaction not signed by the contract owner"
-        );
-      }
-    });
+    }
   });
 
-  const buildEd25519Ix = (msg: string, signer: Keypair) => {
+  it("Sad path: transaction not signed by the contract owner", async () => {
+    const transferAmount = 200_000;
+    // Create a capable signer (with funds) who is NOT the contract owner
+    const capableSigner = Keypair.generate();
+    const contractOwner = provider.wallet.publicKey;
+
+    // Ensure the capable signer is not the contract owner
+    assert.notEqual(
+      capableSigner.publicKey.toString(),
+      contractOwner.toString(),
+      "Capable signer should be different from contract owner"
+    );
+
+    // Airdrop funds to the capable signer so they can sign transactions
+    await provider.connection.confirmTransaction(
+      await provider.connection.requestAirdrop(
+        capableSigner.publicKey,
+        2 * anchor.web3.LAMPORTS_PER_SOL
+      )
+    );
+
+    try {
+      // Build the instruction with capableSigner as orbitWallet (should fail)
+      const instruction = await program.methods
+        .spendTokens(randomSeed3, new BN(transferAmount))
+        .accounts({
+          orbitWallet: capableSigner.publicKey, // Wrong owner - should fail
+          managerWallet: managerWalletKeypair.publicKey,
+          approverTokenAccount: customerPda3TokenAccount,
+          recipientTokenAccount: testRecipientTokenAccount,
+          spender: customerPda3,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .instruction();
+
+      // Build transaction with capableSigner as fee payer
+      const transaction = new Transaction().add(instruction);
+      transaction.feePayer = capableSigner.publicKey;
+
+      // Get recent blockhash
+      const { blockhash } = await provider.connection.getLatestBlockhash();
+      transaction.recentBlockhash = blockhash;
+
+      // Sign and send the transaction (manager signs, but orbit wallet is wrong)
+      transaction.sign(capableSigner, managerWalletKeypair);
+      const signature = await provider.connection.sendRawTransaction(transaction.serialize());
+      await provider.connection.confirmTransaction(signature);
+
+      assert.fail("Should have failed with transaction not signed by the contract owner");
+    } catch (err: any) {
+      assert(
+        err.logs?.some((l: string) => l.includes("failed") || l.includes("ConstraintSigner") || l.includes("signer")) ||
+        err.message?.includes("failed") ||
+        err.message?.includes("ConstraintSigner") ||
+        err.message?.includes("signer"),
+        "Expected transaction not signed by the contract owner"
+      );
+    }
+  });
+});
+
+const buildEd25519Ix = (msg: string, signer: Keypair) => {
   const message = new TextEncoder().encode(msg);
   const signature = nacl.sign.detached(message, signer.secretKey);
 
@@ -700,7 +700,7 @@ describe("PDA spend tests", () => {
   return { ed25519Ix, signature };
 };
 
-  describe("Transfer PDA to wallet tests", () => {
+describe("Transfer PDA to wallet tests", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
 
@@ -974,7 +974,7 @@ describe("PDA spend tests", () => {
           (l: string) =>
             l.includes("ConstraintOwner") ||
             l.includes("failed")
-      ),
+        ),
         "Expected wallet address is not owner of wallet token account"
       );
     }
@@ -982,178 +982,178 @@ describe("PDA spend tests", () => {
 });
 
 describe("Transfer to LP tests", () => {
-    const provider = anchor.AnchorProvider.env();
-    anchor.setProvider(provider);
-  
-    const program = anchor.workspace.ZynkOrbit as Program;
-    let recipientAccount: Keypair;
-    let recipientTokenAccount: PublicKey;
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
 
-  
-    const approver = provider.wallet.payer; 
-    let orbitWalletTokenAccount: PublicKey;
+  const program = anchor.workspace.ZynkOrbit as Program;
+  let recipientAccount: Keypair;
+  let recipientTokenAccount: PublicKey;
 
 
-    let testMint: PublicKey;
+  const approver = provider.wallet.payer;
+  let orbitWalletTokenAccount: PublicKey;
 
 
-  
-    before(async () => {
-      await provider.connection.confirmTransaction(
-        await provider.connection.requestAirdrop(
-          approver.publicKey,
-          2 * anchor.web3.LAMPORTS_PER_SOL
-        )
+  let testMint: PublicKey;
+
+
+
+  before(async () => {
+    await provider.connection.confirmTransaction(
+      await provider.connection.requestAirdrop(
+        approver.publicKey,
+        2 * anchor.web3.LAMPORTS_PER_SOL
+      )
+    );
+    await provider.connection.confirmTransaction(
+      await provider.connection.requestAirdrop(
+        managerWalletKeypair.publicKey,
+        2 * anchor.web3.LAMPORTS_PER_SOL
+      )
+    );
+    testMint = await createMint(
+      provider.connection,
+      approver,
+      approver.publicKey,
+      null,
+      6 // decimals
+    );
+    // Create approver token account (ATA for orbit wallet)
+    orbitWalletTokenAccount = getAssociatedTokenAddressSync(
+      testMint,
+      provider.wallet.publicKey,
+      false,
+      TOKEN_PROGRAM_ID,
+      ASSOCIATED_TOKEN_PROGRAM_ID
+    );
+
+    // Check if ATA exists, if not create it
+    try {
+      await getAccount(provider.connection, orbitWalletTokenAccount);
+    } catch (error: any) {
+      const createAtaIx = createAssociatedTokenAccountInstruction(
+        approver.publicKey,
+        orbitWalletTokenAccount,
+        provider.wallet.publicKey,
+        testMint,
+        TOKEN_PROGRAM_ID,
+        ASSOCIATED_TOKEN_PROGRAM_ID
       );
-      await provider.connection.confirmTransaction(
-        await provider.connection.requestAirdrop(
-          managerWalletKeypair.publicKey,
-          2 * anchor.web3.LAMPORTS_PER_SOL
-        )
-      );
-      testMint = await createMint(
+      const createTx = new Transaction().add(createAtaIx);
+      await provider.sendAndConfirm(createTx, [approver]);
+    }
+
+    // Mint tokens to approver token account
+    await mintTo(
+      provider.connection,
+      approver,
+      testMint,
+      orbitWalletTokenAccount,
+      approver,
+      2_000_000 // 2,000 tokens
+    );
+
+    // Create recipient account
+    recipientAccount = Keypair.generate();
+
+    // Create recipient token account for the test mint
+    recipientTokenAccount = await createAccount(
+      provider.connection,
+      approver,
+      testMint,
+      recipientAccount.publicKey
+    );
+
+  });
+
+  it("Happy path: Transfer to LP", async () => {
+    const transferAmount = 200_000;
+    const initialBalance = await getAccount(provider.connection, orbitWalletTokenAccount);
+    const initialRecipientBalance = await getAccount(provider.connection, recipientTokenAccount);
+    await program.methods
+      .transferToLp(new BN(transferAmount))
+      .accounts({
+        orbitWallet: provider.wallet.publicKey,
+        managerWallet: managerWalletKeypair.publicKey,
+        orbitWalletTokenAccount: orbitWalletTokenAccount,
+        lpTokenAccount: recipientTokenAccount,
+      })
+      .signers([provider.wallet.payer, managerWalletKeypair])
+      .rpc();
+    const finalBalance = await getAccount(provider.connection, orbitWalletTokenAccount);
+    const finalRecipientBalance = await getAccount(provider.connection, recipientTokenAccount);
+    assert.equal(
+      Number(finalBalance.amount),
+      Number(initialBalance.amount) - transferAmount,
+      "Customer ATA balance should decrease"
+    );
+    assert.equal(
+      Number(finalRecipientBalance.amount),
+      Number(initialRecipientBalance.amount) + transferAmount,
+      "Recipient balance should increase"
+    );
+  });
+
+  it("Sad path: wrong recipeint mint address", async () => {
+    const transferAmount = 200_000;
+
+    try {
+      //Create a new mint account for the recipient token 
+      const otherMint = await createMint(
         provider.connection,
         approver,
         approver.publicKey,
         null,
         6 // decimals
       );
-      // Create approver token account (ATA for orbit wallet)
-      orbitWalletTokenAccount = getAssociatedTokenAddressSync(
-        testMint,
-        provider.wallet.publicKey,
-        false,
-        TOKEN_PROGRAM_ID,
-        ASSOCIATED_TOKEN_PROGRAM_ID
-      );
-      
-      // Check if ATA exists, if not create it
-      try {
-        await getAccount(provider.connection, orbitWalletTokenAccount);
-      } catch (error: any) {
-        const createAtaIx = createAssociatedTokenAccountInstruction(
-          approver.publicKey,
-          orbitWalletTokenAccount,
-          provider.wallet.publicKey,
-          testMint,
-          TOKEN_PROGRAM_ID,
-          ASSOCIATED_TOKEN_PROGRAM_ID
-        );
-        const createTx = new Transaction().add(createAtaIx);
-        await provider.sendAndConfirm(createTx, [approver]);
-      }
-      
-      // Mint tokens to approver token account
-      await mintTo(
+      const otherRecipientTokenAccount = await createAccount(
         provider.connection,
         approver,
-        testMint,
-        orbitWalletTokenAccount,
-        approver,
-        2_000_000 // 2,000 tokens
-      );
-      
-      // Create recipient account
-      recipientAccount = Keypair.generate();
-      
-      // Create recipient token account for the test mint
-      recipientTokenAccount = await createAccount(
-        provider.connection,
-        approver,
-        testMint,
+        otherMint,
         recipientAccount.publicKey
       );
-  
-    });
-
-    it("Happy path: Transfer to LP", async () => {
-      const transferAmount = 200_000;
-      const initialBalance = await getAccount(provider.connection, orbitWalletTokenAccount);
-      const initialRecipientBalance = await getAccount(provider.connection, recipientTokenAccount);
       await program.methods
         .transferToLp(new BN(transferAmount))
         .accounts({
           orbitWallet: provider.wallet.publicKey,
           managerWallet: managerWalletKeypair.publicKey,
           orbitWalletTokenAccount: orbitWalletTokenAccount,
-          lpTokenAccount: recipientTokenAccount,
+          lpTokenAccount: otherRecipientTokenAccount,
         })
         .signers([provider.wallet.payer, managerWalletKeypair])
         .rpc();
-      const finalBalance = await getAccount(provider.connection, orbitWalletTokenAccount);
-      const finalRecipientBalance = await getAccount(provider.connection, recipientTokenAccount);
-      assert.equal(
-        Number(finalBalance.amount),
-        Number(initialBalance.amount) - transferAmount,
-        "Customer ATA balance should decrease"
+      assert.fail("Should have failed with wrong recipient mint address");
+    } catch (err: any) {
+      assert(
+        err.logs.some((l: string) => l.includes("ConstraintTokenMint.")),
+        "Expected recipient mint address mismatch"
       );
-      assert.equal(
-        Number(finalRecipientBalance.amount),
-        Number(initialRecipientBalance.amount) + transferAmount,
-        "Recipient balance should increase"
-      );
-    });
-
-    it("Sad path: wrong recipeint mint address", async () => {
-      const transferAmount = 200_000;
-
-      try {
-        //Create a new mint account for the recipient token 
-        const otherMint = await createMint(
-          provider.connection,
-          approver,
-          approver.publicKey,
-          null,
-          6 // decimals
-        );
-        const otherRecipientTokenAccount = await createAccount(
-          provider.connection,
-          approver,
-          otherMint,
-          recipientAccount.publicKey
-        );
-        await program.methods
-          .transferToLp(new BN(transferAmount))
-          .accounts({
-            orbitWallet: provider.wallet.publicKey,
-            managerWallet: managerWalletKeypair.publicKey,
-            orbitWalletTokenAccount: orbitWalletTokenAccount,
-            lpTokenAccount: otherRecipientTokenAccount,
-          })
-          .signers([provider.wallet.payer, managerWalletKeypair])
-          .rpc();
-        assert.fail("Should have failed with wrong recipient mint address");
-      } catch (err: any) {
-        assert(
-          err.logs.some((l: string) => l.includes("ConstraintTokenMint.")),
-          "Expected recipient mint address mismatch"
-        );
-      }
-    });
-
-    it("Sad path: signer is not the orbit wallet", async () => {
-      const transferAmount = 200_000;
-      const otherSigner = Keypair.generate();
-      try {
-        await program.methods
-          .transferToLp(new BN(transferAmount))
-          .accounts({
-            orbitWallet: otherSigner.publicKey,
-            managerWallet: managerWalletKeypair.publicKey,
-            orbitWalletTokenAccount: orbitWalletTokenAccount,
-            lpTokenAccount: recipientTokenAccount,
-          })
-          .signers([otherSigner, managerWalletKeypair])
-          .rpc();
-        assert.fail("Should have failed with signer is not the orbit wallet");
-      } catch (err: any) {
-        assert(
-          err.logs.some((l: string) => l.includes("ConstraintOwner")),
-          "Expected signer is not the orbit wallet"
-        );
-      }
-    });
+    }
   });
+
+  it("Sad path: signer is not the orbit wallet", async () => {
+    const transferAmount = 200_000;
+    const otherSigner = Keypair.generate();
+    try {
+      await program.methods
+        .transferToLp(new BN(transferAmount))
+        .accounts({
+          orbitWallet: otherSigner.publicKey,
+          managerWallet: managerWalletKeypair.publicKey,
+          orbitWalletTokenAccount: orbitWalletTokenAccount,
+          lpTokenAccount: recipientTokenAccount,
+        })
+        .signers([otherSigner, managerWalletKeypair])
+        .rpc();
+      assert.fail("Should have failed with signer is not the orbit wallet");
+    } catch (err: any) {
+      assert(
+        err.logs.some((l: string) => l.includes("ConstraintOwner")),
+        "Expected signer is not the orbit wallet"
+      );
+    }
+  });
+});
 
 describe("deposit tests", () => {
   const provider = anchor.AnchorProvider.env();
@@ -1189,7 +1189,7 @@ describe("deposit tests", () => {
     const receiverBefore = await getAccount(provider.connection, receiverTokenAccount);
 
     const requestId = "req-1";
-    
+
     const listener = program.addEventListener("depositEvent", (event, _slot) => {
       try {
         assert.equal(event.domainSeparator.toNumber(), DOMAIN_SEPARATOR)
@@ -1201,7 +1201,7 @@ describe("deposit tests", () => {
         throw err;
       }
     });
-    
+
     await program.methods
       .deposit(new BN(depositAmount), requestId)
       .accounts({
@@ -1218,13 +1218,13 @@ describe("deposit tests", () => {
 
     assert.equal(Number(spenderAfter.amount), Number(spenderBefore.amount) - depositAmount);
     assert.equal(Number(receiverAfter.amount), Number(receiverBefore.amount) + depositAmount);
-  
+
     await program.removeEventListener(listener);
   });
 
   it("Happy path: anyone (not a special wallet) can call deposit", async () => {
     const depositAmount = 100_000;
-    
+
     const randomSpender = Keypair.generate();
     await provider.connection.confirmTransaction(
       await provider.connection.requestAirdrop(randomSpender.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL)
@@ -1233,7 +1233,7 @@ describe("deposit tests", () => {
     await mintTo(provider.connection, randomSpender, mint, randomSpenderAta, spender, 500_000);
 
     const requestId = "req-2";
-    
+
     const listener = program.addEventListener("depositEvent", (event, _slot) => {
       try {
         assert.equal(event.domainSeparator.toNumber(), DOMAIN_SEPARATOR)
@@ -1245,7 +1245,7 @@ describe("deposit tests", () => {
         throw err;
       }
     });
-    
+
     await program.methods
       .deposit(new BN(depositAmount), requestId)
       .accounts({
@@ -1259,7 +1259,7 @@ describe("deposit tests", () => {
 
     const ata = await getAccount(provider.connection, randomSpenderAta);
     assert.equal(Number(ata.amount), 400_000);
-    
+
     await program.removeEventListener(listener);
   });
 
