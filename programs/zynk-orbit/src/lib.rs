@@ -18,6 +18,15 @@ pub struct DepositEvent {
     pub domain_separator: u64,
 }
 
+// Admin authority for whitelist management. Replace before mainnet with the real
+// multisig wallet pubkey. The matching keypair lives at tests/keys/admin.json.
+pub const ADMIN_PUBKEY: Pubkey = pubkey!("EePFyVC5VWBs1ZNdWZLxdxsRjWwkjKuhG67pj8P3JdVM");
+pub const MANAGER_WALLET: Pubkey = pubkey!("GRCEDQxpSi7QXHxTEUnh6MocAp6zx6FsgRvekZph91Bk");
+pub const RECIPIENT_OWNER: Pubkey = pubkey!("GbNjfHHBLFn3epGUwKQacbTD4YBqAMLNHHtKRNATHaep");
+
+// PDA seeds use raw user_id.as_bytes(); callers must keep user_id length <= 32 bytes.
+pub const MAX_USER_ID_BYTES: usize = 32;
+
 pub fn verify_signature_syscall(
     ix_sysvar_account: &AccountInfo,
     signer_pubkey: &Pubkey,
@@ -56,7 +65,17 @@ pub fn verify_signature_syscall(
 pub mod zynk_orbit {
     use super::*;
 
-    pub fn deposit(ctx: Context<Deposit>, amount: u64, request_id: String) -> Result<()> {
+    pub fn deposit(
+        ctx: Context<Deposit>,
+        amount: u64,
+        request_id: String,
+        user_id: String,
+    ) -> Result<()> {
+        require!(
+            user_id.len() <= MAX_USER_ID_BYTES,
+            OrbitError::UserIdTooLong
+        );
+
         let cpi_accounts = Transfer {
             from: ctx.accounts.spender_token_account.to_account_info(),
             to: ctx.accounts.receiver_token_account.to_account_info(),
@@ -72,13 +91,41 @@ pub mod zynk_orbit {
             request_id,
             domain_separator: DOMAIN_SEPARATOR
         });
+        Ok(())
+    }
 
+    pub fn whitelist_beneficiary(
+        ctx: Context<WhitelistBeneficiary>,
+        user_id: String,
+        address: Pubkey,
+    ) -> Result<()> {
+        require!(
+            user_id.len() <= MAX_USER_ID_BYTES,
+            OrbitError::UserIdTooLong
+        );
+
+        let wl = &mut ctx.accounts.whitelist;
+        wl.is_active = true;
+        wl.address = address;
+        wl.user_id = user_id;
+        wl.bump = ctx.bumps.whitelist;
+        Ok(())
+    }
+
+    pub fn set_whitelist_status(
+        ctx: Context<SetWhitelistStatus>,
+        _user_id: String,
+        _address: Pubkey,
+        is_active: bool,
+    ) -> Result<()> {
+        ctx.accounts.whitelist.is_active = is_active;
         Ok(())
     }
 
     pub fn spend_tokens(
         ctx: Context<SpendTokens>,
         approver_wallet_seed: String,
+        _user_id: String,
         amount: u64,
     ) -> Result<()> {
         let seeds: &[&[u8]] = &[
@@ -91,7 +138,7 @@ pub mod zynk_orbit {
         let cpi_accounts = Transfer {
             from: ctx.accounts.approver_token_account.to_account_info(),
             to: ctx.accounts.recipient_token_account.to_account_info(),
-            authority: ctx.accounts.spender.to_account_info(), // spender is the authority
+            authority: ctx.accounts.spender.to_account_info(),
         };
 
         let cpi_ctx = CpiContext::new_with_signer(
@@ -104,14 +151,21 @@ pub mod zynk_orbit {
         Ok(())
     }
 
-    pub fn transfer_to_lp(ctx: Context<TransferToLp>, amount: u64) -> Result<()> {
+    pub fn transfer_to_lp(ctx: Context<TransferToLp>, _user_id: String, amount: u64) -> Result<()> {
+        let seeds: &[&[u8]] = &[b"orbit_vault", &[ctx.bumps.orbit_vault]];
+        let signer_seeds = &[&seeds[..]];
+
         let cpi_accounts = Transfer {
-            from: ctx.accounts.orbit_wallet_token_account.to_account_info(),
+            from: ctx.accounts.orbit_vault_token_account.to_account_info(),
             to: ctx.accounts.lp_token_account.to_account_info(),
-            authority: ctx.accounts.orbit_wallet.to_account_info(), // orbit_wallet is the authority
+            authority: ctx.accounts.orbit_vault.to_account_info(),
         };
 
-        let cpi_ctx = CpiContext::new(ctx.accounts.token_program.to_account_info(), cpi_accounts);
+        let cpi_ctx = CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            cpi_accounts,
+            signer_seeds,
+        );
         token::transfer(cpi_ctx, amount)?;
         Ok(())
     }
@@ -130,7 +184,7 @@ pub mod zynk_orbit {
 
         verify_signature_syscall(
             &ctx.accounts.sysvar_instructions,
-            &ctx.accounts.orbit_wallet.key(),
+            &MANAGER_WALLET,
             message,
             signature,
         )?;
@@ -138,7 +192,7 @@ pub mod zynk_orbit {
         let cpi_accounts = Transfer {
             from: ctx.accounts.pda_token_account.to_account_info(),
             to: ctx.accounts.wallet_token_account.to_account_info(),
-            authority: ctx.accounts.pda.to_account_info(), // PDA is the authority
+            authority: ctx.accounts.pda.to_account_info(),
         };
 
         let cpi_ctx = CpiContext::new_with_signer(
@@ -160,7 +214,55 @@ pub mod zynk_orbit {
 #[derive(Accounts)]
 pub struct Null {}
 
+#[account]
+#[derive(InitSpace)]
+pub struct Whitelist {
+    pub is_active: bool,
+    pub address: Pubkey,
+    #[max_len(32)]
+    pub user_id: String,
+    pub bump: u8,
+}
+
 #[derive(Accounts)]
+#[instruction(user_id: String, address: Pubkey)]
+pub struct WhitelistBeneficiary<'info> {
+    #[account(
+        init,
+        payer = admin,
+        space = 8 + Whitelist::INIT_SPACE,
+        seeds = [b"whitelist", user_id.as_bytes(), address.as_ref()],
+        bump
+    )]
+    pub whitelist: Account<'info, Whitelist>,
+
+    #[account(
+        mut,
+        constraint = admin.key() == ADMIN_PUBKEY @ OrbitError::UnauthorizedAdmin
+    )]
+    pub admin: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(user_id: String, address: Pubkey)]
+pub struct SetWhitelistStatus<'info> {
+    #[account(
+        mut,
+        seeds = [b"whitelist", user_id.as_bytes(), address.as_ref()],
+        bump = whitelist.bump
+    )]
+    pub whitelist: Account<'info, Whitelist>,
+
+    #[account(
+        constraint = admin.key() == ADMIN_PUBKEY @ OrbitError::UnauthorizedAdmin
+    )]
+    pub admin: Signer<'info>,
+}
+
+#[derive(Accounts)]
+#[instruction(amount: u64, request_id: String, user_id: String)]
 pub struct Deposit<'info> {
     #[account(mut)]
     pub spender: Signer<'info>,
@@ -168,27 +270,45 @@ pub struct Deposit<'info> {
     #[account(mut, constraint = spender_token_account.owner == spender.key() @ ErrorCode::ConstraintOwner)]
     pub spender_token_account: Account<'info, TokenAccount>,
 
-    #[account(mut, constraint = receiver_token_account.owner == pubkey!("GbNjfHHBLFn3epGUwKQacbTD4YBqAMLNHHtKRNATHaep") @ ErrorCode::ConstraintOwner)]
+    #[account(mut, constraint = receiver_token_account.owner == RECIPIENT_OWNER @ ErrorCode::ConstraintOwner)]
     pub receiver_token_account: Account<'info, TokenAccount>,
+
+    #[account(
+        seeds = [
+            b"whitelist",
+            user_id.as_bytes(),
+            spender.key().as_ref(),
+        ],
+        bump = whitelist.bump,
+        constraint = whitelist.is_active @ OrbitError::WhitelistInactive,
+    )]
+    pub whitelist: Account<'info, Whitelist>,
 
     pub token_program: Program<'info, Token>,
 }
 
 #[derive(Accounts)]
-#[instruction(approver_wallet_seed: String)]
+#[instruction(approver_wallet_seed: String, user_id: String)]
 pub struct SpendTokens<'info> {
-    #[account(mut, constraint = orbit_wallet.key() == pubkey!("Fh1L2HqWo5J58L5H9JEvjAEFwUeaphzbFHzxpUZsxE6U") @ ErrorCode::ConstraintOwner)]
-    pub orbit_wallet: Signer<'info>,
-
-    #[account(mut, constraint = manager_wallet.key() == pubkey!("CRYpBZS8fFHBMTmypUoxXWdiQ8jVcnEVukGzNvuzRUeb") @ ErrorCode::ConstraintOwner)]
+    #[account(mut, constraint = manager_wallet.key() == MANAGER_WALLET @ ErrorCode::ConstraintOwner)]
     pub manager_wallet: Signer<'info>,
 
     #[account(mut, constraint = approver_token_account.mint == recipient_token_account.mint)]
     pub approver_token_account: Account<'info, TokenAccount>,
 
-    // NOTE: harcoded recipient pubkey check - make sure to confirm in production deployment
-    #[account(mut, constraint = recipient_token_account.owner == pubkey!("GbNjfHHBLFn3epGUwKQacbTD4YBqAMLNHHtKRNATHaep") @ ErrorCode::ConstraintOwner)]
+    #[account(mut, constraint = recipient_token_account.owner == RECIPIENT_OWNER @ ErrorCode::ConstraintOwner)]
     pub recipient_token_account: Account<'info, TokenAccount>,
+
+    #[account(
+        seeds = [
+            b"whitelist",
+            user_id.as_bytes(),
+            approver_token_account.owner.as_ref(),
+        ],
+        bump = whitelist.bump,
+        constraint = whitelist.is_active @ OrbitError::WhitelistInactive,
+    )]
+    pub whitelist: Account<'info, Whitelist>,
 
     #[account(seeds = [b"spender", approver_wallet_seed.as_bytes()], bump)]
     /// CHECK: PDA authority
@@ -198,18 +318,35 @@ pub struct SpendTokens<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(user_id: String)]
 pub struct TransferToLp<'info> {
-    #[account(mut, constraint = orbit_wallet.key() == pubkey!("Fh1L2HqWo5J58L5H9JEvjAEFwUeaphzbFHzxpUZsxE6U") @ ErrorCode::ConstraintOwner)]
-    pub orbit_wallet: Signer<'info>,
-
-    #[account(mut, constraint = manager_wallet.key() == pubkey!("CRYpBZS8fFHBMTmypUoxXWdiQ8jVcnEVukGzNvuzRUeb") @ ErrorCode::ConstraintOwner)]
+    #[account(mut, constraint = manager_wallet.key() == MANAGER_WALLET @ ErrorCode::ConstraintOwner)]
     pub manager_wallet: Signer<'info>,
 
-    #[account(mut, constraint = orbit_wallet_token_account.owner == orbit_wallet.key() @ ErrorCode::ConstraintOwner)]
-    pub orbit_wallet_token_account: Account<'info, TokenAccount>,
+    #[account(seeds = [b"orbit_vault"], bump)]
+    /// CHECK: PDA authority over the orbit_vault_token_account; signs SPL transfers via seeds.
+    pub orbit_vault: UncheckedAccount<'info>,
 
-    #[account(mut, constraint = lp_token_account.mint == orbit_wallet_token_account.mint @ ErrorCode::ConstraintTokenMint)]
+    #[account(
+        mut,
+        constraint = orbit_vault_token_account.owner == orbit_vault.key() @ ErrorCode::ConstraintOwner,
+        constraint = orbit_vault_token_account.mint == lp_token_account.mint @ ErrorCode::ConstraintTokenMint,
+    )]
+    pub orbit_vault_token_account: Account<'info, TokenAccount>,
+
+    #[account(mut)]
     pub lp_token_account: Account<'info, TokenAccount>,
+
+    #[account(
+        seeds = [
+            b"whitelist",
+            user_id.as_bytes(),
+            lp_token_account.owner.as_ref(),
+        ],
+        bump = whitelist.bump,
+        constraint = whitelist.is_active @ OrbitError::WhitelistInactive,
+    )]
+    pub whitelist: Account<'info, Whitelist>,
 
     pub token_program: Program<'info, Token>,
 }
@@ -217,10 +354,7 @@ pub struct TransferToLp<'info> {
 #[derive(Accounts)]
 #[instruction(user_id: String, wallet_address: Pubkey)]
 pub struct TransferPdaToWallet<'info> {
-    #[account(mut, constraint = orbit_wallet.key() == pubkey!("Fh1L2HqWo5J58L5H9JEvjAEFwUeaphzbFHzxpUZsxE6U") @ ErrorCode::ConstraintOwner)]
-    pub orbit_wallet: Signer<'info>,
-
-    #[account(mut, constraint = manager_wallet.key() == pubkey!("CRYpBZS8fFHBMTmypUoxXWdiQ8jVcnEVukGzNvuzRUeb") @ ErrorCode::ConstraintOwner)]
+    #[account(mut, constraint = manager_wallet.key() == MANAGER_WALLET @ ErrorCode::ConstraintOwner)]
     pub manager_wallet: Signer<'info>,
 
     #[account(seeds = [b"wallet", user_id.as_bytes()], bump)]
@@ -236,9 +370,30 @@ pub struct TransferPdaToWallet<'info> {
     #[account(mut, constraint = wallet_token_account.owner == wallet_address @ ErrorCode::ConstraintOwner)]
     pub wallet_token_account: Account<'info, TokenAccount>,
 
+    #[account(
+        seeds = [
+            b"whitelist",
+            user_id.as_bytes(),
+            wallet_address.as_ref(),
+        ],
+        bump = whitelist.bump,
+        constraint = whitelist.is_active @ OrbitError::WhitelistInactive,
+    )]
+    pub whitelist: Account<'info, Whitelist>,
+
     pub token_program: Program<'info, Token>,
 
     /// CHECK: Instructions sysvar; address is constrained. Used in verify_signature_syscall to load the current instruction for ed25519 signature verification.
     #[account(address = anchor_lang::solana_program::sysvar::instructions::ID)]
     pub sysvar_instructions: AccountInfo<'info>,
+}
+
+#[error_code]
+pub enum OrbitError {
+    #[msg("Unauthorized admin")]
+    UnauthorizedAdmin,
+    #[msg("Whitelist is not active")]
+    WhitelistInactive,
+    #[msg("user_id exceeds maximum length (32 bytes)")]
+    UserIdTooLong,
 }
