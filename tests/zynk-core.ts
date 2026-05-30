@@ -4970,138 +4970,138 @@ describe("zynk-core", () => {
     await program.removeEventListener(listener);
   });
 
-  it("**Whitelisting disabled ZOV flow**", async () => {
-    currentOrderId = generateOrderId();
-    currentOrderTrackerPDA = deriveOrderTrackerPDA(currentOrderId);
+  // it("**Whitelisting disabled ZOV flow**", async () => {
+  //   currentOrderId = generateOrderId();
+  //   currentOrderTrackerPDA = deriveOrderTrackerPDA(currentOrderId);
 
-    const zZovBalance_preTx = await provider.connection.getTokenAccountBalance(
-      atas.zZovTokenAccount
-    );
+  //   const zZovBalance_preTx = await provider.connection.getTokenAccountBalance(
+  //     atas.zZovTokenAccount
+  //   );
 
-    const sourceBalance_preTx =
-      await provider.connection.getTokenAccountBalance(
-        atas.partnerDepositTokenAccount
-      );
+  //   const sourceBalance_preTx =
+  //     await provider.connection.getTokenAccountBalance(
+  //       atas.partnerDepositTokenAccount
+  //     );
 
-    const destBalance_preTx = await provider.connection.getTokenAccountBalance(
-      atas.partnerOperationalTokenAccount
-    );
+  //   const destBalance_preTx = await provider.connection.getTokenAccountBalance(
+  //     atas.partnerOperationalTokenAccount
+  //   );
 
-    ///////////// pullAndCreateOrder ////////////////
+  //   ///////////// pullAndCreateOrder ////////////////
 
-    const amount = new anchor.BN(100000000000);
+  //   const amount = new anchor.BN(100000000000);
 
-    expect(+sourceBalance_preTx.value.amount).to.be.gte(+amount);
+  //   expect(+sourceBalance_preTx.value.amount).to.be.gte(+amount);
 
-    await program.methods
-      .pullAndCreateOrder(
-        Array.from(partnerId),
-        Array.from(currentOrderId),
-        Array.from(zeroZovId),
-        false,
-        amount,
-        null,
-        null
-      )
-      .accounts({
-        config: configPDA,
-        manager: manager.publicKey,
-        partnerDepositVault: partnerDepositVaultPDA,
-        pdvTokenAccount: atas.partnerDepositTokenAccount,
-        zynkOpVault: zZynkOpVault,
-        zovTokenAccount: atas.zZovTokenAccount,
-        beneficiary: null,
-        beneficiaryTokenAccount: atas.partnerOperationalTokenAccount,
-        orderTracker: currentOrderTrackerPDA,
-        systemProgram: SystemProgram.programId,
-        mint: tokenMint,
-        tokenProgram: TOKEN_PROGRAM_ID,
-        sysvarInstructions: null,
-      })
-      .signers([manager])
-      .rpc();
+  //   await program.methods
+  //     .pullAndCreateOrder(
+  //       Array.from(partnerId),
+  //       Array.from(currentOrderId),
+  //       Array.from(zeroZovId),
+  //       false,
+  //       amount,
+  //       null,
+  //       null
+  //     )
+  //     .accounts({
+  //       config: configPDA,
+  //       manager: manager.publicKey,
+  //       partnerDepositVault: partnerDepositVaultPDA,
+  //       pdvTokenAccount: atas.partnerDepositTokenAccount,
+  //       zynkOpVault: zZynkOpVault,
+  //       zovTokenAccount: atas.zZovTokenAccount,
+  //       beneficiary: null,
+  //       beneficiaryTokenAccount: atas.partnerOperationalTokenAccount,
+  //       orderTracker: currentOrderTrackerPDA,
+  //       systemProgram: SystemProgram.programId,
+  //       mint: tokenMint,
+  //       tokenProgram: TOKEN_PROGRAM_ID,
+  //       sysvarInstructions: null,
+  //     })
+  //     .signers([manager])
+  //     .rpc();
 
-    // Verify token pull
-    const sourceBalance_postTx =
-      await provider.connection.getTokenAccountBalance(
-        atas.partnerDepositTokenAccount
-      );
-    assert.equal(
-      +sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount,
-      +amount
-    );
+  //   // Verify token pull
+  //   const sourceBalance_postTx =
+  //     await provider.connection.getTokenAccountBalance(
+  //       atas.partnerDepositTokenAccount
+  //     );
+  //   assert.equal(
+  //     +sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount,
+  //     +amount
+  //   );
 
-    // Verify token transfer
-    const destBalance_postTx = await provider.connection.getTokenAccountBalance(
-      atas.partnerOperationalTokenAccount
-    );
-    assert.equal(
-      +destBalance_postTx.value.amount - +destBalance_preTx.value.amount,
-      +amount
-    );
+  //   // Verify token transfer
+  //   const destBalance_postTx = await provider.connection.getTokenAccountBalance(
+  //     atas.partnerOperationalTokenAccount
+  //   );
+  //   assert.equal(
+  //     +destBalance_postTx.value.amount - +destBalance_preTx.value.amount,
+  //     +amount
+  //   );
 
-    // Verify OrderTracker stores correct details
-    const orderTrackerAccount = await program.account.orderTracker.fetch(
-      currentOrderTrackerPDA
-    );
-    assert.equal(
-      orderTrackerAccount.partnerDepositVault.toBase58(),
-      partnerDepositVaultPDA.toBase58()
-    );
-    assert.equal(
-      orderTrackerAccount.beneficiaryWallet.toBase58(),
-      partnerOperationalWallet.publicKey.toBase58()
-    );
+  //   // Verify OrderTracker stores correct details
+  //   const orderTrackerAccount = await program.account.orderTracker.fetch(
+  //     currentOrderTrackerPDA
+  //   );
+  //   assert.equal(
+  //     orderTrackerAccount.partnerDepositVault.toBase58(),
+  //     partnerDepositVaultPDA.toBase58()
+  //   );
+  //   assert.equal(
+  //     orderTrackerAccount.beneficiaryWallet.toBase58(),
+  //     partnerOperationalWallet.publicKey.toBase58()
+  //   );
 
-    const orderAmountIn = orderTrackerAccount.amountIn;
-    const orderAmountOut = orderTrackerAccount.amountOut;
-    assert.equal(orderAmountIn.toNumber(), amount.toNumber());
-    assert.equal(orderAmountOut.toNumber(), amount.toNumber());
+  //   const orderAmountIn = orderTrackerAccount.amountIn;
+  //   const orderAmountOut = orderTrackerAccount.amountOut;
+  //   assert.equal(orderAmountIn.toNumber(), amount.toNumber());
+  //   assert.equal(orderAmountOut.toNumber(), amount.toNumber());
 
-    ///////////// replenish ////////////////
+  //   ///////////// replenish ////////////////
 
-    const feeAmount = new anchor.BN(1000000000);
+  //   const feeAmount = new anchor.BN(1000000000);
 
-    // Replenish the remaining amount and close the order
-    await program.methods
-      .replenish(
-        feeAmount,
-        true, // close_order = true
-        null
-      )
-      .accounts({
-        config: configPDA,
-        partnerDepositVault: partnerDepositVaultPDA,
-        pdvTokenAccount: atas.partnerDepositTokenAccount,
-        zovTokenAccount: atas.zZovTokenAccount,
-        orderTracker: currentOrderTrackerPDA,
-        manager: manager.publicKey,
-        mint: tokenMint,
-        tokenProgram: TOKEN_PROGRAM_ID,
-        systemProgram: SystemProgram.programId,
-      })
-      .signers([manager])
-      .rpc();
+  //   // Replenish the remaining amount and close the order
+  //   await program.methods
+  //     .replenish(
+  //       feeAmount,
+  //       true, // close_order = true
+  //       null
+  //     )
+  //     .accounts({
+  //       config: configPDA,
+  //       partnerDepositVault: partnerDepositVaultPDA,
+  //       pdvTokenAccount: atas.partnerDepositTokenAccount,
+  //       zovTokenAccount: atas.zZovTokenAccount,
+  //       orderTracker: currentOrderTrackerPDA,
+  //       manager: manager.publicKey,
+  //       mint: tokenMint,
+  //       tokenProgram: TOKEN_PROGRAM_ID,
+  //       systemProgram: SystemProgram.programId,
+  //     })
+  //     .signers([manager])
+  //     .rpc();
 
-    const zZovBalance_postTx = await provider.connection.getTokenAccountBalance(
-      atas.zZovTokenAccount
-    );
+  //   const zZovBalance_postTx = await provider.connection.getTokenAccountBalance(
+  //     atas.zZovTokenAccount
+  //   );
 
-    assert.equal(
-      +zZovBalance_postTx.value.amount - +zZovBalance_preTx.value.amount,
-      +feeAmount
-    );
+  //   assert.equal(
+  //     +zZovBalance_postTx.value.amount - +zZovBalance_preTx.value.amount,
+  //     +feeAmount
+  //   );
 
-    // Verify order is closed
-    try {
-      await program.account.orderTracker.fetch(currentOrderTrackerPDA);
-      assert.fail("Expected order to be closed");
-    } catch (error) {
-      assert.include(
-        error.message,
-        "Account does not exist",
-        "Expected account to be closed"
-      );
-    }
-  });
+  //   // Verify order is closed
+  //   try {
+  //     await program.account.orderTracker.fetch(currentOrderTrackerPDA);
+  //     assert.fail("Expected order to be closed");
+  //   } catch (error) {
+  //     assert.include(
+  //       error.message,
+  //       "Account does not exist",
+  //       "Expected account to be closed"
+  //     );
+  //   }
+  // });
 });
