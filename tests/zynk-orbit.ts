@@ -61,8 +61,40 @@ const deriveWhitelistPda = (
     programId,
   );
 
+// The orbit vault PDA authority is derived from seeds [b"vault", b"orbit"];
+// it owns the orbit_vault_token_account and signs transfer_to_lp / repay.
 const deriveOrbitVaultPda = (programId: PublicKey): [PublicKey, number] =>
-  PublicKey.findProgramAddressSync([Buffer.from("vault")], programId);
+  PublicKey.findProgramAddressSync(
+    [Buffer.from("vault"), Buffer.from("orbit")],
+    programId,
+  );
+
+// vault_id and order_id use the same [u8; 32] encoding as user ids: UTF-8 bytes
+// written into a zero-filled 32-byte buffer.
+const toBytes32 = toUserId;
+
+// Each spend_tokens call inits a fresh OrderTracker PDA, so order ids must be
+// unique across calls (a repeat would fail the `init` with "already in use").
+let orderCounter = 0;
+const nextOrderId = (): number[] => toBytes32(`order_${orderCounter++}`);
+
+const deriveVaultPda = (
+  programId: PublicKey,
+  vaultId: string,
+): [PublicKey, number] =>
+  PublicKey.findProgramAddressSync(
+    [Buffer.from("vault"), Buffer.from(toBytes32(vaultId))],
+    programId,
+  );
+
+const deriveOrderTrackerPda = (
+  programId: PublicKey,
+  orderId: number[],
+): [PublicKey, number] =>
+  PublicKey.findProgramAddressSync(
+    [Buffer.from("order_tracker"), Buffer.from(orderId)],
+    programId,
+  );
 
 // Idempotent: create the Whitelist PDA if missing; otherwise reactivate it.
 const whitelistBeneficiary = async (
@@ -193,10 +225,7 @@ describe("zynk-orbit spend_tokens (delegate flow)", () => {
     );
     await mintTo(provider.connection, approver, mint, user2TokenAccount, approver, 100);
 
-    [delegatePda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("vault"), Buffer.from("delegate")],
-      program.programId,
-    );
+    [delegatePda] = deriveVaultPda(program.programId, "delegate");
 
     await approve(
       provider.connection,
@@ -211,15 +240,21 @@ describe("zynk-orbit spend_tokens (delegate flow)", () => {
   });
 
   it("Happy path: PDA spends within allowance", async () => {
+    const vaultId = toBytes32("delegate");
+    const orderId = nextOrderId();
+    const [orderTrackerPda] = deriveOrderTrackerPda(program.programId, orderId);
+
     await program.methods
-      .spendTokens("delegate", toUserId(USER_ID), new BN(100_000))
+      .spendTokens(vaultId, toUserId(USER_ID), orderId, new BN(100_000))
       .accounts({
         managerWallet: managerWalletKeypair.publicKey,
         approverTokenAccount,
         recipientTokenAccount,
         whitelist: whitelistPda,
         spender: delegatePda,
+        orderTracker: orderTrackerPda,
         tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
       })
       .signers([managerWalletKeypair])
       .rpc();
@@ -229,19 +264,30 @@ describe("zynk-orbit spend_tokens (delegate flow)", () => {
 
     assert.equal(Number(approverAcc.amount), 900_000);
     assert.equal(Number(recipientAcc.amount), 100_000);
+
+    // The instruction records the spend in a freshly-initialized OrderTracker PDA.
+    const tracker: any = await (program.account as any).orderTracker.fetch(orderTrackerPda);
+    assert.deepEqual(Array.from(tracker.orderId), orderId);
+    assert.equal(Number(tracker.amount), 100_000);
+    assert.equal(tracker.approver.toBase58(), approver.publicKey.toBase58());
+    assert.deepEqual(Array.from(tracker.vaultId), vaultId);
   });
 
   it("Sad path: no approve set (new ATA, PDA not delegated)", async () => {
+    const orderId = nextOrderId();
+    const [orderTrackerPda] = deriveOrderTrackerPda(program.programId, orderId);
     try {
       await program.methods
-        .spendTokens("delegate", toUserId(USER_ID), new BN(50))
+        .spendTokens(toBytes32("delegate"), toUserId(USER_ID), orderId, new BN(50))
         .accounts({
           managerWallet: managerWalletKeypair.publicKey,
           approverTokenAccount: user2TokenAccount,
           recipientTokenAccount,
           whitelist: whitelistPda,
           spender: delegatePda,
+          orderTracker: orderTrackerPda,
           tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
         })
         .signers([managerWalletKeypair])
         .rpc();
@@ -256,16 +302,20 @@ describe("zynk-orbit spend_tokens (delegate flow)", () => {
   });
 
   it("Sad path: spend more than allowance", async () => {
+    const orderId = nextOrderId();
+    const [orderTrackerPda] = deriveOrderTrackerPda(program.programId, orderId);
     try {
       await program.methods
-        .spendTokens("delegate", toUserId(USER_ID), new BN(600_000))
+        .spendTokens(toBytes32("delegate"), toUserId(USER_ID), orderId, new BN(600_000))
         .accounts({
           managerWallet: managerWalletKeypair.publicKey,
           approverTokenAccount,
           recipientTokenAccount,
           whitelist: whitelistPda,
           spender: delegatePda,
+          orderTracker: orderTrackerPda,
           tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
         })
         .signers([managerWalletKeypair])
         .rpc();
@@ -281,17 +331,21 @@ describe("zynk-orbit spend_tokens (delegate flow)", () => {
 
   it("Sad path: wrong delegate PDA", async () => {
     const fakeDelegate = Keypair.generate().publicKey;
+    const orderId = nextOrderId();
+    const [orderTrackerPda] = deriveOrderTrackerPda(program.programId, orderId);
 
     try {
       await program.methods
-        .spendTokens("delegate", toUserId(USER_ID), new BN(10_000))
+        .spendTokens(toBytes32("delegate"), toUserId(USER_ID), orderId, new BN(10_000))
         .accounts({
           managerWallet: managerWalletKeypair.publicKey,
           approverTokenAccount,
           recipientTokenAccount,
           whitelist: whitelistPda,
           spender: fakeDelegate,
+          orderTracker: orderTrackerPda,
           tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
         })
         .signers([managerWalletKeypair])
         .rpc();
@@ -306,29 +360,37 @@ describe("zynk-orbit spend_tokens (delegate flow)", () => {
   });
 
   it("Sad path: allowance exhausted", async () => {
+    const firstOrderId = nextOrderId();
+    const [firstOrderTrackerPda] = deriveOrderTrackerPda(program.programId, firstOrderId);
     await program.methods
-      .spendTokens("delegate", toUserId(USER_ID), new BN(400_000))
+      .spendTokens(toBytes32("delegate"), toUserId(USER_ID), firstOrderId, new BN(400_000))
       .accounts({
         managerWallet: managerWalletKeypair.publicKey,
         approverTokenAccount,
         recipientTokenAccount,
         whitelist: whitelistPda,
         spender: delegatePda,
+        orderTracker: firstOrderTrackerPda,
         tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
       })
       .signers([managerWalletKeypair])
       .rpc();
 
+    const secondOrderId = nextOrderId();
+    const [secondOrderTrackerPda] = deriveOrderTrackerPda(program.programId, secondOrderId);
     try {
       await program.methods
-        .spendTokens("delegate", toUserId(USER_ID), new BN(1))
+        .spendTokens(toBytes32("delegate"), toUserId(USER_ID), secondOrderId, new BN(1))
         .accounts({
           managerWallet: managerWalletKeypair.publicKey,
           approverTokenAccount,
           recipientTokenAccount,
           whitelist: whitelistPda,
           spender: delegatePda,
+          orderTracker: secondOrderTrackerPda,
           tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
         })
         .signers([managerWalletKeypair])
         .rpc();
@@ -350,16 +412,20 @@ describe("zynk-orbit spend_tokens (delegate flow)", () => {
         2 * anchor.web3.LAMPORTS_PER_SOL,
       ),
     );
+    const orderId = nextOrderId();
+    const [orderTrackerPda] = deriveOrderTrackerPda(program.programId, orderId);
     try {
       await program.methods
-        .spendTokens("delegate", toUserId(USER_ID), new BN(10_000))
+        .spendTokens(toBytes32("delegate"), toUserId(USER_ID), orderId, new BN(10_000))
         .accounts({
           managerWallet: otherSigner.publicKey,
           approverTokenAccount,
           recipientTokenAccount,
           whitelist: whitelistPda,
           spender: delegatePda,
+          orderTracker: orderTrackerPda,
           tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
         })
         .signers([otherSigner])
         .rpc();
@@ -380,16 +446,20 @@ describe("zynk-orbit spend_tokens (delegate flow)", () => {
       unknownUserId,
       recipientOwner,
     );
+    const orderId = nextOrderId();
+    const [orderTrackerPda] = deriveOrderTrackerPda(program.programId, orderId);
     try {
       await program.methods
-        .spendTokens("delegate", toUserId(unknownUserId), new BN(10_000))
+        .spendTokens(toBytes32("delegate"), toUserId(unknownUserId), orderId, new BN(10_000))
         .accounts({
           managerWallet: managerWalletKeypair.publicKey,
           approverTokenAccount,
           recipientTokenAccount,
           whitelist: unknownWhitelist,
           spender: delegatePda,
+          orderTracker: orderTrackerPda,
           tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
         })
         .signers([managerWalletKeypair])
         .rpc();
@@ -404,16 +474,20 @@ describe("zynk-orbit spend_tokens (delegate flow)", () => {
     const wlPda = await whitelistBeneficiary(program, inactiveUserId, approver.publicKey);
     await setWhitelistActive(program, inactiveUserId, approver.publicKey, false);
 
+    const orderId = nextOrderId();
+    const [orderTrackerPda] = deriveOrderTrackerPda(program.programId, orderId);
     try {
       await program.methods
-        .spendTokens("delegate", toUserId(inactiveUserId), new BN(1_000))
+        .spendTokens(toBytes32("delegate"), toUserId(inactiveUserId), orderId, new BN(1_000))
         .accounts({
           managerWallet: managerWalletKeypair.publicKey,
           approverTokenAccount,
           recipientTokenAccount,
           whitelist: wlPda,
           spender: delegatePda,
+          orderTracker: orderTrackerPda,
           tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
         })
         .signers([managerWalletKeypair])
         .rpc();
@@ -443,8 +517,6 @@ describe("PDA spend tests", () => {
   let randomSeed3: string;
   let whitelistPda: PublicKey;
 
-  const pdaRoot = "vault";
-
   before(async () => {
     await provider.connection.confirmTransaction(
       await provider.connection.requestAirdrop(
@@ -469,10 +541,7 @@ describe("PDA spend tests", () => {
     );
 
     randomSeed3 = `customer_${Math.random().toString(36).substring(7)}`;
-    [customerPda3] = PublicKey.findProgramAddressSync(
-      [Buffer.from(pdaRoot), Buffer.from(randomSeed3)],
-      program.programId,
-    );
+    [customerPda3] = deriveVaultPda(program.programId, randomSeed3);
 
     customerPda3TokenAccount = getAssociatedTokenAddressSync(
       testMint,
@@ -517,16 +586,20 @@ describe("PDA spend tests", () => {
     );
 
     const transferAmount = 200_000;
+    const orderId = nextOrderId();
+    const [orderTrackerPda] = deriveOrderTrackerPda(program.programId, orderId);
 
     await program.methods
-      .spendTokens(randomSeed3, toUserId(USER_ID), new BN(transferAmount))
+      .spendTokens(toBytes32(randomSeed3), toUserId(USER_ID), orderId, new BN(transferAmount))
       .accounts({
         managerWallet: managerWalletKeypair.publicKey,
         approverTokenAccount: customerPda3TokenAccount,
         recipientTokenAccount: testRecipientTokenAccount,
         whitelist: whitelistPda,
         spender: customerPda3,
+        orderTracker: orderTrackerPda,
         tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
       })
       .signers([managerWalletKeypair])
       .rpc();
@@ -575,16 +648,20 @@ describe("PDA spend tests", () => {
       await provider.sendAndConfirm(createTx, [approver]);
     }
 
+    const orderId = nextOrderId();
+    const [orderTrackerPda] = deriveOrderTrackerPda(program.programId, orderId);
     try {
       await program.methods
-        .spendTokens(randomSeed3, toUserId(USER_ID), new BN(transferAmount))
+        .spendTokens(toBytes32(randomSeed3), toUserId(USER_ID), orderId, new BN(transferAmount))
         .accounts({
           managerWallet: managerWalletKeypair.publicKey,
           approverTokenAccount: customerPda3TokenAccount,
           recipientTokenAccount: wrongRecipientTokenAccountAta,
           whitelist: whitelistPda,
           spender: customerPda3,
+          orderTracker: orderTrackerPda,
           tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
         })
         .signers([managerWalletKeypair])
         .rpc();
@@ -600,10 +677,7 @@ describe("PDA spend tests", () => {
   it("Sad path: wrong PDA", async () => {
     const transferAmount = 200_000;
     const wrongSeed = `wrong_customer_${Math.random().toString(36).substring(7)}`;
-    const [wrongPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from(pdaRoot), Buffer.from(wrongSeed)],
-      program.programId,
-    );
+    const [wrongPda] = deriveVaultPda(program.programId, wrongSeed);
 
     const wrongPdaTokenAccount = getAssociatedTokenAddressSync(
       testMint,
@@ -637,16 +711,20 @@ describe("PDA spend tests", () => {
       1_000_000,
     );
 
+    const orderId = nextOrderId();
+    const [orderTrackerPda] = deriveOrderTrackerPda(program.programId, orderId);
     try {
       await program.methods
-        .spendTokens(randomSeed3, toUserId(USER_ID), new BN(transferAmount))
+        .spendTokens(toBytes32(randomSeed3), toUserId(USER_ID), orderId, new BN(transferAmount))
         .accounts({
           managerWallet: managerWalletKeypair.publicKey,
           approverTokenAccount: wrongPdaTokenAccount,
           recipientTokenAccount: testRecipientTokenAccount,
           whitelist: whitelistPda,
           spender: wrongPda,
+          orderTracker: orderTrackerPda,
           tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
         })
         .signers([managerWalletKeypair])
         .rpc();
@@ -1741,6 +1819,367 @@ describe("set_whitelist_status instruction tests", () => {
       assert.fail("expected AccountNotInitialized");
     } catch (e) {
       assert.include(errMsg(e).toLowerCase(), "accountnotinitialized");
+    }
+  });
+});
+
+// The only way to create an OrderTracker is spend_tokens, so to exercise repay we
+// first run a PDA-funded spend (the spending PDA owns its own ATA, so no delegate
+// approval is needed) which inits the tracker with `amount`. Returns the order id
+// and tracker PDA for the repay/close flow to consume.
+const ZOV_OWNER = new PublicKey("GbNjfHHBLFn3epGUwKQacbTD4YBqAMLNHHtKRNATHaep");
+
+const createOrderTracker = async (
+  program: Program,
+  provider: anchor.AnchorProvider,
+  mint: PublicKey,
+  recipientTokenAccount: PublicKey, // must be owned by ZOV
+  amount: number,
+): Promise<{ orderId: number[]; orderTrackerPda: PublicKey }> => {
+  const funder = provider.wallet.payer!;
+  const vaultId = `repay_src_${Math.random().toString(36).substring(7)}`;
+  const userId = `u_ot_${Math.random().toString(36).substring(7)}`;
+  const [spenderPda] = deriveVaultPda(program.programId, vaultId);
+
+  const spenderAta = getAssociatedTokenAddressSync(
+    mint,
+    spenderPda,
+    true,
+    TOKEN_PROGRAM_ID,
+    ASSOCIATED_TOKEN_PROGRAM_ID,
+  );
+  try {
+    await getAccount(provider.connection, spenderAta);
+  } catch {
+    const ix = createAssociatedTokenAccountInstruction(
+      funder.publicKey,
+      spenderAta,
+      spenderPda,
+      mint,
+      TOKEN_PROGRAM_ID,
+      ASSOCIATED_TOKEN_PROGRAM_ID,
+    );
+    await provider.sendAndConfirm(new Transaction().add(ix), [funder]);
+  }
+  await mintTo(provider.connection, funder, mint, spenderAta, funder, amount);
+
+  const whitelistPda = await whitelistBeneficiary(program, userId, spenderPda);
+
+  const orderId = nextOrderId();
+  const [orderTrackerPda] = deriveOrderTrackerPda(program.programId, orderId);
+
+  await program.methods
+    .spendTokens(toBytes32(vaultId), toUserId(userId), orderId, new BN(amount))
+    .accounts({
+      managerWallet: managerWalletKeypair.publicKey,
+      approverTokenAccount: spenderAta,
+      recipientTokenAccount,
+      whitelist: whitelistPda,
+      spender: spenderPda,
+      orderTracker: orderTrackerPda,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      systemProgram: SystemProgram.programId,
+    })
+    .signers([managerWalletKeypair])
+    .rpc();
+
+  return { orderId, orderTrackerPda };
+};
+
+describe("repay tests", () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+
+  const program = anchor.workspace.ZynkOrbit as Program;
+  const funder = provider.wallet.payer!;
+
+  let testMint: PublicKey;
+  let orbitVaultPda: PublicKey;
+  let orbitVaultTokenAccount: PublicKey;
+  let lpOwner: Keypair;
+  let lpTokenAccount: PublicKey;
+  // Recipient for the spend that seeds each OrderTracker (must be owned by ZOV).
+  let zovTokenAccount: PublicKey;
+
+  before(async () => {
+    await provider.connection.confirmTransaction(
+      await provider.connection.requestAirdrop(
+        funder.publicKey,
+        2 * anchor.web3.LAMPORTS_PER_SOL,
+      ),
+    );
+    await provider.connection.confirmTransaction(
+      await provider.connection.requestAirdrop(
+        managerWalletKeypair.publicKey,
+        2 * anchor.web3.LAMPORTS_PER_SOL,
+      ),
+    );
+
+    testMint = await createMint(provider.connection, funder, funder.publicKey, null, 6);
+
+    [orbitVaultPda] = deriveOrbitVaultPda(program.programId);
+    orbitVaultTokenAccount = getAssociatedTokenAddressSync(
+      testMint,
+      orbitVaultPda,
+      true,
+      TOKEN_PROGRAM_ID,
+      ASSOCIATED_TOKEN_PROGRAM_ID,
+    );
+    try {
+      await getAccount(provider.connection, orbitVaultTokenAccount);
+    } catch {
+      const ix = createAssociatedTokenAccountInstruction(
+        funder.publicKey,
+        orbitVaultTokenAccount,
+        orbitVaultPda,
+        testMint,
+        TOKEN_PROGRAM_ID,
+        ASSOCIATED_TOKEN_PROGRAM_ID,
+      );
+      await provider.sendAndConfirm(new Transaction().add(ix), [funder]);
+    }
+    await mintTo(provider.connection, funder, testMint, orbitVaultTokenAccount, funder, 5_000_000);
+
+    lpOwner = Keypair.generate();
+    lpTokenAccount = await createAccount(provider.connection, funder, testMint, lpOwner.publicKey);
+
+    zovTokenAccount = await createAccount(provider.connection, funder, testMint, ZOV_OWNER);
+  });
+
+  it("Happy path: repay transfers from orbit vault to LP and closes the order tracker", async () => {
+    const amount = 100_000;
+    const { orderTrackerPda } = await createOrderTracker(
+      program,
+      provider,
+      testMint,
+      zovTokenAccount,
+      amount,
+    );
+
+    const vaultBefore = await getAccount(provider.connection, orbitVaultTokenAccount);
+    const lpBefore = await getAccount(provider.connection, lpTokenAccount);
+
+    await program.methods
+      .repay(new BN(amount))
+      .accounts({
+        managerWallet: managerWalletKeypair.publicKey,
+        vault: orbitVaultPda,
+        vaultTokenAccount: orbitVaultTokenAccount,
+        lpTokenAccount,
+        orderTracker: orderTrackerPda,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([managerWalletKeypair])
+      .rpc();
+
+    const vaultAfter = await getAccount(provider.connection, orbitVaultTokenAccount);
+    const lpAfter = await getAccount(provider.connection, lpTokenAccount);
+
+    assert.equal(
+      Number(vaultAfter.amount),
+      Number(vaultBefore.amount) - amount,
+      "Orbit vault balance should decrease by the repaid amount",
+    );
+    assert.equal(
+      Number(lpAfter.amount),
+      Number(lpBefore.amount) + amount,
+      "LP balance should increase by the repaid amount",
+    );
+
+    // `close = manager_wallet` rent-closes the tracker once repaid.
+    const closed = await (program.account as any).orderTracker.fetchNullable(orderTrackerPda);
+    assert.isNull(closed, "OrderTracker should be closed after repay");
+  });
+
+  it("Happy path: repaying more than the tracked amount is allowed", async () => {
+    const tracked = 100_000;
+    const repayAmount = 150_000;
+    const { orderTrackerPda } = await createOrderTracker(
+      program,
+      provider,
+      testMint,
+      zovTokenAccount,
+      tracked,
+    );
+
+    const lpBefore = await getAccount(provider.connection, lpTokenAccount);
+
+    await program.methods
+      .repay(new BN(repayAmount))
+      .accounts({
+        managerWallet: managerWalletKeypair.publicKey,
+        vault: orbitVaultPda,
+        vaultTokenAccount: orbitVaultTokenAccount,
+        lpTokenAccount,
+        orderTracker: orderTrackerPda,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([managerWalletKeypair])
+      .rpc();
+
+    const lpAfter = await getAccount(provider.connection, lpTokenAccount);
+    assert.equal(Number(lpAfter.amount), Number(lpBefore.amount) + repayAmount);
+  });
+
+  it("Sad path: repay amount less than tracked order amount (InsufficientRepay)", async () => {
+    const tracked = 100_000;
+    const { orderTrackerPda } = await createOrderTracker(
+      program,
+      provider,
+      testMint,
+      zovTokenAccount,
+      tracked,
+    );
+
+    try {
+      await program.methods
+        .repay(new BN(tracked - 1))
+        .accounts({
+          managerWallet: managerWalletKeypair.publicKey,
+          vault: orbitVaultPda,
+          vaultTokenAccount: orbitVaultTokenAccount,
+          lpTokenAccount,
+          orderTracker: orderTrackerPda,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([managerWalletKeypair])
+        .rpc();
+      assert.fail("Should have failed with InsufficientRepay");
+    } catch (err: unknown) {
+      assert.include(errMsg(err), "InsufficientRepay");
+    }
+  });
+
+  it("Sad path: signer is not the manager wallet", async () => {
+    const amount = 100_000;
+    const { orderTrackerPda } = await createOrderTracker(
+      program,
+      provider,
+      testMint,
+      zovTokenAccount,
+      amount,
+    );
+
+    const otherSigner = Keypair.generate();
+    await provider.connection.confirmTransaction(
+      await provider.connection.requestAirdrop(
+        otherSigner.publicKey,
+        2 * anchor.web3.LAMPORTS_PER_SOL,
+      ),
+    );
+
+    try {
+      await program.methods
+        .repay(new BN(amount))
+        .accounts({
+          managerWallet: otherSigner.publicKey,
+          vault: orbitVaultPda,
+          vaultTokenAccount: orbitVaultTokenAccount,
+          lpTokenAccount,
+          orderTracker: orderTrackerPda,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([otherSigner])
+        .rpc();
+      assert.fail("Should have failed: signer is not the manager wallet");
+    } catch (err: any) {
+      const logs = err.logs ?? [];
+      assert(
+        logs.some((l: string) => l.includes("ConstraintOwner")) ||
+          errMsg(err).includes("ConstraintOwner"),
+        "Expected manager wallet mismatch",
+      );
+    }
+  });
+
+  it("Sad path: vault_token_account mint does not match lp_token_account mint", async () => {
+    const amount = 100_000;
+    const { orderTrackerPda } = await createOrderTracker(
+      program,
+      provider,
+      testMint,
+      zovTokenAccount,
+      amount,
+    );
+
+    // LP token account on a different mint than the orbit vault's token account.
+    const otherMint = await createMint(provider.connection, funder, funder.publicKey, null, 6);
+    const otherLpTokenAccount = await createAccount(
+      provider.connection,
+      funder,
+      otherMint,
+      lpOwner.publicKey,
+    );
+
+    try {
+      await program.methods
+        .repay(new BN(amount))
+        .accounts({
+          managerWallet: managerWalletKeypair.publicKey,
+          vault: orbitVaultPda,
+          vaultTokenAccount: orbitVaultTokenAccount,
+          lpTokenAccount: otherLpTokenAccount,
+          orderTracker: orderTrackerPda,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([managerWalletKeypair])
+        .rpc();
+      assert.fail("Should have failed with ConstraintTokenMint");
+    } catch (err: any) {
+      const logs = err.logs ?? [];
+      assert(
+        logs.some((l: string) => l.includes("ConstraintTokenMint")) ||
+          errMsg(err).includes("ConstraintTokenMint"),
+        "Expected vault/LP mint mismatch",
+      );
+    }
+  });
+
+  it("Sad path: vault_token_account not owned by the orbit vault PDA", async () => {
+    const amount = 100_000;
+    const { orderTrackerPda } = await createOrderTracker(
+      program,
+      provider,
+      testMint,
+      zovTokenAccount,
+      amount,
+    );
+
+    // A token account on the right mint but owned by a wallet, not the vault PDA.
+    const strayTokenAccount = await createAccount(
+      provider.connection,
+      funder,
+      testMint,
+      Keypair.generate().publicKey,
+    );
+
+    try {
+      await program.methods
+        .repay(new BN(amount))
+        .accounts({
+          managerWallet: managerWalletKeypair.publicKey,
+          vault: orbitVaultPda,
+          vaultTokenAccount: strayTokenAccount,
+          lpTokenAccount,
+          orderTracker: orderTrackerPda,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([managerWalletKeypair])
+        .rpc();
+      assert.fail("Should have failed with ConstraintOwner");
+    } catch (err: any) {
+      const logs = err.logs ?? [];
+      assert(
+        logs.some((l: string) => l.includes("ConstraintOwner")) ||
+          errMsg(err).includes("ConstraintOwner"),
+        "Expected vault token account owner mismatch",
+      );
     }
   });
 });
