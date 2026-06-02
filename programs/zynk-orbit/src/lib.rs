@@ -163,19 +163,36 @@ pub mod zynk_orbit {
         user_id: [u8; 32],
         wallet_address: Pubkey,
         amount: u64,
-        signature: [u8; 64],
+        signature: Option<[u8; 64]>,
     ) -> Result<()> {
         let seeds: &[&[u8]] = &[b"vault", user_id.as_ref(), &[ctx.bumps.pda]];
         let signer_seeds = &[&seeds[..]];
-        let wallet_address_str: String = wallet_address.to_string();
-        let message: String = format!("{}::{}", DOMAIN_SEPARATOR, wallet_address_str);
 
-        verify_signature_syscall(
-            &ctx.accounts.sysvar_instructions,
-            &ATTESTER,
-            message,
-            signature,
-        )?;
+        // At least one validation (whitelist or attester signature) must be present.
+        require!(
+            ctx.accounts.whitelist.is_some() || signature.is_some(),
+            OrbitError::MissingValidation
+        );
+
+        // Whitelist validation: when supplied, it must be active.
+        if let Some(wl) = &ctx.accounts.whitelist {
+            require!(wl.is_active, OrbitError::WhitelistInactive);
+        }
+
+        // Signature validation: when supplied, it must verify against the attester.
+        if let Some(signature) = signature {
+            let wallet_address_str: String = wallet_address.to_string();
+            let message: String = format!("{}::{}", DOMAIN_SEPARATOR, wallet_address_str);
+            verify_signature_syscall(
+                ctx.accounts
+                    .sysvar_instructions
+                    .as_ref()
+                    .ok_or(ProgramError::MissingRequiredSignature)?,
+                &ATTESTER,
+                message,
+                signature,
+            )?;
+        }
 
         let cpi_accounts = Transfer {
             from: ctx.accounts.pda_token_account.to_account_info(),
@@ -364,15 +381,14 @@ pub struct TransferPdaToWallet<'info> {
             wallet_address.as_ref(),
         ],
         bump,
-        constraint = whitelist.is_active @ OrbitError::WhitelistInactive,
     )]
-    pub whitelist: Account<'info, Whitelist>,
+    pub whitelist: Option<Account<'info, Whitelist>>,
 
     pub token_program: Program<'info, Token>,
 
-    /// CHECK: Instructions sysvar; address is constrained. Used in verify_signature_syscall to load the current instruction for ed25519 signature verification.
+    /// CHECK: Instructions sysvar; address is constrained. Loaded in verify_signature_syscall for ed25519 verification when a signature is supplied.
     #[account(address = anchor_lang::solana_program::sysvar::instructions::ID)]
-    pub sysvar_instructions: AccountInfo<'info>,
+    pub sysvar_instructions: Option<AccountInfo<'info>>,
 }
 
 #[error_code]
@@ -381,4 +397,6 @@ pub enum OrbitError {
     UnauthorizedAdmin,
     #[msg("Whitelist is not active")]
     WhitelistInactive,
+    #[msg("At least one of whitelist or attester signature must be provided")]
+    MissingValidation,
 }

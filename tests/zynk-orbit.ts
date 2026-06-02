@@ -974,6 +974,114 @@ describe("Transfer PDA to wallet tests", () => {
       );
     }
   });
+
+  it("Happy path: signature only (no whitelist provided)", async () => {
+    const transferAmount = 100_000;
+    const initialPdaBalance = await getAccount(provider.connection, pdaTokenAccount);
+    const initialWalletBalance = await getAccount(provider.connection, walletTokenAccount);
+
+    const message = `${DOMAIN_SEPARATOR}::${destinationWallet.publicKey.toBase58()}`;
+    const { ed25519Ix, signature } = buildEd25519Ix(message, managerWalletKeypair);
+
+    await program.methods
+      .transferPdaToWallet(
+        toUserId(userId),
+        destinationWallet.publicKey,
+        new BN(transferAmount),
+        Buffer.from(signature).toJSON().data,
+      )
+      .accounts({
+        managerWallet: managerWalletKeypair.publicKey,
+        pda,
+        pdaTokenAccount,
+        walletTokenAccount,
+        whitelist: null as any,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY,
+      })
+      .preInstructions([ed25519Ix])
+      .signers([managerWalletKeypair])
+      .rpc();
+
+    const finalPdaBalance = await getAccount(provider.connection, pdaTokenAccount);
+    const finalWalletBalance = await getAccount(provider.connection, walletTokenAccount);
+
+    assert.equal(
+      Number(finalPdaBalance.amount),
+      Number(initialPdaBalance.amount) - transferAmount,
+      "PDA token account balance should decrease",
+    );
+    assert.equal(
+      Number(finalWalletBalance.amount),
+      Number(initialWalletBalance.amount) + transferAmount,
+      "Destination wallet token account balance should increase",
+    );
+  });
+
+  it("Happy path: whitelist only (no signature provided)", async () => {
+    const transferAmount = 100_000;
+    const initialPdaBalance = await getAccount(provider.connection, pdaTokenAccount);
+    const initialWalletBalance = await getAccount(provider.connection, walletTokenAccount);
+
+    await program.methods
+      .transferPdaToWallet(
+        toUserId(userId),
+        destinationWallet.publicKey,
+        new BN(transferAmount),
+        null,
+      )
+      .accounts({
+        managerWallet: managerWalletKeypair.publicKey,
+        pda,
+        pdaTokenAccount,
+        walletTokenAccount,
+        whitelist: whitelistPda,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        sysvarInstructions: null as any,
+      })
+      .signers([managerWalletKeypair])
+      .rpc();
+
+    const finalPdaBalance = await getAccount(provider.connection, pdaTokenAccount);
+    const finalWalletBalance = await getAccount(provider.connection, walletTokenAccount);
+
+    assert.equal(
+      Number(finalPdaBalance.amount),
+      Number(initialPdaBalance.amount) - transferAmount,
+      "PDA token account balance should decrease",
+    );
+    assert.equal(
+      Number(finalWalletBalance.amount),
+      Number(initialWalletBalance.amount) + transferAmount,
+      "Destination wallet token account balance should increase",
+    );
+  });
+
+  it("Sad path: neither whitelist nor signature provided", async () => {
+    try {
+      await program.methods
+        .transferPdaToWallet(
+          toUserId(userId),
+          destinationWallet.publicKey,
+          new BN(10_000),
+          null,
+        )
+        .accounts({
+          managerWallet: managerWalletKeypair.publicKey,
+          pda,
+          pdaTokenAccount,
+          walletTokenAccount,
+          whitelist: null as any,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          sysvarInstructions: null as any,
+        })
+        .signers([managerWalletKeypair])
+        .rpc();
+      assert.fail("Should have failed when neither validation is provided");
+    } catch (err: unknown) {
+      assert.include(errMsg(err), "MissingValidation");
+    }
+  });
 });
 
 describe("Transfer to LP tests", () => {
