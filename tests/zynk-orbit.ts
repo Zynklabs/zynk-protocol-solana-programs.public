@@ -39,6 +39,15 @@ const errMsg = (e: unknown): string => {
   return String(e);
 };
 
+// Map a human-readable id to the on-chain [u8; 32] user_id: write the UTF-8
+// bytes into a zero-filled 32-byte buffer. The same bytes are used as the PDA
+// seed and as the instruction argument.
+const toUserId = (s: string): number[] => {
+  const buf = Buffer.alloc(32);
+  buf.write(s, 0, "utf-8");
+  return Array.from(buf);
+};
+
 let admin: Keypair;
 let sharedProvider: anchor.AnchorProvider;
 
@@ -48,12 +57,12 @@ const deriveWhitelistPda = (
   wallet: PublicKey,
 ): [PublicKey, number] =>
   PublicKey.findProgramAddressSync(
-    [Buffer.from("whitelist"), Buffer.from(userId, "utf-8"), wallet.toBuffer()],
+    [Buffer.from("whitelist"), Buffer.from(toUserId(userId)), wallet.toBuffer()],
     programId,
   );
 
 const deriveOrbitVaultPda = (programId: PublicKey): [PublicKey, number] =>
-  PublicKey.findProgramAddressSync([Buffer.from("orbit_vault")], programId);
+  PublicKey.findProgramAddressSync([Buffer.from("vault")], programId);
 
 // Idempotent: create the Whitelist PDA if missing; otherwise reactivate it.
 const whitelistBeneficiary = async (
@@ -64,7 +73,7 @@ const whitelistBeneficiary = async (
   const [whitelistPda] = deriveWhitelistPda(program.programId, userId, address);
   try {
     await program.methods
-      .whitelistBeneficiary(userId, address)
+      .whitelistBeneficiary(toUserId(userId), address)
       .accountsPartial({
         whitelist: whitelistPda,
         admin: admin.publicKey,
@@ -75,7 +84,7 @@ const whitelistBeneficiary = async (
   } catch (e) {
     if (!errMsg(e).toLowerCase().includes("already in use")) throw e;
     await program.methods
-      .setWhitelistStatus(userId, address, true)
+      .setWhitelistStatus(toUserId(userId), address, true)
       .accountsPartial({
         whitelist: whitelistPda,
         admin: admin.publicKey,
@@ -94,7 +103,7 @@ const setWhitelistActive = async (
 ): Promise<void> => {
   const [whitelistPda] = deriveWhitelistPda(program.programId, userId, address);
   await program.methods
-    .setWhitelistStatus(userId, address, isActive)
+    .setWhitelistStatus(toUserId(userId), address, isActive)
     .accountsPartial({
       whitelist: whitelistPda,
       admin: admin.publicKey,
@@ -185,7 +194,7 @@ describe("zynk-orbit spend_tokens (delegate flow)", () => {
     await mintTo(provider.connection, approver, mint, user2TokenAccount, approver, 100);
 
     [delegatePda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("spender"), Buffer.from("delegate")],
+      [Buffer.from("vault"), Buffer.from("delegate")],
       program.programId,
     );
 
@@ -203,7 +212,7 @@ describe("zynk-orbit spend_tokens (delegate flow)", () => {
 
   it("Happy path: PDA spends within allowance", async () => {
     await program.methods
-      .spendTokens("delegate", USER_ID, new BN(100_000))
+      .spendTokens("delegate", toUserId(USER_ID), new BN(100_000))
       .accounts({
         managerWallet: managerWalletKeypair.publicKey,
         approverTokenAccount,
@@ -225,7 +234,7 @@ describe("zynk-orbit spend_tokens (delegate flow)", () => {
   it("Sad path: no approve set (new ATA, PDA not delegated)", async () => {
     try {
       await program.methods
-        .spendTokens("delegate", USER_ID, new BN(50))
+        .spendTokens("delegate", toUserId(USER_ID), new BN(50))
         .accounts({
           managerWallet: managerWalletKeypair.publicKey,
           approverTokenAccount: user2TokenAccount,
@@ -249,7 +258,7 @@ describe("zynk-orbit spend_tokens (delegate flow)", () => {
   it("Sad path: spend more than allowance", async () => {
     try {
       await program.methods
-        .spendTokens("delegate", USER_ID, new BN(600_000))
+        .spendTokens("delegate", toUserId(USER_ID), new BN(600_000))
         .accounts({
           managerWallet: managerWalletKeypair.publicKey,
           approverTokenAccount,
@@ -275,7 +284,7 @@ describe("zynk-orbit spend_tokens (delegate flow)", () => {
 
     try {
       await program.methods
-        .spendTokens("delegate", USER_ID, new BN(10_000))
+        .spendTokens("delegate", toUserId(USER_ID), new BN(10_000))
         .accounts({
           managerWallet: managerWalletKeypair.publicKey,
           approverTokenAccount,
@@ -298,7 +307,7 @@ describe("zynk-orbit spend_tokens (delegate flow)", () => {
 
   it("Sad path: allowance exhausted", async () => {
     await program.methods
-      .spendTokens("delegate", USER_ID, new BN(400_000))
+      .spendTokens("delegate", toUserId(USER_ID), new BN(400_000))
       .accounts({
         managerWallet: managerWalletKeypair.publicKey,
         approverTokenAccount,
@@ -312,7 +321,7 @@ describe("zynk-orbit spend_tokens (delegate flow)", () => {
 
     try {
       await program.methods
-        .spendTokens("delegate", USER_ID, new BN(1))
+        .spendTokens("delegate", toUserId(USER_ID), new BN(1))
         .accounts({
           managerWallet: managerWalletKeypair.publicKey,
           approverTokenAccount,
@@ -343,7 +352,7 @@ describe("zynk-orbit spend_tokens (delegate flow)", () => {
     );
     try {
       await program.methods
-        .spendTokens("delegate", USER_ID, new BN(10_000))
+        .spendTokens("delegate", toUserId(USER_ID), new BN(10_000))
         .accounts({
           managerWallet: otherSigner.publicKey,
           approverTokenAccount,
@@ -373,7 +382,7 @@ describe("zynk-orbit spend_tokens (delegate flow)", () => {
     );
     try {
       await program.methods
-        .spendTokens("delegate", unknownUserId, new BN(10_000))
+        .spendTokens("delegate", toUserId(unknownUserId), new BN(10_000))
         .accounts({
           managerWallet: managerWalletKeypair.publicKey,
           approverTokenAccount,
@@ -397,7 +406,7 @@ describe("zynk-orbit spend_tokens (delegate flow)", () => {
 
     try {
       await program.methods
-        .spendTokens("delegate", inactiveUserId, new BN(1_000))
+        .spendTokens("delegate", toUserId(inactiveUserId), new BN(1_000))
         .accounts({
           managerWallet: managerWalletKeypair.publicKey,
           approverTokenAccount,
@@ -434,7 +443,7 @@ describe("PDA spend tests", () => {
   let randomSeed3: string;
   let whitelistPda: PublicKey;
 
-  const pdaRoot = "spender";
+  const pdaRoot = "vault";
 
   before(async () => {
     await provider.connection.confirmTransaction(
@@ -510,7 +519,7 @@ describe("PDA spend tests", () => {
     const transferAmount = 200_000;
 
     await program.methods
-      .spendTokens(randomSeed3, USER_ID, new BN(transferAmount))
+      .spendTokens(randomSeed3, toUserId(USER_ID), new BN(transferAmount))
       .accounts({
         managerWallet: managerWalletKeypair.publicKey,
         approverTokenAccount: customerPda3TokenAccount,
@@ -568,7 +577,7 @@ describe("PDA spend tests", () => {
 
     try {
       await program.methods
-        .spendTokens(randomSeed3, USER_ID, new BN(transferAmount))
+        .spendTokens(randomSeed3, toUserId(USER_ID), new BN(transferAmount))
         .accounts({
           managerWallet: managerWalletKeypair.publicKey,
           approverTokenAccount: customerPda3TokenAccount,
@@ -630,7 +639,7 @@ describe("PDA spend tests", () => {
 
     try {
       await program.methods
-        .spendTokens(randomSeed3, USER_ID, new BN(transferAmount))
+        .spendTokens(randomSeed3, toUserId(USER_ID), new BN(transferAmount))
         .accounts({
           managerWallet: managerWalletKeypair.publicKey,
           approverTokenAccount: wrongPdaTokenAccount,
@@ -673,7 +682,7 @@ describe("Transfer PDA to wallet tests", () => {
 
   const program = anchor.workspace.ZynkOrbit as Program;
 
-  const pdaRoot = "wallet";
+  const pdaRoot = "vault";
   let userId: string;
   let pda: PublicKey;
   let pdaTokenAccount: PublicKey;
@@ -688,7 +697,7 @@ describe("Transfer PDA to wallet tests", () => {
   before(async () => {
     userId = `user_${Math.random().toString(36).substring(7)}`;
     [pda] = PublicKey.findProgramAddressSync(
-      [Buffer.from(pdaRoot), Buffer.from(userId)],
+      [Buffer.from(pdaRoot), Buffer.from(toUserId(userId))],
       program.programId,
     );
 
@@ -769,7 +778,7 @@ describe("Transfer PDA to wallet tests", () => {
 
     await program.methods
       .transferPdaToWallet(
-        userId,
+        toUserId(userId),
         destinationWallet.publicKey,
         new BN(transferAmount),
         Buffer.from(signature).toJSON().data,
@@ -811,7 +820,7 @@ describe("Transfer PDA to wallet tests", () => {
     try {
       await program.methods
         .transferPdaToWallet(
-          userId,
+          toUserId(userId),
           destinationWallet.publicKey,
           new BN(transferAmount),
           Buffer.from(signature).toJSON().data,
@@ -854,7 +863,7 @@ describe("Transfer PDA to wallet tests", () => {
     try {
       await program.methods
         .transferPdaToWallet(
-          userId,
+          toUserId(userId),
           destinationWallet.publicKey,
           new BN(transferAmount),
           Buffer.from(signature).toJSON().data,
@@ -895,7 +904,7 @@ describe("Transfer PDA to wallet tests", () => {
     try {
       await program.methods
         .transferPdaToWallet(
-          userId,
+          toUserId(userId),
           wrongWallet.publicKey,
           new BN(transferAmount),
           Buffer.from(signature).toJSON().data,
@@ -940,7 +949,7 @@ describe("Transfer PDA to wallet tests", () => {
     try {
       await program.methods
         .transferPdaToWallet(
-          ghostUserId,
+          toUserId(ghostUserId),
           destinationWallet.publicKey,
           new BN(transferAmount),
           Buffer.from(signature).toJSON().data,
@@ -1048,7 +1057,7 @@ describe("Transfer to LP tests", () => {
     const initialBalance = await getAccount(provider.connection, orbitVaultTokenAccount);
     const initialRecipientBalance = await getAccount(provider.connection, recipientTokenAccount);
     await program.methods
-      .transferToLp(USER_ID, new BN(transferAmount))
+      .transferToLp(toUserId(USER_ID), new BN(transferAmount))
       .accounts({
         managerWallet: managerWalletKeypair.publicKey,
         orbitVault: orbitVaultPda,
@@ -1091,7 +1100,7 @@ describe("Transfer to LP tests", () => {
         recipientAccount.publicKey,
       );
       await program.methods
-        .transferToLp(USER_ID, new BN(transferAmount))
+        .transferToLp(toUserId(USER_ID), new BN(transferAmount))
         .accounts({
           managerWallet: managerWalletKeypair.publicKey,
           orbitVault: orbitVaultPda,
@@ -1122,7 +1131,7 @@ describe("Transfer to LP tests", () => {
     );
     try {
       await program.methods
-        .transferToLp(USER_ID, new BN(transferAmount))
+        .transferToLp(toUserId(USER_ID), new BN(transferAmount))
         .accounts({
           managerWallet: otherSigner.publicKey,
           orbitVault: orbitVaultPda,
@@ -1152,7 +1161,7 @@ describe("Transfer to LP tests", () => {
     );
     try {
       await program.methods
-        .transferToLp(ghostUserId, new BN(transferAmount))
+        .transferToLp(toUserId(ghostUserId), new BN(transferAmount))
         .accounts({
           managerWallet: managerWalletKeypair.publicKey,
           orbitVault: orbitVaultPda,
@@ -1176,7 +1185,7 @@ describe("Transfer to LP tests", () => {
 
     try {
       await program.methods
-        .transferToLp(inactiveUserId, new BN(10_000))
+        .transferToLp(toUserId(inactiveUserId), new BN(10_000))
         .accounts({
           managerWallet: managerWalletKeypair.publicKey,
           orbitVault: orbitVaultPda,
@@ -1242,7 +1251,7 @@ describe("deposit tests", () => {
     });
 
     await program.methods
-      .deposit(new BN(depositAmount), requestId, USER_ID)
+      .deposit(new BN(depositAmount), requestId, toUserId(USER_ID))
       .accounts({
         spender: spender.publicKey,
         spenderTokenAccount,
@@ -1297,7 +1306,7 @@ describe("deposit tests", () => {
     });
 
     await program.methods
-      .deposit(new BN(depositAmount), requestId, USER_ID)
+      .deposit(new BN(depositAmount), requestId, toUserId(USER_ID))
       .accounts({
         spender: randomSpender.publicKey,
         spenderTokenAccount: randomSpenderAta,
@@ -1325,7 +1334,7 @@ describe("deposit tests", () => {
 
     try {
       await program.methods
-        .deposit(new BN(10_000), "req-3", USER_ID)
+        .deposit(new BN(10_000), "req-3", toUserId(USER_ID))
         .accounts({
           spender: interloper.publicKey,
           spenderTokenAccount,
@@ -1362,7 +1371,7 @@ describe("deposit tests", () => {
 
     try {
       await program.methods
-        .deposit(new BN(10_000), "req-4", USER_ID)
+        .deposit(new BN(10_000), "req-4", toUserId(USER_ID))
         .accounts({
           spender: spender.publicKey,
           spenderTokenAccount,
@@ -1392,7 +1401,7 @@ describe("deposit tests", () => {
 
     try {
       await program.methods
-        .deposit(new BN(1_000), "req-5", USER_ID)
+        .deposit(new BN(1_000), "req-5", toUserId(USER_ID))
         .accounts({
           spender: broke.publicKey,
           spenderTokenAccount: brokeAta,
@@ -1417,7 +1426,7 @@ describe("deposit tests", () => {
     const [ghostWhitelist] = deriveWhitelistPda(program.programId, ghostUserId, receiverOwner);
     try {
       await program.methods
-        .deposit(new BN(1_000), "req-ghost", ghostUserId)
+        .deposit(new BN(1_000), "req-ghost", toUserId(ghostUserId))
         .accounts({
           spender: spender.publicKey,
           spenderTokenAccount,
@@ -1440,7 +1449,7 @@ describe("deposit tests", () => {
 
     try {
       await program.methods
-        .deposit(new BN(1_000), "req-inactive", inactiveUserId)
+        .deposit(new BN(1_000), "req-inactive", toUserId(inactiveUserId))
         .accounts({
           spender: spender.publicKey,
           spenderTokenAccount,
@@ -1468,7 +1477,7 @@ describe("whitelist_beneficiary instruction tests", () => {
     const [whitelistPda] = deriveWhitelistPda(program.programId, userId, wallet);
 
     await program.methods
-      .whitelistBeneficiary(userId, wallet)
+      .whitelistBeneficiary(toUserId(userId), wallet)
       .accountsPartial({
         whitelist: whitelistPda,
         admin: admin.publicKey,
@@ -1480,7 +1489,7 @@ describe("whitelist_beneficiary instruction tests", () => {
     const wl: any = await (program.account as any).whitelist.fetch(whitelistPda);
     assert.equal(wl.isActive, true);
     assert.equal(wl.address.toBase58(), wallet.toBase58());
-    assert.equal(wl.userId, userId);
+    assert.deepEqual(Array.from(wl.userId), toUserId(userId));
     assert.isAbove(wl.bump, 0);
   });
 
@@ -1498,7 +1507,7 @@ describe("whitelist_beneficiary instruction tests", () => {
 
     try {
       await program.methods
-        .whitelistBeneficiary(userId, wallet)
+        .whitelistBeneficiary(toUserId(userId), wallet)
         .accountsPartial({
           whitelist: whitelistPda,
           admin: interloper.publicKey,
@@ -1518,7 +1527,7 @@ describe("whitelist_beneficiary instruction tests", () => {
     const [whitelistPda] = deriveWhitelistPda(program.programId, userId, wallet);
 
     await program.methods
-      .whitelistBeneficiary(userId, wallet)
+      .whitelistBeneficiary(toUserId(userId), wallet)
       .accountsPartial({
         whitelist: whitelistPda,
         admin: admin.publicKey,
@@ -1529,7 +1538,7 @@ describe("whitelist_beneficiary instruction tests", () => {
 
     try {
       await program.methods
-        .whitelistBeneficiary(userId, wallet)
+        .whitelistBeneficiary(toUserId(userId), wallet)
         .accountsPartial({
           whitelist: whitelistPda,
           admin: admin.publicKey,
@@ -1555,7 +1564,7 @@ describe("set_whitelist_status instruction tests", () => {
     const whitelistPda = await whitelistBeneficiary(program, userId, wallet);
 
     await program.methods
-      .setWhitelistStatus(userId, wallet, false)
+      .setWhitelistStatus(toUserId(userId), wallet, false)
       .accountsPartial({
         whitelist: whitelistPda,
         admin: admin.publicKey,
@@ -1567,7 +1576,7 @@ describe("set_whitelist_status instruction tests", () => {
     assert.equal(wl.isActive, false);
 
     await program.methods
-      .setWhitelistStatus(userId, wallet, true)
+      .setWhitelistStatus(toUserId(userId), wallet, true)
       .accountsPartial({
         whitelist: whitelistPda,
         admin: admin.publicKey,
@@ -1594,7 +1603,7 @@ describe("set_whitelist_status instruction tests", () => {
 
     try {
       await program.methods
-        .setWhitelistStatus(userId, wallet, false)
+        .setWhitelistStatus(toUserId(userId), wallet, false)
         .accountsPartial({
           whitelist: whitelistPda,
           admin: interloper.publicKey,
@@ -1614,7 +1623,7 @@ describe("set_whitelist_status instruction tests", () => {
 
     try {
       await program.methods
-        .setWhitelistStatus(userId, wallet, false)
+        .setWhitelistStatus(toUserId(userId), wallet, false)
         .accountsPartial({
           whitelist: whitelistPda,
           admin: admin.publicKey,
