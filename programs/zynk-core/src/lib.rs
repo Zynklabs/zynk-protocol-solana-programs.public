@@ -15,10 +15,10 @@ use anchor_lang::solana_program::{
     hash::hash,
 };
 
-declare_id!("ZYNKuSAuhsfPU7Ky9jT8TNXRJLQSeLbBBAHrq279PTk");
+declare_id!("ZYNKctWoaYeAdN9szq1joeu6rRPf7LK72pUurkcBpBY");
 
 pub const DOMAIN_SEPARATOR: u64 = 115111123810997;
-pub const INITIAL_MANAGER: Pubkey = pubkey!("CRYpBZS8fFHBMTmypUoxXWdiQ8jVcnEVukGzNvuzRUeb");
+pub const INITIAL_MANAGER: Pubkey = pubkey!("FnN6veEuyCr3R88iHxZYFRPwq22CZQwPMXzaTomeWWX5");
 
 
 #[error_code]
