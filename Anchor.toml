@@ -7,6 +7,11 @@ zynk_core = "CDhMbu6bYMLPxCEDv4V7AXBvgx4gqaMfLit4JTZFtd6y"
 
 [programs.devnet]
 zynk_core = "CDhMbu6bYMLPxCEDv4V7AXBvgx4gqaMfLit4JTZFtd6y"
+zynk_orbit = "BeaxD6e6Gut7b7UanFDoKZ5ndY77aSz8tAAVPKHF9PNx"
+
+[programs.devnet]
+zynk_core = "ZynkcJyxiBTs9ePTQzHh7ckDDnwrLjuNVUbisF6hC7K"
+zynk_orbit = "Zynko1Dup7Cv2quEqLRuCs9Ds8vwELrWZk4eTLFXVCL"
 
 [registry]
 url = "https://api.apr.dev"

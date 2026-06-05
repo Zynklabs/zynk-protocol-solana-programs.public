@@ -1927,7 +1927,7 @@ describe("zynk-core", () => {
     );
   });
 
-  it("Should fail when wrong PDV is used to replenish", async () => {
+  it("Should fail when wrong partner deposit vault is used to replenish", async () => {
     // Create a wrong token account (not the one stored in orderTracker)
     // Must manually create since PDA can't own an ATA
     const partnerId = Buffer.alloc(32);
@@ -2160,7 +2160,7 @@ describe("zynk-core", () => {
     }
   });
 
-  it("Should fail when deposit vault has insufficient balance", async () => {
+  it("Should fail when partner deposit vault has insufficient balance", async () => {
     const amount = new anchor.BN(100000000000);
 
     // Create a new order since previous one is closed
@@ -4838,6 +4838,7 @@ describe("zynk-core", () => {
         zynkOpVault.toString(),
         EthereumzynkOpVaultAddress,
         EthereumRecipientAddress,
+        txnId,
         EthereumTxnOut,
         BridgeTxnOut,
         "USDC",
