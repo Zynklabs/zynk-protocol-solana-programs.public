@@ -118,7 +118,8 @@ pub mod zynk_orbit {
     // Ovault -> Whitelisted beneficiary / Order source
     pub fn disburse(ctx: Context<Disburse>, amount: u64) -> Result<()> {
         let record = &ctx.accounts.record;
-        require!(amount >= record.value, OrbitError::DisbursalDeficit);
+        // NOTE: applies for `collect()` flow only
+        require!(record.value == 0 || amount == record.value, OrbitError::Inequality);
 
         let seeds: &[&[u8]] = &[VAULT_SEED, b"orbit", &[ctx.bumps.ovault]];
         let signer_seeds = &[&seeds[..]];
@@ -137,7 +138,7 @@ pub mod zynk_orbit {
         );
         token_interface::transfer_checked(cpi_ctx, amount, ctx.accounts.mint.decimals)?;
 
-        if ctx.accounts.record.value > 0 {
+        if record.value > 0 {
             close_account(record, &ctx.accounts.manager)?;
         }
 
@@ -296,8 +297,8 @@ pub enum OrbitError {
     UnauthorizedAdmin,
     #[msg("Unauthorized manager")]
     UnauthorizedManager,
-    #[msg("Disbursal amount is less than the tracked order amount")]
-    DisbursalDeficit,
+    #[msg("Disbursal amount should be equal to deposited")]
+    Inequality,
     #[msg("Invalid account")]
     InvalidAccount,
     #[msg("Invalid token mint")]
