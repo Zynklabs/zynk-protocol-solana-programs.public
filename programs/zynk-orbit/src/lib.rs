@@ -1,7 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::{
     pubkey::Pubkey,
-    program_error::ProgramError,
     system_program::ID as SYSTEM_PROGRAM_ID,
 };
 use anchor_spl::token_interface::{
@@ -39,19 +38,13 @@ pub struct Record {
 }
 
 #[event]
-pub struct DepositEvent {
+pub struct Deposit {
     pub request_id: String,
     pub user_id: [u8; 32],
     pub from: Pubkey,
     pub to: Pubkey,
     pub amount: u64,
     pub token: Pubkey,
-    pub domain_separator: u64,
-}
-
-#[event]
-pub struct RecordsClosed {
-    pub ids: Vec<[u8; 32]>,
     pub domain_separator: u64,
 }
 
@@ -83,7 +76,7 @@ pub mod zynk_orbit {
         let cpi_ctx = CpiContext::new(ctx.accounts.token_program.to_account_info(), cpi_accounts);
         token_interface::transfer_checked(cpi_ctx, amount, ctx.accounts.mint.decimals)?;
 
-        emit!(DepositEvent {
+        emit!(Deposit {
             request_id,
             user_id,
             from: ctx.accounts.signer.key(),
@@ -127,7 +120,7 @@ pub mod zynk_orbit {
     // Ovault -> Whitelisted beneficiary / Order source
     pub fn disburse(ctx: Context<Disburse>, amount: u64) -> Result<()> {
         let record = &ctx.accounts.record;
-        require!(amount >= record.value, OrbitError::DisbursementDeficit);
+        require!(amount >= record.value, OrbitError::DisbursalDeficit);
 
         let seeds: &[&[u8]] = &[VAULT_SEED, b"orbit", &[ctx.bumps.ovault]];
         let signer_seeds = &[&seeds[..]];
@@ -153,8 +146,8 @@ pub mod zynk_orbit {
         Ok(())
     }
 
-    pub fn whitelist_beneficiary(
-        ctx: Context<WhitelistBeneficiary>,
+    pub fn whitelist(
+        ctx: Context<Whitelist>,
         user_id: [u8; 32],
         public_key: Pubkey,
     ) -> Result<()> {
@@ -166,8 +159,8 @@ pub mod zynk_orbit {
         Ok(())
     }
 
-    pub fn revoke_beneficiary(
-        _ctx: Context<RevokeBeneficiary>,
+    pub fn revoke(
+        _ctx: Context<Revoke>,
     ) -> Result<()> {
 
         Ok(())
@@ -178,10 +171,10 @@ pub mod zynk_orbit {
 #[derive(Accounts)]
 #[instruction(amount: u64, user_id: [u8; 32])]
 pub struct Deposit<'info> {
-    #[account(mut, constraint = source_token_account.owner == signer.key() @ ErrorCode::ConstraintOwner)]
+    #[account(mut, constraint = source_token_account.owner == signer.key() @ OrbitError::InvalidAccount)]
     pub source_token_account: InterfaceAccount<'info, TokenAccount>,
 
-    #[account(mut, constraint = destination_token_account.owner == ZOV @ ErrorCode::ConstraintOwner)]
+    #[account(mut, constraint = destination_token_account.owner == ZOV @ OrbitError::InvalidAccount)]
     pub destination_token_account: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
@@ -192,6 +185,8 @@ pub struct Deposit<'info> {
 
     #[account(
         constraint = ALLOWED_MINTS.contains(&mint.key()) @ OrbitError::InvalidTokenMint,
+        constraint = mint.key() == source_token_account.mint @ OrbitError::InvalidTokenMint,
+        constraint = mint.key() == destination_token_account.mint @ OrbitError::InvalidTokenMint,
     )]
     pub mint: InterfaceAccount<'info, Mint>,
 
@@ -204,13 +199,13 @@ pub struct Deposit<'info> {
 #[derive(Accounts)]
 #[instruction(vault_id: [u8; 32], order_id: [u8; 32])]
 pub struct Collect<'info> {
-    #[account(mut, constraint = source_token_account.mint == destination_token_account.mint)]
+    #[account(mut)]
     pub source_token_account: InterfaceAccount<'info, TokenAccount>,
 
-    #[account(mut, constraint = destination_token_account.owner == ZOV @ ErrorCode::ConstraintOwner)]
+    #[account(mut, constraint = destination_token_account.owner == ZOV @ OrbitError::InvalidAccount)]
     pub destination_token_account: InterfaceAccount<'info, TokenAccount>,
 
-    /// CHECK: PDA authority
+    /// CHECK: Vault - verified by seeds
     #[account(
         seeds = [VAULT_SEED, vault_id.as_ref()],
         bump
@@ -228,10 +223,12 @@ pub struct Collect<'info> {
 
     #[account(
         constraint = ALLOWED_MINTS.contains(&mint.key()) @ OrbitError::InvalidTokenMint,
+        constraint = mint.key() == source_token_account.mint @ OrbitError::InvalidTokenMint,
+        constraint = mint.key() == destination_token_account.mint @ OrbitError::InvalidTokenMint,
     )]
     pub mint: InterfaceAccount<'info, Mint>,
 
-    #[account(mut, constraint = manager.key() == MANAGER @ ErrorCode::ConstraintOwner)]
+    #[account(mut, constraint = manager.key() == MANAGER @ OrbitError::UnauthorizedManager)]
     pub manager: Signer<'info>,
 
     pub token_program: Interface<'info, TokenInterface>,
@@ -240,32 +237,31 @@ pub struct Collect<'info> {
 
 #[derive(Accounts)]
 pub struct Disburse<'info> {
-    #[account(mut, constraint = source_token_account.owner == ovault.key())]
+    #[account(mut, constraint = source_token_account.owner == ovault.key() @ OrbitError::InvalidAccount)]
     pub source_token_account: InterfaceAccount<'info, TokenAccount>,
 
-    #[account(mut, constraint = destination_token_account.owner == record.public_key @ ErrorCode::ConstraintOwner)]
+    #[account(mut, constraint = destination_token_account.owner == record.public_key @ OrbitError::InvalidAccount)]
     pub destination_token_account: InterfaceAccount<'info, TokenAccount>,
 
-    // /// CHECK: Orbit vault PDA authority — verified by seeds [VAULT_SEED, ORBIT_SEED]
-    // #[account(seeds = [VAULT_SEED, ORBIT_SEED], bump)]
-    // pub vault: UncheckedAccount<'info>,
-
+    /// CHECK: Ovault - verified by seeds
     #[account(
         mut,
         seeds = [VAULT_SEED, b"orbit"],
         bump
     )]
-    pub ovault: InterfaceAccount<'info, TokenAccount>,
+    pub ovault: UncheckedAccount<'info>,
 
     #[account(mut)]
     pub record: Account<'info, Record>,
 
     #[account(
         constraint = ALLOWED_MINTS.contains(&mint.key()) @ OrbitError::InvalidTokenMint,
+        constraint = mint.key() == source_token_account.mint @ OrbitError::InvalidTokenMint,
+        constraint = mint.key() == destination_token_account.mint @ OrbitError::InvalidTokenMint,
     )]
     pub mint: InterfaceAccount<'info, Mint>,
 
-    #[account(mut, constraint = manager.key() == MANAGER @ ErrorCode::ConstraintOwner)]
+    #[account(mut, constraint = manager.key() == MANAGER @ OrbitError::UnauthorizedManager)]
     pub manager: Signer<'info>,
 
     pub token_program: Interface<'info, TokenInterface>,
@@ -274,7 +270,7 @@ pub struct Disburse<'info> {
 
 #[derive(Accounts)]
 #[instruction(user_id: [u8; 32], public_key: Pubkey)]
-pub struct WhitelistBeneficiary<'info> {
+pub struct Whitelist<'info> {
     #[account(
         init,
         payer = admin,
@@ -294,7 +290,7 @@ pub struct WhitelistBeneficiary<'info> {
 }
 
 #[derive(Accounts)]
-pub struct RevokeBeneficiary<'info> {
+pub struct Revoke<'info> {
     #[account(
         mut,
         seeds = [USER_SEED, record.key.as_ref(), record.public_key.as_ref()],
@@ -316,12 +312,10 @@ pub struct RevokeBeneficiary<'info> {
 pub enum OrbitError {
     #[msg("Unauthorized admin")]
     UnauthorizedAdmin,
-    #[msg("Disburse amount is less than the tracked order amount")]
-    DisbursementDeficit,
-    #[msg("Record not found")]
-    MissingRecord,
-    #[msg("Invalid order")]
-    InvalidOrder,
+    #[msg("Unauthorized manager")]
+    UnauthorizedManager,
+    #[msg("Disbursal amount is less than the tracked order amount")]
+    DisbursalDeficit,
     #[msg("Invalid account")]
     InvalidAccount,
     #[msg("Invalid token mint")]
