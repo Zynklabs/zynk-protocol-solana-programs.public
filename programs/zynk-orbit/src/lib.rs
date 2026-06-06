@@ -25,20 +25,18 @@ pub const ALLOWED_MINTS: [Pubkey; 2]  = [
 ];
 
 pub const VAULT_SEED: &[u8] = b"vault";
-pub const ORDER_SEED: &[u8] = b"order";
-pub const USER_SEED: &[u8] = b"user";
-
+pub const RECORD_SEED: &[u8] = b"record";
 
 #[account]
 #[derive(InitSpace)]
 pub struct Record {
     pub key: [u8; 32],
-    pub value: u64,     // NOTE: For `user` PDAs, no `value` update required (for now)
+    pub value: u64,        // NOTE: For `deposit()`, no `value` update required (for now)
     pub public_key: Pubkey,
 }
 
 #[event]
-pub struct Deposit {
+pub struct Deposited {
     pub request_id: String,
     pub user_id: [u8; 32],
     pub from: Pubkey,
@@ -76,7 +74,7 @@ pub mod zynk_orbit {
         let cpi_ctx = CpiContext::new(ctx.accounts.token_program.to_account_info(), cpi_accounts);
         token_interface::transfer_checked(cpi_ctx, amount, ctx.accounts.mint.decimals)?;
 
-        emit!(Deposit {
+        emit!(Deposited {
             request_id,
             user_id,
             from: ctx.accounts.signer.key(),
@@ -91,7 +89,7 @@ pub mod zynk_orbit {
 
     // External signers + delegated vault -> ZOV
     // Any vault -> ZOV
-    pub fn collect(ctx: Context<Collect>, vault_id: [u8; 32], order_id: [u8; 32], amount: u64) -> Result<()> {
+    pub fn collect(ctx: Context<Collect>, vault_id: [u8; 32], amount: u64) -> Result<()> {
         let seeds: &[&[u8]] = &[VAULT_SEED, vault_id.as_ref(), &[ctx.bumps.spender]];
         let signer_seeds = &[&seeds[..]];
 
@@ -110,7 +108,7 @@ pub mod zynk_orbit {
         token_interface::transfer_checked(cpi_ctx, amount, ctx.accounts.mint.decimals)?;
 
         let record = &mut ctx.accounts.record;
-        record.key = order_id;
+        record.key = vault_id;
         record.value = amount;
         record.public_key = ctx.accounts.source_token_account.owner;
 
@@ -178,7 +176,7 @@ pub struct Deposit<'info> {
     pub destination_token_account: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
-        seeds = [USER_SEED, user_id.as_ref(), signer.key().as_ref()],
+        seeds = [RECORD_SEED, user_id.as_ref(), signer.key().as_ref()],
         bump,
     )]
     pub record: Account<'info, Record>,
@@ -197,7 +195,7 @@ pub struct Deposit<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(vault_id: [u8; 32], order_id: [u8; 32])]
+#[instruction(vault_id: [u8; 32])]
 pub struct Collect<'info> {
     #[account(mut)]
     pub source_token_account: InterfaceAccount<'info, TokenAccount>,
@@ -212,13 +210,7 @@ pub struct Collect<'info> {
     )]
     pub spender: UncheckedAccount<'info>,
 
-    #[account(
-        init,
-        payer = manager,
-        space = 8 + Record::INIT_SPACE,
-        seeds = [ORDER_SEED, order_id.as_ref()],
-        bump
-    )]
+    #[account(mut)]
     pub record: Account<'info, Record>,
 
     #[account(
@@ -275,15 +267,12 @@ pub struct Whitelist<'info> {
         init,
         payer = admin,
         space = 8 + Record::INIT_SPACE,
-        seeds = [USER_SEED, user_id.as_ref(), public_key.as_ref()],
+        seeds = [RECORD_SEED, user_id.as_ref(), public_key.as_ref()],
         bump
     )]
     pub record: Account<'info, Record>,
 
-    #[account(
-        mut,
-        constraint = admin.key() == ADMIN @ OrbitError::UnauthorizedAdmin
-    )]
+    #[account(mut, constraint = admin.key() == ADMIN @ OrbitError::UnauthorizedAdmin)]
     pub admin: Signer<'info>,
 
     pub system_program: Program<'info, System>,
@@ -291,17 +280,10 @@ pub struct Whitelist<'info> {
 
 #[derive(Accounts)]
 pub struct Revoke<'info> {
-    #[account(
-        mut,
-        seeds = [USER_SEED, record.key.as_ref(), record.public_key.as_ref()],
-        bump,
-        close = admin
-    )]
+    #[account(mut, close = admin)]
     pub record: Account<'info, Record>,
 
-    #[account(
-        constraint = admin.key() == ADMIN @ OrbitError::UnauthorizedAdmin
-    )]
+    #[account(mut, constraint = admin.key() == ADMIN @ OrbitError::UnauthorizedAdmin)]
     pub admin: Signer<'info>,
 
     pub system_program: Program<'info, System>,
