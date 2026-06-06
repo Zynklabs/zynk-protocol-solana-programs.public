@@ -117,7 +117,7 @@ pub mod zynk_orbit {
 
     // Ovault -> Whitelisted beneficiary / Order source
     pub fn disburse(ctx: Context<Disburse>, amount: u64) -> Result<()> {
-        let record = &ctx.accounts.record;
+        let record = &mut ctx.accounts.record;
         // NOTE: applies for `collect()` flow only
         require!(record.value == 0 || amount == record.value, OrbitError::Inequality);
 
@@ -139,7 +139,7 @@ pub mod zynk_orbit {
         token_interface::transfer_checked(cpi_ctx, amount, ctx.accounts.mint.decimals)?;
 
         if record.value > 0 {
-            close_account(record, &ctx.accounts.manager)?;
+            record.value = u64::MAX;
         }
 
         Ok(())
