@@ -109,7 +109,7 @@ pub mod zynk_orbit {
 
         let record = &mut ctx.accounts.record;
         record.key = vault_id;
-        record.value = amount;
+        record.value = record.value.checked_add(amount).ok_or(ProgramError::ArithmeticOverflow)?;
         record.public_key = ctx.accounts.source_token_account.owner;
 
         Ok(())
@@ -118,8 +118,8 @@ pub mod zynk_orbit {
     // Ovault -> Whitelisted beneficiary / Order source
     pub fn disburse(ctx: Context<Disburse>, amount: u64) -> Result<()> {
         let record = &mut ctx.accounts.record;
-        // NOTE: applies for `collect()` flow only
-        require!(record.value == 0 || amount == record.value, OrbitError::Inequality);
+        // NOTE: equality check applies for `collect()` flow only
+        require!(record.value == u64::MAX || amount == record.value, OrbitError::Inequality);
 
         let seeds: &[&[u8]] = &[VAULT_SEED, b"orbit", &[ctx.bumps.ovault]];
         let signer_seeds = &[&seeds[..]];
@@ -138,8 +138,8 @@ pub mod zynk_orbit {
         );
         token_interface::transfer_checked(cpi_ctx, amount, ctx.accounts.mint.decimals)?;
 
-        if record.value > 0 {
-            record.value = u64::MAX;
+        if record.value != u64::MAX {
+            record.value = 0
         }
 
         Ok(())
@@ -153,6 +153,7 @@ pub mod zynk_orbit {
         let record = &mut ctx.accounts.record;
 
         record.key = user_id;
+        record.value = u64::MAX;
         record.public_key = public_key;
 
         Ok(())
