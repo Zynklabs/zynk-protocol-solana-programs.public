@@ -31,8 +31,8 @@ pub const RECORD_SEED: &[u8] = b"record";
 #[account]
 #[derive(InitSpace)]
 pub struct Record {
-    pub key: [u8; 32],
-    pub public_key: Pubkey,
+    pub key: Pubkey,
+    pub user_id: [u8; 32],
 }
 
 #[account]
@@ -139,7 +139,7 @@ pub mod zynk_orbit {
 
         emit!(TxEvent {
             event_name: String::from("collect"),
-            user_id: ctx.accounts.record.key,
+            user_id: ctx.accounts.record.user_id,
             from_owner: ctx.accounts.source_token_account.owner.key(),
             to_owner: ctx.accounts.destination_token_account.owner.key(),
             from: ctx.accounts.source_token_account.key(),
@@ -158,7 +158,7 @@ pub mod zynk_orbit {
         let record = &mut ctx.accounts.record;
 
         if let Some(order) = ctx.accounts.order.as_ref() {
-            require!(order.public_key == record.public_key, OrbitError::InvalidAccount);
+            require!(order.public_key == record.key, OrbitError::InvalidAccount);
             require!(order.amount == amount, OrbitError::Inequality);
             close_account(order, &ctx.accounts.manager)?;
         }
@@ -182,7 +182,7 @@ pub mod zynk_orbit {
 
         emit!(TxEvent {
             event_name: String::from("disburse"),
-            user_id: record.key,
+            user_id: record.user_id,
             from_owner: ctx.accounts.source_token_account.owner.key(),
             to_owner: ctx.accounts.destination_token_account.owner.key(),
             from: ctx.accounts.source_token_account.key(),
@@ -203,8 +203,8 @@ pub mod zynk_orbit {
     ) -> Result<()> {
         let record = &mut ctx.accounts.record;
 
-        record.key = user_id;
-        record.public_key = public_key;
+        record.key = public_key;
+        record.user_id = user_id;
 
         emit!(AxEvent {
             event_name: String::from("whitelist"),
@@ -223,8 +223,8 @@ pub mod zynk_orbit {
 
         emit!(AxEvent {
             event_name: String::from("revoke"),
-            user_id: record.key,
-            public_key: record.public_key,
+            user_id: record.user_id,
+            public_key: record.key,
             domain_separator: DOMAIN_SEPARATOR,
         });
 
@@ -308,7 +308,7 @@ pub struct Disburse<'info> {
     #[account(mut, constraint = source_token_account.owner == ovault.key() @ OrbitError::InvalidAccount)]
     pub source_token_account: InterfaceAccount<'info, TokenAccount>,
 
-    #[account(mut, constraint = destination_token_account.owner == record.public_key @ OrbitError::InvalidAccount)]
+    #[account(mut, constraint = destination_token_account.owner == record.key @ OrbitError::InvalidAccount)]
     pub destination_token_account: InterfaceAccount<'info, TokenAccount>,
 
     /// CHECK: Ovault - verified by seeds
