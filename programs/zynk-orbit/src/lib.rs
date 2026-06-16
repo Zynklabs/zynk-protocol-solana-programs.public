@@ -25,13 +25,21 @@ pub const ALLOWED_MINTS: [Pubkey; 2]  = [
 ];
 
 pub const VAULT_SEED: &[u8] = b"vault";
+pub const ORDER_SEED: &[u8] = b"order";
 pub const RECORD_SEED: &[u8] = b"record";
 
 #[account]
 #[derive(InitSpace)]
 pub struct Record {
     pub key: [u8; 32],
-    pub value: u64,        // NOTE: For `deposit()`, no `value` update required (for now)
+    pub public_key: Pubkey,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct Order {
+    pub order_id: [u8; 32],
+    pub amount: u64,
     pub public_key: Pubkey,
 }
 
@@ -89,7 +97,7 @@ pub mod zynk_orbit {
 
     // External signers + delegated vault -> ZOV
     // Any vault -> ZOV
-    pub fn collect(ctx: Context<Collect>, vault_id: [u8; 32], amount: u64) -> Result<()> {
+    pub fn collect(ctx: Context<Collect>, vault_id: [u8; 32], order_id: [u8; 32], amount: u64) -> Result<()> {
         let seeds: &[&[u8]] = &[VAULT_SEED, vault_id.as_ref(), &[ctx.bumps.spender]];
         let signer_seeds = &[&seeds[..]];
 
@@ -107,10 +115,10 @@ pub mod zynk_orbit {
         );
         token_interface::transfer_checked(cpi_ctx, amount, ctx.accounts.mint.decimals)?;
 
-        let record = &mut ctx.accounts.record;
-        record.key = vault_id;
-        record.value = record.value.checked_add(amount).ok_or(ProgramError::ArithmeticOverflow)?;
-        record.public_key = ctx.accounts.source_token_account.owner;
+        let order = &mut ctx.accounts.order;
+        order.order_id = order_id;
+        order.amount = order.amount.checked_add(amount).ok_or(ProgramError::ArithmeticOverflow)?;
+        order.public_key = ctx.accounts.source_token_account.owner;
 
         Ok(())
     }
@@ -118,8 +126,12 @@ pub mod zynk_orbit {
     // Ovault -> Whitelisted beneficiary / Order source
     pub fn disburse(ctx: Context<Disburse>, amount: u64) -> Result<()> {
         let record = &mut ctx.accounts.record;
-        // NOTE: equality check applies for `collect()` flow only
-        require!(record.value == u64::MAX || amount == record.value, OrbitError::Inequality);
+
+        if let Some(order) = ctx.accounts.order.as_ref() {
+            require!(order.public_key == record.public_key, OrbitError::InvalidAccount);
+            require!(order.amount == amount, OrbitError::Inequality);
+            close_account(order, &ctx.accounts.manager)?;
+        }
 
         let seeds: &[&[u8]] = &[VAULT_SEED, b"orbit", &[ctx.bumps.ovault]];
         let signer_seeds = &[&seeds[..]];
@@ -138,10 +150,6 @@ pub mod zynk_orbit {
         );
         token_interface::transfer_checked(cpi_ctx, amount, ctx.accounts.mint.decimals)?;
 
-        if record.value != u64::MAX {
-            record.value = 0
-        }
-
         Ok(())
     }
 
@@ -153,7 +161,6 @@ pub mod zynk_orbit {
         let record = &mut ctx.accounts.record;
 
         record.key = user_id;
-        record.value = u64::MAX;
         record.public_key = public_key;
 
         Ok(())
@@ -197,7 +204,7 @@ pub struct Deposit<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(vault_id: [u8; 32])]
+#[instruction(vault_id: [u8; 32], order_id: [u8; 32])]
 pub struct Collect<'info> {
     #[account(mut)]
     pub source_token_account: InterfaceAccount<'info, TokenAccount>,
@@ -214,6 +221,15 @@ pub struct Collect<'info> {
 
     #[account(mut)]
     pub record: Account<'info, Record>,
+
+    #[account(
+        init,
+        payer = manager,
+        space = 8 + Order::INIT_SPACE,
+        seeds = [ORDER_SEED, order_id.as_ref()],
+        bump
+    )]
+    pub order: Account<'info, Order>,
 
     #[account(
         constraint = ALLOWED_MINTS.contains(&mint.key()) @ OrbitError::InvalidTokenMint,
@@ -247,6 +263,9 @@ pub struct Disburse<'info> {
 
     #[account(mut)]
     pub record: Account<'info, Record>,
+
+    #[account(mut)]
+    pub order: Option<Account<'info, Order>>,
 
     #[account(
         constraint = ALLOWED_MINTS.contains(&mint.key()) @ OrbitError::InvalidTokenMint,
