@@ -45,8 +45,9 @@ pub struct Order {
 
 #[event]
 pub struct Deposited {
-    pub request_id: String,
     pub user_id: [u8; 32],
+    pub from_owner: Pubkey,
+    pub to_owner: Pubkey,
     pub from: Pubkey,
     pub to: Pubkey,
     pub amount: u64,
@@ -71,7 +72,9 @@ pub mod zynk_orbit {
     use super::*;
 
     // External (whitelisted) signers -> ZOV
-    pub fn deposit(ctx: Context<Deposit>, amount: u64, user_id: [u8; 32], request_id: String) -> Result<()> {
+    pub fn deposit(ctx: Context<Deposit>, user_id: [u8; 32], amount: u64) -> Result<()> {
+        require!(amount != 0, OrbitError::ZeroAmount);
+
         let cpi_accounts = TransferChecked {
             from: ctx.accounts.source_token_account.to_account_info(),
             to: ctx.accounts.destination_token_account.to_account_info(),
@@ -83,10 +86,11 @@ pub mod zynk_orbit {
         token_interface::transfer_checked(cpi_ctx, amount, ctx.accounts.mint.decimals)?;
 
         emit!(Deposited {
-            request_id,
             user_id,
-            from: ctx.accounts.signer.key(),
-            to: ctx.accounts.destination_token_account.owner.key(),
+            from_owner: ctx.accounts.signer.key(),
+            to_owner: ctx.accounts.destination_token_account.owner.key(),
+            from: ctx.accounts.source_token_account.key(),
+            to: ctx.accounts.destination_token_account.key(),
             amount,
             token: ctx.accounts.mint.key(),
             domain_separator: DOMAIN_SEPARATOR
@@ -176,7 +180,7 @@ pub mod zynk_orbit {
 
 
 #[derive(Accounts)]
-#[instruction(amount: u64, user_id: [u8; 32])]
+#[instruction(user_id: [u8; 32])]
 pub struct Deposit<'info> {
     #[account(mut, constraint = source_token_account.owner == signer.key() @ OrbitError::InvalidAccount)]
     pub source_token_account: InterfaceAccount<'info, TokenAccount>,
@@ -323,4 +327,6 @@ pub enum OrbitError {
     InvalidAccount,
     #[msg("Invalid token mint")]
     InvalidTokenMint,
+    #[msg("Amount should not be zero")]
+    ZeroAmount,
 }
