@@ -44,7 +44,8 @@ pub struct Order {
 }
 
 #[event]
-pub struct Deposited {
+pub struct TxEvent {
+    pub event_name: String,
     pub user_id: [u8; 32],
     pub from_owner: Pubkey,
     pub to_owner: Pubkey,
@@ -53,7 +54,17 @@ pub struct Deposited {
     pub amount: u64,
     pub token: Pubkey,
     pub domain_separator: u64,
+    pub order_id: Option<[u8; 32]>
 }
+
+#[event]
+pub struct AxEvent {
+    pub event_name: String,
+    pub user_id: [u8; 32],
+    pub public_key: Pubkey,
+    pub domain_separator: u64,
+}
+
 
 pub fn close_account<'a, 'b>(from: impl ToAccountInfo<'a>, to: impl ToAccountInfo<'b>) -> Result<()> {
     let from = from.to_account_info();
@@ -85,15 +96,17 @@ pub mod zynk_orbit {
         let cpi_ctx = CpiContext::new(ctx.accounts.token_program.to_account_info(), cpi_accounts);
         token_interface::transfer_checked(cpi_ctx, amount, ctx.accounts.mint.decimals)?;
 
-        emit!(Deposited {
+        emit!(TxEvent {
+            event_name: String::from("deposit"),
             user_id,
-            from_owner: ctx.accounts.signer.key(),
+            from_owner: ctx.accounts.source_token_account.owner.key(),
             to_owner: ctx.accounts.destination_token_account.owner.key(),
             from: ctx.accounts.source_token_account.key(),
             to: ctx.accounts.destination_token_account.key(),
             amount,
             token: ctx.accounts.mint.key(),
-            domain_separator: DOMAIN_SEPARATOR
+            domain_separator: DOMAIN_SEPARATOR,
+            order_id: None,
         });
 
         Ok(())
@@ -123,6 +136,19 @@ pub mod zynk_orbit {
         order.order_id = order_id;
         order.amount = order.amount.checked_add(amount).ok_or(ProgramError::ArithmeticOverflow)?;
         order.public_key = ctx.accounts.source_token_account.owner;
+
+        emit!(TxEvent {
+            event_name: String::from("collect"),
+            user_id: ctx.accounts.record.key,
+            from_owner: ctx.accounts.source_token_account.owner.key(),
+            to_owner: ctx.accounts.destination_token_account.owner.key(),
+            from: ctx.accounts.source_token_account.key(),
+            to: ctx.accounts.destination_token_account.key(),
+            amount,
+            token: ctx.accounts.mint.key(),
+            domain_separator: DOMAIN_SEPARATOR,
+            order_id: Some(order_id),
+        });
 
         Ok(())
     }
@@ -154,6 +180,19 @@ pub mod zynk_orbit {
         );
         token_interface::transfer_checked(cpi_ctx, amount, ctx.accounts.mint.decimals)?;
 
+        emit!(TxEvent {
+            event_name: String::from("disburse"),
+            user_id: record.key,
+            from_owner: ctx.accounts.source_token_account.owner.key(),
+            to_owner: ctx.accounts.destination_token_account.owner.key(),
+            from: ctx.accounts.source_token_account.key(),
+            to: ctx.accounts.destination_token_account.key(),
+            amount,
+            token: ctx.accounts.mint.key(),
+            domain_separator: DOMAIN_SEPARATOR,
+            order_id: ctx.accounts.order.as_ref().map(|o| o.order_id),
+        });
+
         Ok(())
     }
 
@@ -167,12 +206,27 @@ pub mod zynk_orbit {
         record.key = user_id;
         record.public_key = public_key;
 
+        emit!(AxEvent {
+            event_name: String::from("whitelist"),
+            user_id,
+            public_key,
+            domain_separator: DOMAIN_SEPARATOR,
+        });
+
         Ok(())
     }
 
     pub fn revoke(
-        _ctx: Context<Revoke>,
+        ctx: Context<Revoke>,
     ) -> Result<()> {
+        let record = &mut ctx.accounts.record;
+
+        emit!(AxEvent {
+            event_name: String::from("revoke"),
+            user_id: record.key,
+            public_key: record.public_key,
+            domain_separator: DOMAIN_SEPARATOR,
+        });
 
         Ok(())
     }
