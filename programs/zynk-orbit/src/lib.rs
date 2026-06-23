@@ -11,17 +11,17 @@ use anchor_spl::token_interface::{
     TransferChecked,
 };
 
-declare_id!("BeaxD6e6Gut7b7UanFDoKZ5ndY77aSz8tAAVPKHF9PNx");
+declare_id!("ZYNKopsYjG6gaGqdwz8HLAgvCAEFwCET56kRQKkjxfc");
 
 pub const DOMAIN_SEPARATOR: u64 = 115131153410997;
 
-pub const ZOV: Pubkey = pubkey!("GbNjfHHBLFn3epGUwKQacbTD4YBqAMLNHHtKRNATHaep");
-pub const ADMIN: Pubkey = pubkey!("EePFyVC5VWBs1ZNdWZLxdxsRjWwkjKuhG67pj8P3JdVM");
-pub const MANAGER: Pubkey = pubkey!("GRCEDQxpSi7QXHxTEUnh6MocAp6zx6FsgRvekZph91Bk");
+pub const ZOV: Pubkey = pubkey!("2FUNdgyGtGQAffBJ1UYPZrhgu4FSUStsohEzkPbUctnu");
+pub const ADMIN: Pubkey = pubkey!("Dyrq5TihL4q6XtekdkfnrZjBzSk5qJFWDAphKJYW86ru");
+pub const MANAGER: Pubkey = pubkey!("CMyxj35ckba59ELYaRsi7bxNghrnTkkwxR2nAoGM2yfQ");
 
 pub const ALLOWED_MINTS: [Pubkey; 2]  = [
-    pubkey!("Kk4sTVi1FMABcKLGjvhXUmXhzoCk8M5xP9LSrwJi8P6"),
-    pubkey!("7R3t9Fpfxr7aBurx4jC5CxVbEHeABbqY1jMHTLrjHUPH"),
+    pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"), // USDC
+    pubkey!("Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"), // USDT
 ];
 
 pub const VAULT_SEED: &[u8] = b"vault";
