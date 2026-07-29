@@ -1,15 +1,6 @@
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::{
-    pubkey::Pubkey,
-    system_program::ID as SYSTEM_PROGRAM_ID,
-};
-use anchor_spl::token_interface::{
-    self,
-    Mint,
-    TokenAccount,
-    TokenInterface,
-    TransferChecked,
-};
+use anchor_lang::solana_program::{pubkey::Pubkey, system_program::ID as SYSTEM_PROGRAM_ID};
+use anchor_spl::token_interface::{self, Mint, TokenAccount, TokenInterface, TransferChecked};
 
 declare_id!("ZYNKopsYjG6gaGqdwz8HLAgvCAEFwCET56kRQKkjxfc");
 
@@ -19,7 +10,7 @@ pub const ZOV: Pubkey = pubkey!("2FUNdgyGtGQAffBJ1UYPZrhgu4FSUStsohEzkPbUctnu");
 pub const ADMIN: Pubkey = pubkey!("Dyrq5TihL4q6XtekdkfnrZjBzSk5qJFWDAphKJYW86ru");
 pub const MANAGER: Pubkey = pubkey!("CMyxj35ckba59ELYaRsi7bxNghrnTkkwxR2nAoGM2yfQ");
 
-pub const ALLOWED_MINTS: [Pubkey; 2]  = [
+pub const ALLOWED_MINTS: [Pubkey; 2] = [
     pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"), // USDC
     pubkey!("Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"), // USDT
 ];
@@ -54,7 +45,7 @@ pub struct TxEvent {
     pub amount: u64,
     pub token: Pubkey,
     pub domain_separator: u64,
-    pub order_id: Option<[u8; 32]>
+    pub order_id: Option<[u8; 32]>,
 }
 
 #[event]
@@ -65,8 +56,10 @@ pub struct AxEvent {
     pub domain_separator: u64,
 }
 
-
-pub fn close_account<'a, 'b>(from: impl ToAccountInfo<'a>, to: impl ToAccountInfo<'b>) -> Result<()> {
+pub fn close_account<'a, 'b>(
+    from: impl ToAccountInfo<'a>,
+    to: impl ToAccountInfo<'b>,
+) -> Result<()> {
     let from = from.to_account_info();
     let to = to.to_account_info();
 
@@ -114,7 +107,12 @@ pub mod zynk_orbit {
 
     // External signers + delegated vault -> ZOV
     // Any vault -> ZOV
-    pub fn collect(ctx: Context<Collect>, vault_id: [u8; 32], order_id: [u8; 32], amount: u64) -> Result<()> {
+    pub fn collect(
+        ctx: Context<Collect>,
+        vault_id: [u8; 32],
+        order_id: [u8; 32],
+        amount: u64,
+    ) -> Result<()> {
         let seeds: &[&[u8]] = &[VAULT_SEED, vault_id.as_ref(), &[ctx.bumps.spender]];
         let signer_seeds = &[&seeds[..]];
 
@@ -134,7 +132,10 @@ pub mod zynk_orbit {
 
         let order = &mut ctx.accounts.order;
         order.order_id = order_id;
-        order.amount = order.amount.checked_add(amount).ok_or(ProgramError::ArithmeticOverflow)?;
+        order.amount = order
+            .amount
+            .checked_add(amount)
+            .ok_or(ProgramError::ArithmeticOverflow)?;
         order.public_key = ctx.accounts.source_token_account.owner;
 
         emit!(TxEvent {
@@ -196,11 +197,7 @@ pub mod zynk_orbit {
         Ok(())
     }
 
-    pub fn whitelist(
-        ctx: Context<Whitelist>,
-        user_id: [u8; 32],
-        public_key: Pubkey,
-    ) -> Result<()> {
+    pub fn whitelist(ctx: Context<Whitelist>, user_id: [u8; 32], public_key: Pubkey) -> Result<()> {
         let record = &mut ctx.accounts.record;
 
         record.key = public_key;
@@ -216,9 +213,7 @@ pub mod zynk_orbit {
         Ok(())
     }
 
-    pub fn revoke(
-        ctx: Context<Revoke>,
-    ) -> Result<()> {
+    pub fn revoke(ctx: Context<Revoke>) -> Result<()> {
         let record = &mut ctx.accounts.record;
 
         emit!(AxEvent {
@@ -231,7 +226,6 @@ pub mod zynk_orbit {
         Ok(())
     }
 }
-
 
 #[derive(Accounts)]
 #[instruction(user_id: [u8; 32])]
@@ -367,7 +361,6 @@ pub struct Revoke<'info> {
 
     pub system_program: Program<'info, System>,
 }
-
 
 #[error_code]
 pub enum OrbitError {
