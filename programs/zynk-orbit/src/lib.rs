@@ -18,6 +18,8 @@ pub const ALLOWED_MINTS: [Pubkey; 2] = [
 pub const VAULT_SEED: &[u8] = b"vault";
 pub const ORDER_SEED: &[u8] = b"order";
 pub const RECORD_SEED: &[u8] = b"record";
+pub const WITHDRAW_REQUEST_SEED: &[u8] = b"withdraw_request";
+pub const RECORD_UPDATE_REQUEST_SEED: &[u8] = b"record_update_request";
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, InitSpace)]
 #[repr(u8)]
@@ -38,6 +40,25 @@ pub struct Record {
     pub principle_out: u64,
     pub max_deposit: u32,
     pub claim_wallet: Pubkey,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct WithdrawRequest {
+    pub interaction_wallet: Pubkey,
+    pub user_id: [u8; 32],
+    pub user_type: UserType,
+    pub amount: u32,
+    pub withdraw_wallet: Pubkey,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct RecordUpdateRequest {
+    pub interaction_wallet: Pubkey,
+    pub user_id: [u8; 32],
+    pub cliff_period: i64,
+    pub max_deposit: u32,
 }
 
 #[account]
@@ -251,14 +272,39 @@ pub mod zynk_orbit {
     }
 
     pub fn revoke(ctx: Context<Revoke>) -> Result<()> {
-        let record = &mut ctx.accounts.record;
+        macro_rules! try_revoke {
+            ($data:expr, $pda_key:expr, $ty:ty, $event:literal) => {
+                if let Ok(account) = <$ty>::try_deserialize(&mut &$data[..]) {
+                    emit!(AxEvent {
+                        event_name: String::from($event),
+                        user_id: account.user_id,
+                        public_key: $pda_key,
+                        domain_separator: DOMAIN_SEPARATOR,
+                    });
+                    true
+                } else {
+                    false
+                }
+            };
+        }
 
-        emit!(AxEvent {
-            event_name: String::from("revoke"),
-            user_id: record.user_id,
-            public_key: record.interaction_wallet,
-            domain_separator: DOMAIN_SEPARATOR,
-        });
+        for account_info in ctx.remaining_accounts.iter() {
+            require!(
+                account_info.owner == ctx.program_id,
+                OrbitError::PdaNotOwnedByContract
+            );
+
+            let data = account_info.data.borrow();
+            let pda_key = account_info.key();
+
+            if data.len() >= 8 {
+                let _ = try_revoke!(data, pda_key, Record, "revoke_whitelist")
+                    || try_revoke!(data, pda_key, WithdrawRequest, "revoke_withdraw_request")
+                    || try_revoke!(data, pda_key, RecordUpdateRequest, "deny_update_request");
+            }
+
+            close_account(account_info, &ctx.accounts.admin)?;
+        }
 
         Ok(())
     }
@@ -390,9 +436,6 @@ pub struct Whitelist<'info> {
 
 #[derive(Accounts)]
 pub struct Revoke<'info> {
-    #[account(mut, close = admin)]
-    pub record: Account<'info, Record>,
-
     #[account(mut, constraint = admin.key() == ADMIN @ OrbitError::UnauthorizedAdmin)]
     pub admin: Signer<'info>,
 
@@ -415,4 +458,6 @@ pub enum OrbitError {
     ZeroAmount,
     #[msg("Cliff period must be in the future")]
     CliffPeriodInPast,
+    #[msg("Pda is not owned by this contract")]
+    PdaNotOwnedByContract,
 }
