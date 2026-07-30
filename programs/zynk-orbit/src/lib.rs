@@ -19,11 +19,25 @@ pub const VAULT_SEED: &[u8] = b"vault";
 pub const ORDER_SEED: &[u8] = b"order";
 pub const RECORD_SEED: &[u8] = b"record";
 
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, InitSpace)]
+#[repr(u8)]
+pub enum UserType {
+    LP = 0,
+    NCW = 1,
+    ICV = 2,
+}
+
 #[account]
 #[derive(InitSpace)]
 pub struct Record {
-    pub key: Pubkey,
+    pub interaction_wallet: Pubkey,
     pub user_id: [u8; 32],
+    pub user_type: UserType,
+    pub cliff_period: i64,
+    pub principle_in: u64,
+    pub principle_out: u64,
+    pub max_deposit: u32,
+    pub claim_wallet: Pubkey,
 }
 
 #[account]
@@ -159,7 +173,10 @@ pub mod zynk_orbit {
         let record = &mut ctx.accounts.record;
 
         if let Some(order) = ctx.accounts.order.as_ref() {
-            require!(order.public_key == record.key, OrbitError::InvalidAccount);
+            require!(
+                order.public_key == record.interaction_wallet,
+                OrbitError::InvalidAccount
+            );
             require!(order.amount == amount, OrbitError::Inequality);
             close_account(order, &ctx.accounts.manager)?;
         }
@@ -197,16 +214,36 @@ pub mod zynk_orbit {
         Ok(())
     }
 
-    pub fn whitelist(ctx: Context<Whitelist>, user_id: [u8; 32], public_key: Pubkey) -> Result<()> {
+    pub fn whitelist(
+        ctx: Context<Whitelist>,
+        user_id: [u8; 32],
+        user_type: UserType,
+        interaction_wallet: Pubkey,
+        cliff_period: Option<i64>,
+        max_deposit: Option<u32>,
+        claim_wallet: Option<Pubkey>,
+    ) -> Result<()> {
         let record = &mut ctx.accounts.record;
 
-        record.key = public_key;
+        // Validate cliff_period is in the future if provided
+        if let Some(cp) = cliff_period {
+            let now = Clock::get()?.unix_timestamp;
+            require!(cp > now, OrbitError::CliffPeriodInPast);
+        }
+
+        record.interaction_wallet = interaction_wallet;
         record.user_id = user_id;
+        record.user_type = user_type;
+        record.cliff_period = cliff_period.unwrap_or(i64::MAX);
+        record.principle_in = 0;
+        record.principle_out = 0;
+        record.max_deposit = max_deposit.unwrap_or(u32::MAX);
+        record.claim_wallet = claim_wallet.unwrap_or(interaction_wallet);
 
         emit!(AxEvent {
             event_name: String::from("whitelist"),
             user_id,
-            public_key,
+            public_key: interaction_wallet,
             domain_separator: DOMAIN_SEPARATOR,
         });
 
@@ -219,7 +256,7 @@ pub mod zynk_orbit {
         emit!(AxEvent {
             event_name: String::from("revoke"),
             user_id: record.user_id,
-            public_key: record.key,
+            public_key: record.interaction_wallet,
             domain_separator: DOMAIN_SEPARATOR,
         });
 
@@ -302,7 +339,7 @@ pub struct Disburse<'info> {
     #[account(mut, constraint = source_token_account.owner == ovault.key() @ OrbitError::InvalidAccount)]
     pub source_token_account: InterfaceAccount<'info, TokenAccount>,
 
-    #[account(mut, constraint = destination_token_account.owner == record.key @ OrbitError::InvalidAccount)]
+    #[account(mut, constraint = destination_token_account.owner == record.interaction_wallet @ OrbitError::InvalidAccount)]
     pub destination_token_account: InterfaceAccount<'info, TokenAccount>,
 
     /// CHECK: Ovault - verified by seeds
@@ -334,13 +371,13 @@ pub struct Disburse<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(user_id: [u8; 32], public_key: Pubkey)]
+#[instruction(user_id: [u8; 32], interaction_wallet: Pubkey)]
 pub struct Whitelist<'info> {
     #[account(
         init,
         payer = admin,
         space = 8 + Record::INIT_SPACE,
-        seeds = [RECORD_SEED, user_id.as_ref(), public_key.as_ref()],
+        seeds = [RECORD_SEED, user_id.as_ref(), interaction_wallet.as_ref()],
         bump
     )]
     pub record: Account<'info, Record>,
@@ -376,4 +413,6 @@ pub enum OrbitError {
     InvalidTokenMint,
     #[msg("Amount should not be zero")]
     ZeroAmount,
+    #[msg("Cliff period must be in the future")]
+    CliffPeriodInPast,
 }
