@@ -308,6 +308,33 @@ pub mod zynk_orbit {
 
         Ok(())
     }
+
+    pub fn update_record(
+        ctx: Context<UpdateRecord>,
+        user_id: [u8; 32],
+        interaction_wallet: Pubkey,
+        cliff_period: Option<i64>,
+        max_deposit: Option<u32>,
+    ) -> Result<()> {
+        let request_record = &mut ctx.accounts.request_record;
+        let user_record = &ctx.accounts.user_record;
+        if let Some(cp) = cliff_period {
+            let now = Clock::get()?.unix_timestamp;
+            require!(cp > now, OrbitError::CliffPeriodInPast);
+        }
+        request_record.interaction_wallet = interaction_wallet;
+        request_record.user_id = user_id;
+        request_record.max_deposit = max_deposit.unwrap_or(user_record.max_deposit);
+        request_record.cliff_period = cliff_period.unwrap_or(user_record.cliff_period);
+
+        emit!(AxEvent {
+            event_name: String::from("record_updated"),
+            user_id: user_id,
+            public_key: interaction_wallet,
+            domain_separator: DOMAIN_SEPARATOR,
+        });
+        Ok(())
+    }
 }
 
 #[derive(Accounts)]
@@ -438,6 +465,31 @@ pub struct Whitelist<'info> {
 pub struct Revoke<'info> {
     #[account(mut, constraint = admin.key() == ADMIN @ OrbitError::UnauthorizedAdmin)]
     pub admin: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(user_id: [u8; 32], interaction_wallet: Pubkey)]
+pub struct UpdateRecord<'info> {
+    #[account(
+        init,
+        payer = user,
+        space = 8 + RecordUpdateRequest::INIT_SPACE,
+        seeds = [RECORD_UPDATE_REQUEST_SEED, user_id.as_ref(), interaction_wallet.as_ref()],
+        bump
+    )]
+    pub request_record: Account<'info, RecordUpdateRequest>,
+
+    #[account(
+        seeds = [RECORD_SEED, user_id.as_ref(), interaction_wallet.as_ref()],
+        bump,
+        constraint = user_record.interaction_wallet == interaction_wallet @ OrbitError::InvalidAccount,
+    )]
+    pub user_record: Account<'info, Record>,
+
+    #[account(mut, constraint = user.key() == interaction_wallet @ OrbitError::UnauthorizedAdmin)]
+    pub user: Signer<'info>,
 
     pub system_program: Program<'info, System>,
 }
