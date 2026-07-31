@@ -404,131 +404,101 @@ pub mod zynk_orbit {
         Ok(())
     }
 
-    pub fn approve(ctx: Context<Approve>) -> Result<()> {
+    pub fn approve_withdraw(ctx: Context<ApproveWithdraw>) -> Result<()> {
         let request_data = ctx.accounts.request.try_borrow_data()?;
+        let withdraw_request = WithdrawRequest::try_deserialize(&mut &request_data[8..])
+            .map_err(|_| OrbitError::InvalidRequestAccount)?;
 
-        // Try to deserialize as WithdrawRequest
-        if let Ok(withdraw_request) = WithdrawRequest::try_deserialize(&mut &request_data[8..]) {
-            let record = &mut ctx.accounts.record;
+        let record = &mut ctx.accounts.record;
 
-            // Verify the record matches the withdraw request
-            require!(
-                record.user_id == withdraw_request.user_id
-                    && record.interaction_wallet == withdraw_request.interaction_wallet,
-                OrbitError::InvalidAccount
-            );
+        // Verify the record matches the withdraw request
+        require!(
+            record.user_id == withdraw_request.user_id
+                && record.interaction_wallet == withdraw_request.interaction_wallet,
+            OrbitError::InvalidAccount
+        );
 
-            // Update principle_out on the record
-            record.principle_out = record
-                .principle_out
-                .checked_add(withdraw_request.amount as u64)
-                .ok_or(ProgramError::ArithmeticOverflow)?;
+        // Update principle_out on the record
+        record.principle_out = record
+            .principle_out
+            .checked_add(withdraw_request.amount as u64)
+            .ok_or(ProgramError::ArithmeticOverflow)?;
 
-            // Unwrap withdraw-specific optional accounts
-            let source_token_account = ctx
-                .accounts
-                .source_token_account
-                .as_ref()
-                .ok_or(OrbitError::InvalidAccount)?;
-            let destination_token_account = ctx
-                .accounts
-                .destination_token_account
-                .as_ref()
-                .ok_or(OrbitError::InvalidAccount)?;
-            let mint = ctx
-                .accounts
-                .mint
-                .as_ref()
-                .ok_or(OrbitError::InvalidAccount)?;
-            let ovault = ctx
-                .accounts
-                .ovault
-                .as_ref()
-                .ok_or(OrbitError::InvalidAccount)?;
-            let token_program = ctx
-                .accounts
-                .token_program
-                .as_ref()
-                .ok_or(OrbitError::InvalidAccount)?;
+        // Transfer tokens from ovault to destination
+        let seeds: &[&[u8]] = &[VAULT_SEED, b"orbit", &[ctx.bumps.ovault]];
+        let signer_seeds = &[&seeds[..]];
 
-            // Transfer tokens from ovault to destination
-            let ovault_bump = ctx.bumps.ovault.ok_or(OrbitError::InvalidAccount)?;
-            let seeds: &[&[u8]] = &[VAULT_SEED, b"orbit", &[ovault_bump]];
-            let signer_seeds = &[&seeds[..]];
+        let cpi_accounts = TransferChecked {
+            from: ctx.accounts.source_token_account.to_account_info(),
+            to: ctx.accounts.destination_token_account.to_account_info(),
+            mint: ctx.accounts.mint.to_account_info(),
+            authority: ctx.accounts.ovault.to_account_info(),
+        };
 
-            let cpi_accounts = TransferChecked {
-                from: source_token_account.to_account_info(),
-                to: destination_token_account.to_account_info(),
-                mint: mint.to_account_info(),
-                authority: ovault.to_account_info(),
-            };
+        let cpi_ctx = CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            cpi_accounts,
+            signer_seeds,
+        );
+        token_interface::transfer_checked(
+            cpi_ctx,
+            withdraw_request.amount as u64,
+            ctx.accounts.mint.decimals,
+        )?;
 
-            let cpi_ctx = CpiContext::new_with_signer(
-                token_program.to_account_info(),
-                cpi_accounts,
-                signer_seeds,
-            );
-            token_interface::transfer_checked(
-                cpi_ctx,
-                withdraw_request.amount as u64,
-                mint.decimals,
-            )?;
+        // Close the withdraw request account, move lamports to interaction wallet
+        close_account(
+            ctx.accounts.request.to_account_info(),
+            ctx.accounts.interaction_wallet.to_account_info(),
+        )?;
 
-            // Close the withdraw request account, move lamports to interaction wallet
-            close_account(
-                ctx.accounts.request.to_account_info(),
-                ctx.accounts.interaction_wallet.to_account_info(),
-            )?;
+        emit!(TxEvent {
+            event_name: String::from("withdraw_approved"),
+            user_id: withdraw_request.user_id,
+            from_owner: ctx.accounts.source_token_account.owner.key(),
+            to_owner: ctx.accounts.destination_token_account.owner.key(),
+            from: ctx.accounts.source_token_account.key(),
+            to: ctx.accounts.destination_token_account.key(),
+            amount: withdraw_request.amount as u64,
+            token: ctx.accounts.mint.key(),
+            domain_separator: DOMAIN_SEPARATOR,
+            order_id: None,
+        });
 
-            emit!(TxEvent {
-                event_name: String::from("withdraw_approved"),
-                user_id: withdraw_request.user_id,
-                from_owner: source_token_account.owner.key(),
-                to_owner: destination_token_account.owner.key(),
-                from: source_token_account.key(),
-                to: destination_token_account.key(),
-                amount: withdraw_request.amount as u64,
-                token: mint.key(),
-                domain_separator: DOMAIN_SEPARATOR,
-                order_id: None,
-            });
+        Ok(())
+    }
 
-            return Ok(());
-        }
+    pub fn approve_cliff_period(ctx: Context<ApproveCliffPeriod>) -> Result<()> {
+        let request_data = ctx.accounts.request.try_borrow_data()?;
+        let update_request = UpdateCliffPeriodRequest::try_deserialize(&mut &request_data[8..])
+            .map_err(|_| OrbitError::InvalidRequestAccount)?;
 
-        // Try to deserialize as UpdateCliffPeriodRequest
-        if let Ok(update_request) =
-            UpdateCliffPeriodRequest::try_deserialize(&mut &request_data[8..])
-        {
-            let record = &mut ctx.accounts.record;
+        let record = &mut ctx.accounts.record;
 
-            // Verify the record matches the update request
-            require!(
-                record.user_id == update_request.user_id
-                    && record.interaction_wallet == update_request.interaction_wallet,
-                OrbitError::InvalidAccount
-            );
+        // Verify the record matches the update request
+        require!(
+            record.user_id == update_request.user_id
+                && record.interaction_wallet == update_request.interaction_wallet,
+            OrbitError::InvalidAccount
+        );
 
-            // Update the cliff period on the record
-            record.cliff_period = update_request.cliff_period;
+        // Update the cliff period on the record
+        record.cliff_period = update_request.cliff_period;
 
-            // Close the update request account, move lamports to interaction wallet
-            close_account(
-                ctx.accounts.request.to_account_info(),
-                ctx.accounts.interaction_wallet.to_account_info(),
-            )?;
+        // Close the update request account, move lamports to interaction wallet
+        close_account(
+            ctx.accounts.request.to_account_info(),
+            ctx.accounts.interaction_wallet.to_account_info(),
+        )?;
 
-            emit!(AxEvent {
-                event_name: String::from("cliff_period_approved"),
-                user_id: update_request.user_id,
-                public_key: update_request.interaction_wallet,
-                domain_separator: DOMAIN_SEPARATOR,
-            });
+        emit!(AxEvent {
+            event_name: String::from("cliff_period_approved"),
+            user_id: update_request.user_id,
+            public_key: update_request.interaction_wallet,
+            domain_separator: DOMAIN_SEPARATOR,
+        });
 
-            return Ok(());
-        }
-
-        Err(OrbitError::InvalidRequestAccount.into())
+        Ok(())
     }
 }
 
@@ -736,8 +706,8 @@ pub struct RequestWithdraw<'info> {
 }
 
 #[derive(Accounts)]
-pub struct Approve<'info> {
-    /// CHECK: Unchecked - could be WithdrawRequest or UpdateCliffPeriodRequest, validated in handler
+pub struct ApproveWithdraw<'info> {
+    /// CHECK: WithdrawRequest PDA - validated in handler
     #[account(mut)]
     pub request: UncheckedAccount<'info>,
 
@@ -751,23 +721,41 @@ pub struct Approve<'info> {
     #[account(mut, constraint = admin.key() == ADMIN @ OrbitError::UnauthorizedAdmin)]
     pub admin: Signer<'info>,
 
-    // Withdraw-specific accounts (optional — only needed for WithdrawRequest approval)
     #[account(mut)]
-    pub source_token_account: Option<InterfaceAccount<'info, TokenAccount>>,
+    pub source_token_account: InterfaceAccount<'info, TokenAccount>,
 
     #[account(mut)]
-    pub destination_token_account: Option<InterfaceAccount<'info, TokenAccount>>,
+    pub destination_token_account: InterfaceAccount<'info, TokenAccount>,
 
     /// CHECK: Ovault - verified by seeds
     #[account(
         seeds = [VAULT_SEED, b"orbit"],
         bump
     )]
-    pub ovault: Option<UncheckedAccount<'info>>,
+    pub ovault: UncheckedAccount<'info>,
 
-    pub mint: Option<InterfaceAccount<'info, Mint>>,
+    pub mint: InterfaceAccount<'info, Mint>,
 
-    pub token_program: Option<Interface<'info, TokenInterface>>,
+    pub token_program: Interface<'info, TokenInterface>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct ApproveCliffPeriod<'info> {
+    /// CHECK: UpdateCliffPeriodRequest PDA - validated in handler
+    #[account(mut)]
+    pub request: UncheckedAccount<'info>,
+
+    #[account(mut)]
+    pub record: Account<'info, Record>,
+
+    /// CHECK: Interaction wallet from the request - receives lamports from closed account
+    #[account(mut)]
+    pub interaction_wallet: UncheckedAccount<'info>,
+
+    #[account(mut, constraint = admin.key() == ADMIN @ OrbitError::UnauthorizedAdmin)]
+    pub admin: Signer<'info>,
 
     pub system_program: Program<'info, System>,
 }
