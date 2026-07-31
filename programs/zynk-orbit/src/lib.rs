@@ -54,11 +54,10 @@ pub struct WithdrawRequest {
 
 #[account]
 #[derive(InitSpace)]
-pub struct RecordUpdateRequest {
+pub struct UpdateCliffPeriodRequest {
     pub interaction_wallet: Pubkey,
     pub user_id: [u8; 32],
     pub cliff_period: i64,
-    pub max_deposit: u32,
 }
 
 #[account]
@@ -300,7 +299,12 @@ pub mod zynk_orbit {
             if data.len() >= 8 {
                 let _ = try_revoke!(data, pda_key, Record, "revoke_whitelist")
                     || try_revoke!(data, pda_key, WithdrawRequest, "revoke_withdraw_request")
-                    || try_revoke!(data, pda_key, RecordUpdateRequest, "deny_update_request");
+                    || try_revoke!(
+                        data,
+                        pda_key,
+                        UpdateCliffPeriodRequest,
+                        "deny_update_request"
+                    );
             }
 
             close_account(account_info, &ctx.accounts.admin)?;
@@ -309,12 +313,11 @@ pub mod zynk_orbit {
         Ok(())
     }
 
-    pub fn update_record(
-        ctx: Context<UpdateRecord>,
+    pub fn update_cliff_period(
+        ctx: Context<UpdateCliffPeriod>,
         user_id: [u8; 32],
         interaction_wallet: Pubkey,
         cliff_period: Option<i64>,
-        max_deposit: Option<u32>,
     ) -> Result<()> {
         let request_record = &mut ctx.accounts.request_record;
         let user_record = &ctx.accounts.user_record;
@@ -324,11 +327,10 @@ pub mod zynk_orbit {
         }
         request_record.interaction_wallet = interaction_wallet;
         request_record.user_id = user_id;
-        request_record.max_deposit = max_deposit.unwrap_or(user_record.max_deposit);
         request_record.cliff_period = cliff_period.unwrap_or(user_record.cliff_period);
 
         emit!(AxEvent {
-            event_name: String::from("record_updated"),
+            event_name: String::from("cliff_period_updated"),
             user_id: user_id,
             public_key: interaction_wallet,
             domain_separator: DOMAIN_SEPARATOR,
@@ -471,15 +473,15 @@ pub struct Revoke<'info> {
 
 #[derive(Accounts)]
 #[instruction(user_id: [u8; 32], interaction_wallet: Pubkey)]
-pub struct UpdateRecord<'info> {
+pub struct UpdateCliffPeriod<'info> {
     #[account(
         init,
         payer = user,
-        space = 8 + RecordUpdateRequest::INIT_SPACE,
+        space = 8 + UpdateCliffPeriodRequest::INIT_SPACE,
         seeds = [RECORD_UPDATE_REQUEST_SEED, user_id.as_ref(), interaction_wallet.as_ref()],
         bump
     )]
-    pub request_record: Account<'info, RecordUpdateRequest>,
+    pub request_record: Account<'info, UpdateCliffPeriodRequest>,
 
     #[account(
         seeds = [RECORD_SEED, user_id.as_ref(), interaction_wallet.as_ref()],
