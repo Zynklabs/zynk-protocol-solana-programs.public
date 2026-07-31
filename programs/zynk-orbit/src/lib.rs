@@ -337,6 +337,24 @@ pub mod zynk_orbit {
         });
         Ok(())
     }
+
+    pub fn update_max_deposit(
+        ctx: Context<UpdateMaxDeposit>,
+        user_id: [u8; 32],
+        interaction_wallet: Pubkey,
+        max_deposit: u32,
+    ) -> Result<()> {
+        let record = &mut ctx.accounts.record;
+        record.max_deposit = max_deposit;
+
+        emit!(AxEvent {
+            event_name: String::from("max_deposit_updated"),
+            user_id,
+            public_key: interaction_wallet,
+            domain_separator: DOMAIN_SEPARATOR,
+        });
+        Ok(())
+    }
 }
 
 #[derive(Accounts)]
@@ -492,6 +510,22 @@ pub struct UpdateCliffPeriod<'info> {
 
     #[account(mut, constraint = user.key() == interaction_wallet @ OrbitError::UnauthorizedAdmin)]
     pub user: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(user_id: [u8; 32], interaction_wallet: Pubkey)]
+pub struct UpdateMaxDeposit<'info> {
+    #[account(
+        mut,
+        seeds = [RECORD_SEED, user_id.as_ref(), interaction_wallet.as_ref()],
+        bump,
+    )]
+    pub record: Account<'info, Record>,
+
+    #[account(mut, constraint = admin.key() == ADMIN @ OrbitError::UnauthorizedAdmin)]
+    pub admin: Signer<'info>,
 
     pub system_program: Program<'info, System>,
 }
