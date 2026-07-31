@@ -122,6 +122,12 @@ pub mod zynk_orbit {
         let cpi_ctx = CpiContext::new(ctx.accounts.token_program.to_account_info(), cpi_accounts);
         token_interface::transfer_checked(cpi_ctx, amount, ctx.accounts.mint.decimals)?;
 
+        let record = &mut ctx.accounts.record;
+        record.principle_in = record
+            .principle_in
+            .checked_add(amount)
+            .ok_or(ProgramError::ArithmeticOverflow)?;
+
         emit!(TxEvent {
             event_name: String::from("deposit"),
             user_id,
@@ -397,6 +403,133 @@ pub mod zynk_orbit {
         });
         Ok(())
     }
+
+    pub fn approve(ctx: Context<Approve>) -> Result<()> {
+        let request_data = ctx.accounts.request.try_borrow_data()?;
+
+        // Try to deserialize as WithdrawRequest
+        if let Ok(withdraw_request) = WithdrawRequest::try_deserialize(&mut &request_data[8..]) {
+            let record = &mut ctx.accounts.record;
+
+            // Verify the record matches the withdraw request
+            require!(
+                record.user_id == withdraw_request.user_id
+                    && record.interaction_wallet == withdraw_request.interaction_wallet,
+                OrbitError::InvalidAccount
+            );
+
+            // Update principle_out on the record
+            record.principle_out = record
+                .principle_out
+                .checked_add(withdraw_request.amount as u64)
+                .ok_or(ProgramError::ArithmeticOverflow)?;
+
+            // Unwrap withdraw-specific optional accounts
+            let source_token_account = ctx
+                .accounts
+                .source_token_account
+                .as_ref()
+                .ok_or(OrbitError::InvalidAccount)?;
+            let destination_token_account = ctx
+                .accounts
+                .destination_token_account
+                .as_ref()
+                .ok_or(OrbitError::InvalidAccount)?;
+            let mint = ctx
+                .accounts
+                .mint
+                .as_ref()
+                .ok_or(OrbitError::InvalidAccount)?;
+            let ovault = ctx
+                .accounts
+                .ovault
+                .as_ref()
+                .ok_or(OrbitError::InvalidAccount)?;
+            let token_program = ctx
+                .accounts
+                .token_program
+                .as_ref()
+                .ok_or(OrbitError::InvalidAccount)?;
+
+            // Transfer tokens from ovault to destination
+            let ovault_bump = ctx.bumps.ovault.ok_or(OrbitError::InvalidAccount)?;
+            let seeds: &[&[u8]] = &[VAULT_SEED, b"orbit", &[ovault_bump]];
+            let signer_seeds = &[&seeds[..]];
+
+            let cpi_accounts = TransferChecked {
+                from: source_token_account.to_account_info(),
+                to: destination_token_account.to_account_info(),
+                mint: mint.to_account_info(),
+                authority: ovault.to_account_info(),
+            };
+
+            let cpi_ctx = CpiContext::new_with_signer(
+                token_program.to_account_info(),
+                cpi_accounts,
+                signer_seeds,
+            );
+            token_interface::transfer_checked(
+                cpi_ctx,
+                withdraw_request.amount as u64,
+                mint.decimals,
+            )?;
+
+            // Close the withdraw request account, move lamports to interaction wallet
+            close_account(
+                ctx.accounts.request.to_account_info(),
+                ctx.accounts.interaction_wallet.to_account_info(),
+            )?;
+
+            emit!(TxEvent {
+                event_name: String::from("withdraw_approved"),
+                user_id: withdraw_request.user_id,
+                from_owner: source_token_account.owner.key(),
+                to_owner: destination_token_account.owner.key(),
+                from: source_token_account.key(),
+                to: destination_token_account.key(),
+                amount: withdraw_request.amount as u64,
+                token: mint.key(),
+                domain_separator: DOMAIN_SEPARATOR,
+                order_id: None,
+            });
+
+            return Ok(());
+        }
+
+        // Try to deserialize as UpdateCliffPeriodRequest
+        if let Ok(update_request) =
+            UpdateCliffPeriodRequest::try_deserialize(&mut &request_data[8..])
+        {
+            let record = &mut ctx.accounts.record;
+
+            // Verify the record matches the update request
+            require!(
+                record.user_id == update_request.user_id
+                    && record.interaction_wallet == update_request.interaction_wallet,
+                OrbitError::InvalidAccount
+            );
+
+            // Update the cliff period on the record
+            record.cliff_period = update_request.cliff_period;
+
+            // Close the update request account, move lamports to interaction wallet
+            close_account(
+                ctx.accounts.request.to_account_info(),
+                ctx.accounts.interaction_wallet.to_account_info(),
+            )?;
+
+            emit!(AxEvent {
+                event_name: String::from("cliff_period_approved"),
+                user_id: update_request.user_id,
+                public_key: update_request.interaction_wallet,
+                domain_separator: DOMAIN_SEPARATOR,
+            });
+
+            return Ok(());
+        }
+
+        Err(OrbitError::InvalidRequestAccount.into())
+    }
 }
 
 #[derive(Accounts)]
@@ -602,6 +735,43 @@ pub struct RequestWithdraw<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[derive(Accounts)]
+pub struct Approve<'info> {
+    /// CHECK: Unchecked - could be WithdrawRequest or UpdateCliffPeriodRequest, validated in handler
+    #[account(mut)]
+    pub request: UncheckedAccount<'info>,
+
+    #[account(mut)]
+    pub record: Account<'info, Record>,
+
+    /// CHECK: Interaction wallet from the request - receives lamports from closed account
+    #[account(mut)]
+    pub interaction_wallet: UncheckedAccount<'info>,
+
+    #[account(mut, constraint = admin.key() == ADMIN @ OrbitError::UnauthorizedAdmin)]
+    pub admin: Signer<'info>,
+
+    // Withdraw-specific accounts (optional — only needed for WithdrawRequest approval)
+    #[account(mut)]
+    pub source_token_account: Option<InterfaceAccount<'info, TokenAccount>>,
+
+    #[account(mut)]
+    pub destination_token_account: Option<InterfaceAccount<'info, TokenAccount>>,
+
+    /// CHECK: Ovault - verified by seeds
+    #[account(
+        seeds = [VAULT_SEED, b"orbit"],
+        bump
+    )]
+    pub ovault: Option<UncheckedAccount<'info>>,
+
+    pub mint: Option<InterfaceAccount<'info, Mint>>,
+
+    pub token_program: Option<Interface<'info, TokenInterface>>,
+
+    pub system_program: Program<'info, System>,
+}
+
 #[error_code]
 pub enum OrbitError {
     #[msg("Unauthorized admin")]
@@ -626,4 +796,6 @@ pub enum OrbitError {
     InsufficientBalance,
     #[msg("Operation no permitted")]
     InvalidOperation,
+    #[msg("Invalid request account type")]
+    InvalidRequestAccount,
 }
