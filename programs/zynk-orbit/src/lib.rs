@@ -47,9 +47,8 @@ pub struct Record {
 pub struct WithdrawRequest {
     pub interaction_wallet: Pubkey,
     pub user_id: [u8; 32],
-    pub user_type: UserType,
     pub amount: u32,
-    pub withdraw_wallet: Pubkey,
+    pub destination: Pubkey,
 }
 
 #[account]
@@ -355,6 +354,49 @@ pub mod zynk_orbit {
         });
         Ok(())
     }
+
+    pub fn request_withdraw(
+        ctx: Context<RequestWithdraw>,
+        user_id: [u8; 32],
+        interaction_wallet: Pubkey,
+        destination: Pubkey,
+        amount: u32,
+    ) -> Result<()> {
+        require!(amount != 0, OrbitError::ZeroAmount);
+
+        let signer_record = &ctx.accounts.signer_record;
+        let destination_record = &ctx.accounts.destination_record;
+
+        // Verify both records belong to the same user_id
+        require!(
+            signer_record.user_id == user_id && destination_record.user_id == user_id,
+            OrbitError::UserIdMismatch
+        );
+
+        require!(
+            signer_record.principle_in - signer_record.principle_out > amount as u64,
+            OrbitError::InsufficientBalance
+        );
+
+        require!(
+            signer_record.user_type != UserType::ICV,
+            OrbitError::InvalidOperation
+        );
+
+        let withdraw_request = &mut ctx.accounts.withdraw_request;
+        withdraw_request.interaction_wallet = interaction_wallet;
+        withdraw_request.user_id = user_id;
+        withdraw_request.amount = amount;
+        withdraw_request.destination = destination;
+
+        emit!(AxEvent {
+            event_name: String::from("withdraw_requested"),
+            user_id,
+            public_key: interaction_wallet,
+            domain_separator: DOMAIN_SEPARATOR,
+        });
+        Ok(())
+    }
 }
 
 #[derive(Accounts)]
@@ -530,6 +572,36 @@ pub struct UpdateMaxDeposit<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[derive(Accounts)]
+#[instruction(user_id: [u8; 32], interaction_wallet: Pubkey, destination: Pubkey)]
+pub struct RequestWithdraw<'info> {
+    #[account(
+        seeds = [RECORD_SEED, user_id.as_ref(), interaction_wallet.as_ref()],
+        bump,
+    )]
+    pub signer_record: Account<'info, Record>,
+
+    #[account(
+        seeds = [RECORD_SEED, user_id.as_ref(), destination.as_ref()],
+        bump,
+    )]
+    pub destination_record: Account<'info, Record>,
+
+    #[account(
+        init,
+        payer = signer,
+        space = 8 + WithdrawRequest::INIT_SPACE,
+        seeds = [WITHDRAW_REQUEST_SEED, user_id.as_ref(), interaction_wallet.as_ref()],
+        bump
+    )]
+    pub withdraw_request: Account<'info, WithdrawRequest>,
+
+    #[account(mut, constraint = signer.key() == interaction_wallet @ OrbitError::InvalidAccount)]
+    pub signer: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
 #[error_code]
 pub enum OrbitError {
     #[msg("Unauthorized admin")]
@@ -548,4 +620,10 @@ pub enum OrbitError {
     CliffPeriodInPast,
     #[msg("Pda is not owned by this contract")]
     PdaNotOwnedByContract,
+    #[msg("User ID mismatch between signer and destination records")]
+    UserIdMismatch,
+    #[msg("Insufficient balance deposited")]
+    InsufficientBalance,
+    #[msg("Operation no permitted")]
+    InvalidOperation,
 }
