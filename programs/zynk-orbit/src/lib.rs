@@ -480,6 +480,301 @@ pub mod zynk_orbit {
         Ok(())
     }
 
+    // Repay from multiple sources (NCW wallets or ICV Record PDAs) into ZOV,
+    // replenish the order in zynk-core, and update/close Position PDAs.
+    pub fn repay<'info>(
+        ctx: Context<'_, '_, '_, 'info, Repay<'info>>,
+        partner_id: [u8; 32],
+        order_id: [u8; 32],
+        zov_id: [u8; 32],
+        transient_order_id: [u8; 32],
+        amount: u64,
+        positions: Vec<PositionOperation>,
+        meta: Option<Vec<EventArg>>,
+    ) -> Result<()> {
+        require!(!positions.is_empty(), OrbitError::EmptyPositions);
+        require!(amount > 0, OrbitError::ZeroAmount);
+
+        // Validate all positions are NCW or ICV (not LP)
+        for pos in &positions {
+            require!(
+                pos.user_type != UserType::LP,
+                OrbitError::UnauthorizedBorrower
+            );
+        }
+
+        // Read the order tracker to determine remaining order amount
+        let order_tracker_data = ctx.accounts.core_order_tracker.try_borrow_data()?;
+        // Skip 8-byte discriminator
+        let order_tracker = zynk_core::OrderTracker::try_deserialize(&mut &order_tracker_data[8..])
+            .map_err(|_| OrbitError::InvalidAccount)?;
+        let amount_out = order_tracker.amount_out;
+        let amount_in = order_tracker.amount_in;
+        drop(order_tracker_data);
+
+        // Compute remaining order amount (amount still owed)
+        let remaining_order = amount_out
+            .checked_sub(amount_in)
+            .ok_or(ProgramError::ArithmeticOverflow)?;
+
+        // The prepared amount is capped by the remaining order amount
+        let prepared_amount = amount.min(remaining_order);
+        let is_full_repay = prepared_amount >= remaining_order;
+
+        // Step 1: CPI to zynk_core::replenish
+        // Replenish always uses the full `amount` (includes fees to be accumulated in ZOV).
+        // Only `prepared_amount` (capped by remaining order) will be sent to ovault for repaying principal.
+        let cpi_program = ctx.accounts.zynk_core_program.to_account_info();
+
+        let replenish_accounts = zynk_core::cpi::accounts::Replenish {
+            config: ctx.accounts.core_config.to_account_info(),
+            manager: ctx.accounts.manager.to_account_info(),
+            order_tracker: ctx.accounts.core_order_tracker.to_account_info(),
+            partner_deposit_vault: ctx.accounts.core_partner_deposit_vault.to_account_info(),
+            pdv_token_account: ctx.accounts.core_pdv_token_account.to_account_info(),
+            zov_token_account: ctx.accounts.zov_token_account.to_account_info(),
+            mint: ctx.accounts.mint.to_account_info(),
+            token_program: ctx.accounts.token_program.to_account_info(),
+            system_program: ctx.accounts.system_program.to_account_info(),
+        };
+
+        let replenish_ctx = CpiContext::new(cpi_program.clone(), replenish_accounts);
+        zynk_core::cpi::replenish(replenish_ctx, amount, is_full_repay, meta)?;
+
+        // Step 2: CPI to zynk_core::create_order (transient) to move prepared_amount from ZOV to ovault
+        // ovault PDA is the beneficiary (must be whitelisted with allow_transient=true in zynk-core)
+        // ovault_token_account is the beneficiary's token account
+        let create_order_accounts = CreateOrder {
+            config: ctx.accounts.core_config.to_account_info(),
+            manager: ctx.accounts.manager.to_account_info(),
+            partner_deposit_vault: ctx.accounts.core_partner_deposit_vault.to_account_info(),
+            pdv_token_account: None,
+            zynk_op_vault: ctx.accounts.core_zynk_op_vault.to_account_info(),
+            zov_token_account: ctx.accounts.zov_token_account.to_account_info(),
+            beneficiary: ctx.accounts.ovault.to_account_info(),
+            beneficiary_token_account: ctx.accounts.ovault_token_account.to_account_info(),
+            order_tracker: ctx.accounts.core_transient_order_tracker.to_account_info(),
+            mint: ctx.accounts.mint.to_account_info(),
+            token_program: ctx.accounts.token_program.to_account_info(),
+            system_program: ctx.accounts.system_program.to_account_info(),
+            sysvar_instructions: None,
+        };
+
+        let create_order_ctx = CpiContext::new(cpi_program, create_order_accounts);
+        zynk_core::cpi::create_order(
+            create_order_ctx,
+            partner_id,
+            transient_order_id,
+            zov_id,
+            true, // transient = true
+            prepared_amount,
+            None,
+        )?;
+
+        // Step 3: Validate positions from remaining accounts
+        let remaining_accounts = ctx.remaining_accounts;
+        let num_positions = positions.len();
+
+        // Each position requires 3 remaining accounts:
+        // [destination_token_account, record, position_pda]
+        require!(
+            remaining_accounts.len() >= num_positions * 3,
+            OrbitError::InvalidPositionOperation
+        );
+
+        // First pass: validate all records, positions, and compute total remaining across positions
+        let mut total_position_remaining: u64 = 0;
+        let mut position_remaining_amounts = Vec::with_capacity(num_positions);
+
+        for (i, pos) in positions.iter().enumerate() {
+            let base_idx = i * 3;
+            let _dst_token_account = &remaining_accounts[base_idx];
+            let record_account = &remaining_accounts[base_idx + 1];
+            let position_pda = &remaining_accounts[base_idx + 2];
+
+            // Verify the record account
+            let record_data = record_account.data.borrow();
+            let record = Record::try_deserialize(&mut &record_data[8..])
+                .map_err(|_| OrbitError::InvalidAccount)?;
+            require!(
+                record.interaction_wallet == pos.lp_interaction_wallet,
+                OrbitError::InvalidAccount
+            );
+            drop(record_data);
+
+            // Verify the position PDA
+            let position_data = position_pda.data.borrow();
+            let position = Position::try_deserialize(&mut &position_data[8..])
+                .map_err(|_| OrbitError::InvalidAccount)?;
+            require!(
+                position.order_id == order_id,
+                OrbitError::PositionOrderMismatch
+            );
+            drop(position_data);
+
+            let position_remaining = position
+                .amount_borrowed
+                .checked_sub(position.amount_repaid)
+                .ok_or(ProgramError::ArithmeticOverflow)?;
+            position_remaining_amounts.push(position_remaining);
+
+            total_position_remaining = total_position_remaining
+                .checked_add(position_remaining)
+                .ok_or(ProgramError::ArithmeticOverflow)?;
+        }
+
+        // Verify total remaining across all positions matches the order's remaining amount
+        require!(
+            total_position_remaining == remaining_order,
+            OrbitError::AmountMismatch
+        );
+
+        // Step 4: Distribute prepared_amount across positions using ceiling-based algorithm
+        // For each position, share = ceil(remaining_repay * position_remaining / remaining_order)
+        // This ensures no position is overpaid and the last position absorbs rounding dust.
+        let mut remaining_repay = prepared_amount;
+        let mut remaining_order_amount = remaining_order;
+        let mut position_shares = Vec::with_capacity(num_positions);
+
+        for i in 0..num_positions {
+            let pos_remaining = position_remaining_amounts[i];
+
+            // Ceiling division: ceil(a / b) = (a + b - 1) / b
+            let share = if remaining_order_amount > 0 {
+                let numerator = remaining_repay
+                    .checked_mul(pos_remaining)
+                    .ok_or(ProgramError::ArithmeticOverflow)?;
+                let raw_share = (numerator + remaining_order_amount - 1)
+                    .checked_div(remaining_order_amount)
+                    .ok_or(ProgramError::ArithmeticOverflow)?;
+                // Safety: never exceed the position's remaining amount
+                raw_share.min(pos_remaining)
+            } else {
+                0
+            };
+
+            remaining_repay = remaining_repay
+                .checked_sub(share)
+                .ok_or(ProgramError::ArithmeticOverflow)?;
+            remaining_order_amount = remaining_order_amount
+                .checked_sub(pos_remaining)
+                .ok_or(ProgramError::ArithmeticOverflow)?;
+
+            position_shares.push(share);
+        }
+
+        // Step 5: Transfer from ovault to each position and update/close Position PDAs
+        let ovault_seeds: &[&[u8]] = &[VAULT_SEED, b"orbit", &[ctx.bumps.ovault]];
+        let ovault_signer_seeds = &[&ovault_seeds[..]];
+
+        for (i, pos) in positions.iter().enumerate() {
+            let base_idx = i * 3;
+            let dst_token_account = &remaining_accounts[base_idx];
+            let record_account = &remaining_accounts[base_idx + 1];
+            let position_pda = &remaining_accounts[base_idx + 2];
+
+            let share = position_shares[i];
+            if share == 0 {
+                continue;
+            }
+
+            // Verify destination based on user type
+            match pos.user_type {
+                UserType::NCW => {
+                    // For NCW, destination is the wallet's token account
+                    // Verify the record is NCW
+                    let record_data = record_account.data.borrow();
+                    let record = Record::try_deserialize(&mut &record_data[8..])
+                        .map_err(|_| OrbitError::InvalidAccount)?;
+                    require!(
+                        record.user_type == UserType::NCW,
+                        OrbitError::InvalidAccount
+                    );
+                    require!(
+                        record.interaction_wallet == pos.lp_interaction_wallet,
+                        OrbitError::InvalidAccount
+                    );
+                    // Verify destination token account owner is the interaction wallet
+                    require!(
+                        *dst_token_account.owner == pos.lp_interaction_wallet,
+                        OrbitError::InvalidAccount
+                    );
+                    drop(record_data);
+                }
+                UserType::ICV => {
+                    // For ICV, destination is the record PDA's token account
+                    let record_data = record_account.data.borrow();
+                    let record = Record::try_deserialize(&mut &record_data[8..])
+                        .map_err(|_| OrbitError::InvalidAccount)?;
+                    require!(
+                        record.user_type == UserType::ICV,
+                        OrbitError::InvalidAccount
+                    );
+                    require!(
+                        record.interaction_wallet == pos.lp_interaction_wallet,
+                        OrbitError::InvalidAccount
+                    );
+                    // Verify destination token account owner is the record PDA
+                    require!(
+                        *dst_token_account.owner == record_account.key(),
+                        OrbitError::InvalidAccount
+                    );
+                    drop(record_data);
+                }
+                UserType::LP => {
+                    return Err(OrbitError::UnauthorizedBorrower.into());
+                }
+            }
+
+            // Transfer from ovault_token_account to destination
+            let transfer_accounts = TransferChecked {
+                from: ctx.accounts.ovault_token_account.to_account_info(),
+                to: dst_token_account.to_account_info(),
+                mint: ctx.accounts.mint.to_account_info(),
+                authority: ctx.accounts.ovault.to_account_info(),
+            };
+
+            let transfer_ctx = CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                transfer_accounts,
+                ovault_signer_seeds,
+            );
+            token_interface::transfer_checked(transfer_ctx, share, ctx.accounts.mint.decimals)?;
+
+            // Update the Position PDA
+            let mut position_data = position_pda.try_borrow_mut_data()?;
+            let mut position = Position::try_deserialize_unchecked(&mut &position_data[8..])?;
+            position.amount_repaid = position
+                .amount_repaid
+                .checked_add(share)
+                .ok_or(ProgramError::ArithmeticOverflow)?;
+            let is_position_closed = position.amount_repaid >= position.amount_borrowed;
+            let encoded = position.try_to_vec()?;
+            position_data[8..8 + encoded.len()].copy_from_slice(&encoded);
+            drop(position_data);
+
+            // Close the Position PDA if fully repaid
+            if is_position_closed {
+                close_account(position_pda, &ctx.accounts.manager)?;
+            }
+        }
+
+        emit!(TxEvent {
+            event_name: String::from("repay"),
+            user_id: [0u8; 32],
+            from_owner: ZOV,
+            to_owner: ctx.accounts.ovault.key(),
+            from: ctx.accounts.zov_token_account.key(),
+            to: ctx.accounts.ovault_token_account.key(),
+            amount: prepared_amount,
+            token: ctx.accounts.mint.key(),
+            domain_separator: DOMAIN_SEPARATOR,
+            order_id: Some(order_id),
+        });
+
+        Ok(())
+    }
+
     // Ovault -> Whitelisted beneficiary / Order source
     pub fn disburse(ctx: Context<Disburse>, amount: u64) -> Result<()> {
         let record = &mut ctx.accounts.record;
@@ -907,6 +1202,67 @@ pub struct Borrow<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(partner_id: [u8; 32], order_id: [u8; 32], zov_id: [u8; 32], transient_order_id: [u8; 32])]
+pub struct Repay<'info> {
+    /// ZOV token account (shared with zynk-core CPI)
+    #[account(mut, constraint = zov_token_account.owner == ZOV @ OrbitError::InvalidAccount)]
+    pub zov_token_account: InterfaceAccount<'info, TokenAccount>,
+
+    /// Ovault token account (destination for transient create_order, source for position transfers)
+    #[account(mut)]
+    pub ovault_token_account: InterfaceAccount<'info, TokenAccount>,
+
+    #[account(
+        constraint = ALLOWED_MINTS.contains(&mint.key()) @ OrbitError::InvalidTokenMint,
+        constraint = mint.key() == zov_token_account.mint @ OrbitError::InvalidTokenMint,
+    )]
+    pub mint: InterfaceAccount<'info, Mint>,
+
+    #[account(mut, constraint = manager.key() == MANAGER @ OrbitError::UnauthorizedManager)]
+    pub manager: Signer<'info>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+    pub system_program: Program<'info, System>,
+
+    /// CHECK: zynk-core program (for CPI)
+    pub zynk_core_program: Program<'info, ZynkCore>,
+
+    // --- Replenish CPI accounts ---
+    /// CHECK: zynk-core config PDA
+    #[account(mut)]
+    pub core_config: UncheckedAccount<'info>,
+
+    /// CHECK: zynk-core order tracker PDA (existing, updated by replenish)
+    #[account(mut)]
+    pub core_order_tracker: UncheckedAccount<'info>,
+
+    /// CHECK: zynk-core partner deposit vault PDA
+    pub core_partner_deposit_vault: UncheckedAccount<'info>,
+
+    /// CHECK: zynk-core PDV token account (source for replenish)
+    #[account(mut)]
+    pub core_pdv_token_account: UncheckedAccount<'info>,
+
+    // --- Transient CreateOrder CPI accounts ---
+    /// CHECK: zynk-core ZOV PDA (derived with zynk-core's ZYNK_OP_VAULT_SEED + zov_id)
+    pub core_zynk_op_vault: UncheckedAccount<'info>,
+
+    /// CHECK: zynk-core transient order tracker PDA (created and closed by create_order)
+    #[account(mut)]
+    pub core_transient_order_tracker: UncheckedAccount<'info>,
+
+    // --- Ovault PDA (signer for ovault → position transfers, and beneficiary for transient create_order) ---
+    /// CHECK: Ovault - verified by seeds. Must be whitelisted as a beneficiary in zynk-core with allow_transient=true.
+    #[account(
+        seeds = [VAULT_SEED, b"orbit"],
+        bump
+    )]
+    pub ovault: UncheckedAccount<'info>,
+    // Remaining accounts (3 per position):
+    // [destination_token_account, record, position_pda]
+}
+
+#[derive(Accounts)]
 pub struct Disburse<'info> {
     #[account(mut, constraint = source_token_account.owner == ovault.key() @ OrbitError::InvalidAccount)]
     pub source_token_account: InterfaceAccount<'info, TokenAccount>,
@@ -1128,4 +1484,6 @@ pub enum OrbitError {
     UnauthorizedBorrower,
     #[msg("Invalid position operation")]
     InvalidPositionOperation,
+    #[msg("Position order IDs do not match")]
+    PositionOrderMismatch,
 }
