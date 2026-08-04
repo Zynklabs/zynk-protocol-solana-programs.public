@@ -81,7 +81,7 @@ pub struct PositionOperation {
 #[event]
 pub struct TxEvent {
     pub event_name: String,
-    pub user_id: [u8; 32],
+    pub user_id: Option<[u8; 32]>,
     pub from_owner: Pubkey,
     pub to_owner: Pubkey,
     pub from: Pubkey,
@@ -158,6 +158,18 @@ pub mod zynk_orbit {
         let now = Clock::get()?.unix_timestamp;
         require!(now < record.cliff_period, OrbitError::CliffPeriodOver);
 
+        // Enforce max_deposit cap on net balance (principle_in - principle_out)
+        require!(
+            record
+                .principle_in
+                .checked_sub(record.principle_out)
+                .ok_or(ProgramError::ArithmeticOverflow)?
+                .checked_add(amount)
+                .ok_or(ProgramError::ArithmeticOverflow)?
+                <= record.max_deposit as u64,
+            OrbitError::MaxDepositExceeded
+        );
+
         // Validate destination based on user type
         match record.user_type {
             UserType::LP => {
@@ -198,7 +210,7 @@ pub mod zynk_orbit {
 
         emit!(TxEvent {
             event_name: String::from("deposit"),
-            user_id,
+            user_id: Some(user_id),
             from_owner: ctx.accounts.source_token_account.owner.key(),
             to_owner: ctx.accounts.destination_token_account.owner.key(),
             from: ctx.accounts.source_token_account.key(),
@@ -276,6 +288,12 @@ pub mod zynk_orbit {
                         Pubkey::find_program_address(seeds, ctx.program_id);
                     require!(
                         authority_account.key() == expected_authority,
+                        OrbitError::InvalidAccount
+                    );
+
+                    // Verify the source token account is owned by this vault authority
+                    require!(
+                        *source_token_account.owner == expected_authority,
                         OrbitError::InvalidAccount
                     );
 
@@ -417,12 +435,12 @@ pub mod zynk_orbit {
 
         emit!(TxEvent {
             event_name: String::from("borrow"),
-            user_id: [0u8; 32],
+            user_id: None,
             from_owner: ZOV,
             to_owner: ZOV,
             from: ctx.accounts.zov_token_account.key(),
             to: ctx.accounts.zov_token_account.key(),
-            amount: 0,
+            amount,
             token: ctx.accounts.mint.key(),
             domain_separator: DOMAIN_SEPARATOR,
             order_id: Some(order_id),
@@ -533,9 +551,15 @@ pub mod zynk_orbit {
             OrbitError::InvalidPositionOperation
         );
 
-        // First pass: validate all records, positions, and compute total remaining across positions
+        // First pass: validate all records and positions, cache user_type and remaining amount.
+        // Second pass: distribute shares and execute transfers using cached data.
+        struct PositionInfo {
+            user_type: UserType,
+            remaining: u64,
+            share: u64,
+        }
+        let mut position_infos = Vec::with_capacity(num_positions);
         let mut total_position_remaining: u64 = 0;
-        let mut position_remaining_amounts = Vec::with_capacity(num_positions);
 
         for (i, pos) in positions.iter().enumerate() {
             let base_idx = i * 3;
@@ -551,6 +575,7 @@ pub mod zynk_orbit {
                 record.primary_account == pos.lp_primary_account,
                 OrbitError::InvalidAccount
             );
+            let record_user_type = record.user_type;
             drop(record_data);
 
             // Verify the position PDA
@@ -561,17 +586,21 @@ pub mod zynk_orbit {
                 position.order_id == order_id,
                 OrbitError::PositionOrderMismatch
             );
-            drop(position_data);
-
-            let position_remaining = position
+            let remaining = position
                 .amount_borrowed
                 .checked_sub(position.amount_repaid)
                 .ok_or(ProgramError::ArithmeticOverflow)?;
-            position_remaining_amounts.push(position_remaining);
+            drop(position_data);
 
             total_position_remaining = total_position_remaining
-                .checked_add(position_remaining)
+                .checked_add(remaining)
                 .ok_or(ProgramError::ArithmeticOverflow)?;
+
+            position_infos.push(PositionInfo {
+                user_type: record_user_type,
+                remaining,
+                share: 0,
+            });
         }
 
         // Verify total remaining across all positions matches the order's remaining amount
@@ -580,26 +609,21 @@ pub mod zynk_orbit {
             OrbitError::AmountMismatch
         );
 
-        // Step 4: Distribute prepared_amount across positions using ceiling-based algorithm
-        // For each position, share = ceil(remaining_repay * position_remaining / remaining_order)
+        // Step 4: Distribute prepared_amount across positions using ceiling-based algorithm.
+        // share = ceil(remaining_repay * position.remaining / remaining_order)
         // This ensures no position is overpaid and the last position absorbs rounding dust.
         let mut remaining_repay = prepared_amount;
         let mut remaining_order_amount = remaining_order;
-        let mut position_shares = Vec::with_capacity(num_positions);
 
-        for i in 0..num_positions {
-            let pos_remaining = position_remaining_amounts[i];
-
-            // Ceiling division: ceil(a / b) = (a + b - 1) / b
+        for info in position_infos.iter_mut() {
             let share = if remaining_order_amount > 0 {
                 let numerator = remaining_repay
-                    .checked_mul(pos_remaining)
+                    .checked_mul(info.remaining)
                     .ok_or(ProgramError::ArithmeticOverflow)?;
                 let raw_share = (numerator + remaining_order_amount - 1)
                     .checked_div(remaining_order_amount)
                     .ok_or(ProgramError::ArithmeticOverflow)?;
-                // Safety: never exceed the position's remaining amount
-                raw_share.min(pos_remaining)
+                raw_share.min(info.remaining).min(remaining_repay)
             } else {
                 0
             };
@@ -608,10 +632,10 @@ pub mod zynk_orbit {
                 .checked_sub(share)
                 .ok_or(ProgramError::ArithmeticOverflow)?;
             remaining_order_amount = remaining_order_amount
-                .checked_sub(pos_remaining)
+                .checked_sub(info.remaining)
                 .ok_or(ProgramError::ArithmeticOverflow)?;
 
-            position_shares.push(share);
+            info.share = share;
         }
 
         // Step 5: Transfer from ovault to each position and update/close Position PDAs
@@ -624,53 +648,26 @@ pub mod zynk_orbit {
             let record_account = &remaining_accounts[base_idx + 1];
             let position_pda = &remaining_accounts[base_idx + 2];
 
-            let share = position_shares[i];
-            if share == 0 {
+            let info = &position_infos[i];
+            if info.share == 0 {
                 continue;
             }
 
-            // Verify destination based on user type
+            // Verify destination based on user type (using cached position info)
             match pos.user_type {
                 UserType::NCW => {
-                    // For NCW, destination is the wallet's token account
-                    // Verify the record is NCW
-                    let record_data = record_account.data.borrow();
-                    let record = Record::try_deserialize(&mut &record_data[8..])
-                        .map_err(|_| OrbitError::InvalidAccount)?;
-                    require!(
-                        record.user_type == UserType::NCW,
-                        OrbitError::InvalidAccount
-                    );
-                    require!(
-                        record.primary_account == pos.lp_primary_account,
-                        OrbitError::InvalidAccount
-                    );
-                    // Verify destination token account owner is the primary wallet
+                    require!(info.user_type == UserType::NCW, OrbitError::InvalidAccount);
                     require!(
                         *dst_token_account.owner == pos.lp_primary_account,
                         OrbitError::InvalidAccount
                     );
-                    drop(record_data);
                 }
                 UserType::ICV => {
-                    // For ICV, destination is the record PDA's token account
-                    let record_data = record_account.data.borrow();
-                    let record = Record::try_deserialize(&mut &record_data[8..])
-                        .map_err(|_| OrbitError::InvalidAccount)?;
-                    require!(
-                        record.user_type == UserType::ICV,
-                        OrbitError::InvalidAccount
-                    );
-                    require!(
-                        record.primary_account == pos.lp_primary_account,
-                        OrbitError::InvalidAccount
-                    );
-                    // Verify destination token account owner is the record PDA
+                    require!(info.user_type == UserType::ICV, OrbitError::InvalidAccount);
                     require!(
                         *dst_token_account.owner == record_account.key(),
                         OrbitError::InvalidAccount
                     );
-                    drop(record_data);
                 }
                 UserType::LP => {
                     return Err(OrbitError::UnauthorizedBorrower.into());
@@ -690,14 +687,18 @@ pub mod zynk_orbit {
                 transfer_accounts,
                 ovault_signer_seeds,
             );
-            token_interface::transfer_checked(transfer_ctx, share, ctx.accounts.mint.decimals)?;
+            token_interface::transfer_checked(
+                transfer_ctx,
+                info.share,
+                ctx.accounts.mint.decimals,
+            )?;
 
             // Update the Position PDA
             let mut position_data = position_pda.try_borrow_mut_data()?;
             let mut position = Position::try_deserialize_unchecked(&mut &position_data[8..])?;
             position.amount_repaid = position
                 .amount_repaid
-                .checked_add(share)
+                .checked_add(info.share)
                 .ok_or(ProgramError::ArithmeticOverflow)?;
             let is_position_closed = position.amount_repaid >= position.amount_borrowed;
             let encoded = position.try_to_vec()?;
@@ -712,7 +713,7 @@ pub mod zynk_orbit {
 
         emit!(TxEvent {
             event_name: String::from("repay"),
-            user_id: [0u8; 32],
+            user_id: None,
             from_owner: ZOV,
             to_owner: ctx.accounts.ovault.key(),
             from: ctx.accounts.zov_token_account.key(),
@@ -732,9 +733,8 @@ pub mod zynk_orbit {
     // TODO: In a future iteration, incorporate pull+repay to settle outstanding
     // borrowed positions before transferring ICV funds to aux account. This will
     // require:
-    //  - CPI to zynk_core::replenish (needs manager signer)
-    //  - CPI to zynk_core::create_order (transient, needs manager signer)
-    //  - Closing the position PDA if fully repaid (needs manager signer)
+    //  - CPI to zynk_core::pull_and_repay
+    //  - Closing the position PDA if fully repaid
     // Currently, claim only transfers funds held in the ICV token account directly
     // to the aux account.
     pub fn claim(ctx: Context<Claim>, user_id: [u8; 32]) -> Result<()> {
@@ -790,7 +790,7 @@ pub mod zynk_orbit {
 
         emit!(TxEvent {
             event_name: String::from("claim"),
-            user_id,
+            user_id: Some(user_id),
             from_owner: ctx.accounts.record.key(),
             to_owner: ctx.accounts.aux_token_account.owner,
             from: ctx.accounts.icv_token_account.key(),
@@ -828,7 +828,7 @@ pub mod zynk_orbit {
 
         emit!(TxEvent {
             event_name: String::from("disburse"),
-            user_id: record.user_id,
+            user_id: Some(record.user_id),
             from_owner: ctx.accounts.source_token_account.owner.key(),
             to_owner: ctx.accounts.destination_token_account.owner.key(),
             from: ctx.accounts.source_token_account.key(),
@@ -933,9 +933,13 @@ pub mod zynk_orbit {
             let now = Clock::get()?.unix_timestamp;
             require!(cp > now, OrbitError::CliffPeriodInPast);
         }
+        let resolved_cliff = cliff_period.unwrap_or(user_record.cliff_period);
+        // Validate the resolved cliff period is in the future
+        let now = Clock::get()?.unix_timestamp;
+        require!(resolved_cliff > now, OrbitError::CliffPeriodInPast);
         request_record.primary_account = primary_account;
         request_record.user_id = user_id;
-        request_record.cliff_period = cliff_period.unwrap_or(user_record.cliff_period);
+        request_record.cliff_period = resolved_cliff;
 
         emit!(AxEvent {
             event_name: String::from("cliff_period_updated"),
@@ -983,7 +987,7 @@ pub mod zynk_orbit {
         );
 
         require!(
-            signer_record.principle_in - signer_record.principle_out > amount as u64,
+            signer_record.principle_in - signer_record.principle_out >= amount as u64,
             OrbitError::InsufficientBalance
         );
 
@@ -1018,6 +1022,12 @@ pub mod zynk_orbit {
         require!(
             record.user_id == withdraw_request.user_id
                 && record.primary_account == withdraw_request.primary_account,
+            OrbitError::InvalidAccount
+        );
+
+        // Verify destination token account matches the withdraw request
+        require!(
+            ctx.accounts.destination_token_account.owner == withdraw_request.destination,
             OrbitError::InvalidAccount
         );
 
@@ -1057,7 +1067,7 @@ pub mod zynk_orbit {
 
         emit!(TxEvent {
             event_name: String::from("withdraw_approved"),
-            user_id: withdraw_request.user_id,
+            user_id: Some(withdraw_request.user_id),
             from_owner: ctx.accounts.source_token_account.owner.key(),
             to_owner: ctx.accounts.destination_token_account.owner.key(),
             from: ctx.accounts.source_token_account.key(),
@@ -1188,7 +1198,11 @@ pub struct Repay<'info> {
     pub zov_token_account: InterfaceAccount<'info, TokenAccount>,
 
     /// Ovault token account (destination for transient create_order, source for position transfers)
-    #[account(mut)]
+    #[account(
+        mut,
+        constraint = ovault_token_account.owner == ovault.key() @ OrbitError::InvalidAccount,
+        constraint = ovault_token_account.mint == mint.key() @ OrbitError::InvalidTokenMint,
+    )]
     pub ovault_token_account: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
@@ -1498,4 +1512,6 @@ pub enum OrbitError {
     CliffPeriodOver,
     #[msg("Cliff period is not over yet")]
     CliffPeriodNotOver,
+    #[msg("Deposit would exceed max deposit cap")]
+    MaxDepositExceeded,
 }
