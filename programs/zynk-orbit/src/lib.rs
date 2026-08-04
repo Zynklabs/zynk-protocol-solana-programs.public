@@ -63,14 +63,6 @@ pub struct UpdateCliffPeriodRequest {
 
 #[account]
 #[derive(InitSpace)]
-pub struct Order {
-    pub order_id: [u8; 32],
-    pub amount: u64,
-    pub public_key: Pubkey,
-}
-
-#[account]
-#[derive(InitSpace)]
 pub struct Position {
     pub order_id: [u8; 32],
     pub amount_borrowed: u64,
@@ -215,55 +207,6 @@ pub mod zynk_orbit {
             token: ctx.accounts.mint.key(),
             domain_separator: DOMAIN_SEPARATOR,
             order_id: None,
-        });
-
-        Ok(())
-    }
-
-    // External signers + delegated vault -> ZOV
-    // Any vault -> ZOV
-    pub fn collect(
-        ctx: Context<Collect>,
-        vault_id: [u8; 32],
-        order_id: [u8; 32],
-        amount: u64,
-    ) -> Result<()> {
-        let seeds: &[&[u8]] = &[VAULT_SEED, vault_id.as_ref(), &[ctx.bumps.spender]];
-        let signer_seeds = &[&seeds[..]];
-
-        let cpi_accounts = TransferChecked {
-            from: ctx.accounts.source_token_account.to_account_info(),
-            to: ctx.accounts.destination_token_account.to_account_info(),
-            mint: ctx.accounts.mint.to_account_info(),
-            authority: ctx.accounts.spender.to_account_info(),
-        };
-
-        let cpi_ctx = CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
-            cpi_accounts,
-            signer_seeds,
-        );
-        token_interface::transfer_checked(cpi_ctx, amount, ctx.accounts.mint.decimals)?;
-
-        let order = &mut ctx.accounts.order;
-        order.order_id = order_id;
-        order.amount = order
-            .amount
-            .checked_add(amount)
-            .ok_or(ProgramError::ArithmeticOverflow)?;
-        order.public_key = ctx.accounts.source_token_account.owner;
-
-        emit!(TxEvent {
-            event_name: String::from("collect"),
-            user_id: ctx.accounts.record.user_id,
-            from_owner: ctx.accounts.source_token_account.owner.key(),
-            to_owner: ctx.accounts.destination_token_account.owner.key(),
-            from: ctx.accounts.source_token_account.key(),
-            to: ctx.accounts.destination_token_account.key(),
-            amount,
-            token: ctx.accounts.mint.key(),
-            domain_separator: DOMAIN_SEPARATOR,
-            order_id: Some(order_id),
         });
 
         Ok(())
@@ -861,27 +804,19 @@ pub mod zynk_orbit {
         Ok(())
     }
 
-    // Ovault -> Whitelisted beneficiary / Order source
-    pub fn disburse(ctx: Context<Disburse>, amount: u64) -> Result<()> {
+    // Disburse funds from any PDA vault to a whitelisted record's primary account.
+    // The vault PDA is derived from [VAULT_SEED, vault_id] and acts as the transfer authority.
+    pub fn disburse(ctx: Context<Disburse>, vault_id: [u8; 32], amount: u64) -> Result<()> {
         let record = &mut ctx.accounts.record;
 
-        if let Some(order) = ctx.accounts.order.as_ref() {
-            require!(
-                order.public_key == record.primary_account,
-                OrbitError::InvalidAccount
-            );
-            require!(order.amount == amount, OrbitError::Inequality);
-            close_account(order, &ctx.accounts.manager)?;
-        }
-
-        let seeds: &[&[u8]] = &[VAULT_SEED, b"orbit", &[ctx.bumps.ovault]];
+        let seeds: &[&[u8]] = &[VAULT_SEED, vault_id.as_ref(), &[ctx.bumps.spender]];
         let signer_seeds = &[&seeds[..]];
 
         let cpi_accounts = TransferChecked {
             from: ctx.accounts.source_token_account.to_account_info(),
             to: ctx.accounts.destination_token_account.to_account_info(),
             mint: ctx.accounts.mint.to_account_info(),
-            authority: ctx.accounts.ovault.to_account_info(),
+            authority: ctx.accounts.spender.to_account_info(),
         };
 
         let cpi_ctx = CpiContext::new_with_signer(
@@ -901,7 +836,7 @@ pub mod zynk_orbit {
             amount,
             token: ctx.accounts.mint.key(),
             domain_separator: DOMAIN_SEPARATOR,
-            order_id: ctx.accounts.order.as_ref().map(|o| o.order_id),
+            order_id: None,
         });
 
         Ok(())
@@ -1199,48 +1134,6 @@ pub struct Deposit<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(vault_id: [u8; 32], order_id: [u8; 32])]
-pub struct Collect<'info> {
-    #[account(mut)]
-    pub source_token_account: InterfaceAccount<'info, TokenAccount>,
-
-    #[account(mut, constraint = destination_token_account.owner == ZOV @ OrbitError::InvalidAccount)]
-    pub destination_token_account: InterfaceAccount<'info, TokenAccount>,
-
-    /// CHECK: Vault - verified by seeds
-    #[account(
-        seeds = [VAULT_SEED, vault_id.as_ref()],
-        bump
-    )]
-    pub spender: UncheckedAccount<'info>,
-
-    #[account(mut)]
-    pub record: Account<'info, Record>,
-
-    #[account(
-        init,
-        payer = manager,
-        space = 8 + Order::INIT_SPACE,
-        seeds = [ORDER_SEED, order_id.as_ref()],
-        bump
-    )]
-    pub order: Account<'info, Order>,
-
-    #[account(
-        constraint = ALLOWED_MINTS.contains(&mint.key()) @ OrbitError::InvalidTokenMint,
-        constraint = mint.key() == source_token_account.mint @ OrbitError::InvalidTokenMint,
-        constraint = mint.key() == destination_token_account.mint @ OrbitError::InvalidTokenMint,
-    )]
-    pub mint: InterfaceAccount<'info, Mint>,
-
-    #[account(mut, constraint = manager.key() == MANAGER @ OrbitError::UnauthorizedManager)]
-    pub manager: Signer<'info>,
-
-    pub token_program: Interface<'info, TokenInterface>,
-    pub system_program: Program<'info, System>,
-}
-
-#[derive(Accounts)]
 #[instruction(partner_id: [u8; 32], order_id: [u8; 32], zov_id: [u8; 32])]
 pub struct Borrow<'info> {
     /// ZOV destination token account (shared with zynk-core CPI)
@@ -1349,26 +1242,23 @@ pub struct Repay<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(vault_id: [u8; 32])]
 pub struct Disburse<'info> {
-    #[account(mut, constraint = source_token_account.owner == ovault.key() @ OrbitError::InvalidAccount)]
+    #[account(mut)]
     pub source_token_account: InterfaceAccount<'info, TokenAccount>,
 
     #[account(mut, constraint = destination_token_account.owner == record.primary_account @ OrbitError::InvalidAccount)]
     pub destination_token_account: InterfaceAccount<'info, TokenAccount>,
 
-    /// CHECK: Ovault - verified by seeds
+    /// CHECK: Vault PDA - verified by seeds, acts as the transfer authority
     #[account(
-        mut,
-        seeds = [VAULT_SEED, b"orbit"],
+        seeds = [VAULT_SEED, vault_id.as_ref()],
         bump
     )]
-    pub ovault: UncheckedAccount<'info>,
+    pub spender: UncheckedAccount<'info>,
 
     #[account(mut)]
     pub record: Account<'info, Record>,
-
-    #[account(mut)]
-    pub order: Option<Account<'info, Order>>,
 
     #[account(
         constraint = ALLOWED_MINTS.contains(&mint.key()) @ OrbitError::InvalidTokenMint,
