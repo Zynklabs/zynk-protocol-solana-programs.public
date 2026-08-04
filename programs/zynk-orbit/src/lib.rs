@@ -1,6 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::{pubkey::Pubkey, system_program::ID as SYSTEM_PROGRAM_ID};
 use anchor_spl::token_interface::{self, Mint, TokenAccount, TokenInterface, TransferChecked};
+use zynk_core::{self, cpi::accounts::CreateOrder, program::ZynkCore, EventArg};
 
 declare_id!("ZYNKopsYjG6gaGqdwz8HLAgvCAEFwCET56kRQKkjxfc");
 
@@ -20,6 +21,7 @@ pub const ORDER_SEED: &[u8] = b"order";
 pub const RECORD_SEED: &[u8] = b"record";
 pub const WITHDRAW_REQUEST_SEED: &[u8] = b"withdraw_request";
 pub const RECORD_UPDATE_REQUEST_SEED: &[u8] = b"record_update_request";
+pub const POSITION_SEED: &[u8] = b"position";
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, InitSpace)]
 #[repr(u8)]
@@ -67,6 +69,23 @@ pub struct Order {
     pub public_key: Pubkey,
 }
 
+#[account]
+#[derive(InitSpace)]
+pub struct Position {
+    pub order_id: [u8; 32],
+    pub amount_borrowed: u64,
+    pub amount_repaid: u64,
+    pub public_key: Pubkey,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct PositionOperation {
+    pub lp_interaction_wallet: Pubkey,
+    pub amount: u64,
+    pub user_type: UserType,
+    pub vault_id: [u8; 32],
+}
+
 #[event]
 pub struct TxEvent {
     pub event_name: String,
@@ -104,13 +123,66 @@ pub fn close_account<'a, 'b>(
     from.realloc(0, false).map_err(Into::into)
 }
 
+/// Transfers tokens from a source account to ZOV using a PDA authority with signer seeds.
+/// This is the common transfer path shared by both NCW and ICV position operations in borrow.
+fn transfer_to_zov<'info>(
+    token_program: &Interface<'info, TokenInterface>,
+    zov_token_account: &InterfaceAccount<'info, TokenAccount>,
+    mint: &InterfaceAccount<'info, Mint>,
+    source_token_account: &AccountInfo<'info>,
+    authority: &AccountInfo<'info>,
+    signer_seeds: &[&[&[u8]]],
+    amount: u64,
+) -> Result<()> {
+    let cpi_accounts = TransferChecked {
+        from: source_token_account.to_account_info(),
+        to: zov_token_account.to_account_info(),
+        mint: mint.to_account_info(),
+        authority: authority.to_account_info(),
+    };
+
+    let cpi_ctx =
+        CpiContext::new_with_signer(token_program.to_account_info(), cpi_accounts, signer_seeds);
+    token_interface::transfer_checked(cpi_ctx, amount, mint.decimals)
+}
+
 #[program]
 pub mod zynk_orbit {
     use super::*;
 
-    // External (whitelisted) signers -> ZOV
+    // External (whitelisted) signers -> ZOV (for LP) or Record PDA token account (for ICV)
     pub fn deposit(ctx: Context<Deposit>, user_id: [u8; 32], amount: u64) -> Result<()> {
         require!(amount != 0, OrbitError::ZeroAmount);
+
+        let record = &ctx.accounts.record;
+
+        // Only LPs and ICVs can deposit. NCWs cannot.
+        require!(
+            record.user_type != UserType::NCW,
+            OrbitError::InvalidOperation
+        );
+
+        // Validate destination based on user type
+        match record.user_type {
+            UserType::LP => {
+                // LP deposits go to ZOV
+                require!(
+                    ctx.accounts.destination_token_account.owner == ZOV,
+                    OrbitError::InvalidAccount
+                );
+            }
+            UserType::ICV => {
+                // ICV deposits go to a token account owned by the Record PDA
+                require!(
+                    ctx.accounts.destination_token_account.owner == record.key(),
+                    OrbitError::InvalidAccount
+                );
+            }
+            UserType::NCW => {
+                // Should never reach here due to the check above
+                return Err(OrbitError::InvalidOperation.into());
+            }
+        }
 
         let cpi_accounts = TransferChecked {
             from: ctx.accounts.source_token_account.to_account_info(),
@@ -185,6 +257,221 @@ pub mod zynk_orbit {
             from: ctx.accounts.source_token_account.key(),
             to: ctx.accounts.destination_token_account.key(),
             amount,
+            token: ctx.accounts.mint.key(),
+            domain_separator: DOMAIN_SEPARATOR,
+            order_id: Some(order_id),
+        });
+
+        Ok(())
+    }
+
+    // Borrow from multiple sources (NCW wallets or ICV Record PDAs) into ZOV,
+    // create a single order in zynk-core, and create Position PDAs for each source.
+    pub fn borrow<'info>(
+        ctx: Context<'_, '_, '_, 'info, Borrow<'info>>,
+        partner_id: [u8; 32],
+        order_id: [u8; 32],
+        zov_id: [u8; 32],
+        amount: u64,
+        positions: Vec<PositionOperation>,
+        meta: Option<Vec<EventArg>>,
+    ) -> Result<()> {
+        require!(!positions.is_empty(), OrbitError::EmptyPositions);
+        require!(amount > 0, OrbitError::ZeroAmount);
+
+        // Validate all positions are NCW or ICV (not LP)
+        let mut total_position_amount: u64 = 0;
+        for pos in &positions {
+            require!(
+                pos.user_type != UserType::LP,
+                OrbitError::UnauthorizedBorrower
+            );
+            require!(pos.amount > 0, OrbitError::ZeroAmount);
+            total_position_amount = total_position_amount
+                .checked_add(pos.amount)
+                .ok_or(ProgramError::ArithmeticOverflow)?;
+        }
+
+        // Verify the total of all position amounts equals the borrow amount
+        require!(total_position_amount == amount, OrbitError::AmountMismatch);
+
+        let remaining_accounts = ctx.remaining_accounts;
+
+        // Process each position operation
+        for (i, pos) in positions.iter().enumerate() {
+            // Each position requires 4 remaining accounts:
+            // [source_token_account, authority_account, record, position_pda]
+            let base_idx = i * 4;
+            require!(
+                base_idx + 3 < remaining_accounts.len(),
+                OrbitError::InvalidPositionOperation
+            );
+            let source_token_account = &remaining_accounts[base_idx];
+            let authority_account = &remaining_accounts[base_idx + 1];
+            let record_account = &remaining_accounts[base_idx + 2];
+            let position_pda = &remaining_accounts[base_idx + 3];
+
+            // Verify the record account
+            let record_data = record_account.data.borrow();
+            let record = Record::try_deserialize(&mut &record_data[8..])
+                .map_err(|_| OrbitError::InvalidAccount)?;
+            require!(
+                record.interaction_wallet == pos.lp_interaction_wallet,
+                OrbitError::InvalidAccount
+            );
+            drop(record_data);
+
+            // Derive authority seeds, validate, and transfer based on user type
+            match pos.user_type {
+                UserType::NCW => {
+                    let seeds: &[&[u8]] = &[VAULT_SEED, pos.vault_id.as_ref()];
+                    let (expected_authority, bump) =
+                        Pubkey::find_program_address(seeds, ctx.program_id);
+                    require!(
+                        authority_account.key() == expected_authority,
+                        OrbitError::InvalidAccount
+                    );
+
+                    let seeds_with_bump: &[&[u8]] = &[VAULT_SEED, pos.vault_id.as_ref(), &[bump]];
+                    let signer_seeds = &[&seeds_with_bump[..]];
+                    transfer_to_zov(
+                        &ctx.accounts.token_program,
+                        &ctx.accounts.zov_token_account,
+                        &ctx.accounts.mint,
+                        source_token_account,
+                        authority_account,
+                        signer_seeds,
+                        pos.amount,
+                    )?;
+                }
+                UserType::ICV => {
+                    let seeds: &[&[u8]] = &[
+                        RECORD_SEED,
+                        record.user_id.as_ref(),
+                        record.interaction_wallet.as_ref(),
+                    ];
+                    let (expected_authority, bump) =
+                        Pubkey::find_program_address(seeds, ctx.program_id);
+                    require!(
+                        authority_account.key() == expected_authority,
+                        OrbitError::InvalidAccount
+                    );
+
+                    let seeds_with_bump: &[&[u8]] = &[
+                        RECORD_SEED,
+                        record.user_id.as_ref(),
+                        record.interaction_wallet.as_ref(),
+                        &[bump],
+                    ];
+                    let signer_seeds = &[&seeds_with_bump[..]];
+                    transfer_to_zov(
+                        &ctx.accounts.token_program,
+                        &ctx.accounts.zov_token_account,
+                        &ctx.accounts.mint,
+                        source_token_account,
+                        authority_account,
+                        signer_seeds,
+                        pos.amount,
+                    )?;
+                }
+                UserType::LP => {
+                    return Err(OrbitError::UnauthorizedBorrower.into());
+                }
+            };
+
+            // Create the Position PDA
+            let position_seeds: &[&[u8]] = &[
+                POSITION_SEED,
+                order_id.as_ref(),
+                pos.lp_interaction_wallet.as_ref(),
+            ];
+            let (expected_position_key, position_bump) =
+                Pubkey::find_program_address(position_seeds, ctx.program_id);
+            require!(
+                position_pda.key() == expected_position_key,
+                OrbitError::InvalidAccount
+            );
+
+            let position_seeds_with_bump: &[&[u8]] = &[
+                POSITION_SEED,
+                order_id.as_ref(),
+                pos.lp_interaction_wallet.as_ref(),
+                &[position_bump],
+            ];
+            let position_signer_seeds = &[&position_seeds_with_bump[..]];
+
+            // Create the Position account via system_program CPI
+            let position_space = 8 + Position::INIT_SPACE;
+            let create_position_ix =
+                anchor_lang::solana_program::system_instruction::create_account(
+                    &ctx.accounts.manager.key(),
+                    &expected_position_key,
+                    Rent::get()?.minimum_balance(position_space),
+                    position_space as u64,
+                    ctx.program_id,
+                );
+
+            anchor_lang::solana_program::program::invoke_signed(
+                &create_position_ix,
+                &[
+                    ctx.accounts.manager.to_account_info(),
+                    position_pda.to_account_info(),
+                    ctx.accounts.system_program.to_account_info(),
+                ],
+                position_signer_seeds,
+            )?;
+
+            // Write discriminator + data
+            let mut position_data = position_pda.try_borrow_mut_data()?;
+            position_data[..8].copy_from_slice(&Position::DISCRIMINATOR);
+            let mut position_account =
+                Position::try_deserialize_unchecked(&mut &position_data[..])?;
+            position_account.order_id = order_id;
+            position_account.amount_borrowed = pos.amount;
+            position_account.amount_repaid = 0;
+            position_account.public_key = pos.lp_interaction_wallet;
+            let encoded = position_account.try_to_vec()?;
+            position_data[8..8 + encoded.len()].copy_from_slice(&encoded);
+            drop(position_data);
+        }
+
+        // CPI to zynk-core create_order with amount (transfers from ZOV to beneficiary)
+        // Note: ZOV token account, mint, token_program, and system_program are shared
+        // between orbit and zynk-core, so we reuse orbit's accounts.
+        let cpi_program = ctx.accounts.zynk_core_program.to_account_info();
+        let cpi_accounts = CreateOrder {
+            config: ctx.accounts.core_config.to_account_info(),
+            manager: ctx.accounts.manager.to_account_info(),
+            partner_deposit_vault: ctx.accounts.core_partner_deposit_vault.to_account_info(),
+            pdv_token_account: None,
+            zynk_op_vault: ctx.accounts.core_zynk_op_vault.to_account_info(),
+            zov_token_account: ctx.accounts.zov_token_account.to_account_info(),
+            beneficiary: ctx.accounts.core_beneficiary.to_account_info(),
+            beneficiary_token_account: ctx
+                .accounts
+                .core_beneficiary_token_account
+                .to_account_info(),
+            order_tracker: ctx.accounts.core_order_tracker.to_account_info(),
+            mint: ctx.accounts.mint.to_account_info(),
+            token_program: ctx.accounts.token_program.to_account_info(),
+            system_program: ctx.accounts.system_program.to_account_info(),
+            sysvar_instructions: None,
+        };
+
+        let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
+        zynk_core::cpi::create_order(
+            cpi_ctx, partner_id, order_id, zov_id, false, // transient = false
+            amount, meta,
+        )?;
+
+        emit!(TxEvent {
+            event_name: String::from("borrow"),
+            user_id: [0u8; 32],
+            from_owner: ZOV,
+            to_owner: ZOV,
+            from: ctx.accounts.zov_token_account.key(),
+            to: ctx.accounts.zov_token_account.key(),
+            amount: 0,
             token: ctx.accounts.mint.key(),
             domain_separator: DOMAIN_SEPARATOR,
             order_id: Some(order_id),
@@ -508,7 +795,7 @@ pub struct Deposit<'info> {
     #[account(mut, constraint = source_token_account.owner == signer.key() @ OrbitError::InvalidAccount)]
     pub source_token_account: InterfaceAccount<'info, TokenAccount>,
 
-    #[account(mut, constraint = destination_token_account.owner == ZOV @ OrbitError::InvalidAccount)]
+    #[account(mut)]
     pub destination_token_account: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
@@ -570,6 +857,53 @@ pub struct Collect<'info> {
 
     pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(partner_id: [u8; 32], order_id: [u8; 32], zov_id: [u8; 32])]
+pub struct Borrow<'info> {
+    /// ZOV destination token account (shared with zynk-core CPI)
+    #[account(mut, constraint = zov_token_account.owner == ZOV @ OrbitError::InvalidAccount)]
+    pub zov_token_account: InterfaceAccount<'info, TokenAccount>,
+
+    #[account(
+        constraint = ALLOWED_MINTS.contains(&mint.key()) @ OrbitError::InvalidTokenMint,
+        constraint = mint.key() == zov_token_account.mint @ OrbitError::InvalidTokenMint,
+    )]
+    pub mint: InterfaceAccount<'info, Mint>,
+
+    #[account(mut, constraint = manager.key() == MANAGER @ OrbitError::UnauthorizedManager)]
+    pub manager: Signer<'info>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+    pub system_program: Program<'info, System>,
+
+    /// CHECK: zynk-core program (for CPI)
+    pub zynk_core_program: Program<'info, ZynkCore>,
+
+    // zynk-core CPI accounts (distinct from orbit accounts)
+    /// CHECK: zynk-core config PDA
+    #[account(mut)]
+    pub core_config: UncheckedAccount<'info>,
+
+    /// CHECK: zynk-core partner deposit vault PDA (derived with zynk-core seeds)
+    pub core_partner_deposit_vault: UncheckedAccount<'info>,
+
+    /// CHECK: zynk-core ZOV PDA (derived with zynk-core's ZYNK_OP_VAULT_SEED + zov_id)
+    pub core_zynk_op_vault: UncheckedAccount<'info>,
+
+    /// CHECK: zynk-core beneficiary PDA
+    pub core_beneficiary: UncheckedAccount<'info>,
+
+    /// CHECK: zynk-core beneficiary token account
+    #[account(mut)]
+    pub core_beneficiary_token_account: UncheckedAccount<'info>,
+
+    /// CHECK: zynk-core order tracker PDA (to be created via CPI)
+    #[account(mut)]
+    pub core_order_tracker: UncheckedAccount<'info>,
+    // Remaining accounts (4 per position):
+    // [source_token_account, authority_account, record, position_pda]
 }
 
 #[derive(Accounts)]
@@ -784,6 +1118,14 @@ pub enum OrbitError {
     InsufficientBalance,
     #[msg("Operation no permitted")]
     InvalidOperation,
+    #[msg("Total position amounts do not match borrow amount")]
+    AmountMismatch,
     #[msg("Invalid request account type")]
     InvalidRequestAccount,
+    #[msg("Positions list cannot be empty")]
+    EmptyPositions,
+    #[msg("LPs are not authorized to borrow")]
+    UnauthorizedBorrower,
+    #[msg("Invalid position operation")]
+    InvalidPositionOperation,
 }
