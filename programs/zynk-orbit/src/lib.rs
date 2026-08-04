@@ -34,20 +34,20 @@ pub enum UserType {
 #[account]
 #[derive(InitSpace)]
 pub struct Record {
-    pub interaction_wallet: Pubkey,
+    pub primary_account: Pubkey,
     pub user_id: [u8; 32],
     pub user_type: UserType,
     pub cliff_period: i64,
     pub principle_in: u64,
     pub principle_out: u64,
     pub max_deposit: u32,
-    pub claim_wallet: Pubkey,
+    pub aux_account: Pubkey,
 }
 
 #[account]
 #[derive(InitSpace)]
 pub struct WithdrawRequest {
-    pub interaction_wallet: Pubkey,
+    pub primary_account: Pubkey,
     pub user_id: [u8; 32],
     pub amount: u32,
     pub destination: Pubkey,
@@ -56,7 +56,7 @@ pub struct WithdrawRequest {
 #[account]
 #[derive(InitSpace)]
 pub struct UpdateCliffPeriodRequest {
-    pub interaction_wallet: Pubkey,
+    pub primary_account: Pubkey,
     pub user_id: [u8; 32],
     pub cliff_period: i64,
 }
@@ -80,7 +80,7 @@ pub struct Position {
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct PositionOperation {
-    pub lp_interaction_wallet: Pubkey,
+    pub lp_primary_account: Pubkey,
     pub amount: u64,
     pub user_type: UserType,
     pub vault_id: [u8; 32],
@@ -320,7 +320,7 @@ pub mod zynk_orbit {
             let record = Record::try_deserialize(&mut &record_data[8..])
                 .map_err(|_| OrbitError::InvalidAccount)?;
             require!(
-                record.interaction_wallet == pos.lp_interaction_wallet,
+                record.primary_account == pos.lp_primary_account,
                 OrbitError::InvalidAccount
             );
             drop(record_data);
@@ -356,7 +356,7 @@ pub mod zynk_orbit {
                     let seeds: &[&[u8]] = &[
                         RECORD_SEED,
                         record.user_id.as_ref(),
-                        record.interaction_wallet.as_ref(),
+                        record.primary_account.as_ref(),
                     ];
                     let (expected_authority, bump) =
                         Pubkey::find_program_address(seeds, ctx.program_id);
@@ -368,7 +368,7 @@ pub mod zynk_orbit {
                     let seeds_with_bump: &[&[u8]] = &[
                         RECORD_SEED,
                         record.user_id.as_ref(),
-                        record.interaction_wallet.as_ref(),
+                        record.primary_account.as_ref(),
                         &[bump],
                     ];
                     let signer_seeds = &[&seeds_with_bump[..]];
@@ -391,7 +391,7 @@ pub mod zynk_orbit {
             let position_seeds: &[&[u8]] = &[
                 POSITION_SEED,
                 order_id.as_ref(),
-                pos.lp_interaction_wallet.as_ref(),
+                pos.lp_primary_account.as_ref(),
             ];
             let (expected_position_key, position_bump) =
                 Pubkey::find_program_address(position_seeds, ctx.program_id);
@@ -403,7 +403,7 @@ pub mod zynk_orbit {
             let position_seeds_with_bump: &[&[u8]] = &[
                 POSITION_SEED,
                 order_id.as_ref(),
-                pos.lp_interaction_wallet.as_ref(),
+                pos.lp_primary_account.as_ref(),
                 &[position_bump],
             ];
             let position_signer_seeds = &[&position_seeds_with_bump[..]];
@@ -437,7 +437,7 @@ pub mod zynk_orbit {
             position_account.order_id = order_id;
             position_account.amount_borrowed = pos.amount;
             position_account.amount_repaid = 0;
-            position_account.public_key = pos.lp_interaction_wallet;
+            position_account.public_key = pos.lp_primary_account;
             let encoded = position_account.try_to_vec()?;
             position_data[8..8 + encoded.len()].copy_from_slice(&encoded);
             drop(position_data);
@@ -605,7 +605,7 @@ pub mod zynk_orbit {
             let record = Record::try_deserialize(&mut &record_data[8..])
                 .map_err(|_| OrbitError::InvalidAccount)?;
             require!(
-                record.interaction_wallet == pos.lp_interaction_wallet,
+                record.primary_account == pos.lp_primary_account,
                 OrbitError::InvalidAccount
             );
             drop(record_data);
@@ -699,12 +699,12 @@ pub mod zynk_orbit {
                         OrbitError::InvalidAccount
                     );
                     require!(
-                        record.interaction_wallet == pos.lp_interaction_wallet,
+                        record.primary_account == pos.lp_primary_account,
                         OrbitError::InvalidAccount
                     );
-                    // Verify destination token account owner is the interaction wallet
+                    // Verify destination token account owner is the primary wallet
                     require!(
-                        *dst_token_account.owner == pos.lp_interaction_wallet,
+                        *dst_token_account.owner == pos.lp_primary_account,
                         OrbitError::InvalidAccount
                     );
                     drop(record_data);
@@ -719,7 +719,7 @@ pub mod zynk_orbit {
                         OrbitError::InvalidAccount
                     );
                     require!(
-                        record.interaction_wallet == pos.lp_interaction_wallet,
+                        record.primary_account == pos.lp_primary_account,
                         OrbitError::InvalidAccount
                     );
                     // Verify destination token account owner is the record PDA
@@ -784,16 +784,16 @@ pub mod zynk_orbit {
     }
 
     // ICV users claim their deposited funds after the cliff period is over.
-    // Transfers all funds from the ICV token account (owned by Record PDA) to the claim wallet.
+    // Transfers all funds from the ICV token account (owned by Record PDA) to the aux account.
     //
     // TODO: In a future iteration, incorporate pull+repay to settle outstanding
-    // borrowed positions before transferring ICV funds to claim wallet. This will
+    // borrowed positions before transferring ICV funds to aux account. This will
     // require:
     //  - CPI to zynk_core::replenish (needs manager signer)
     //  - CPI to zynk_core::create_order (transient, needs manager signer)
     //  - Closing the position PDA if fully repaid (needs manager signer)
     // Currently, claim only transfers funds held in the ICV token account directly
-    // to the claim wallet.
+    // to the aux account.
     pub fn claim(ctx: Context<Claim>, user_id: [u8; 32]) -> Result<()> {
         let record = &ctx.accounts.record;
 
@@ -807,27 +807,27 @@ pub mod zynk_orbit {
             OrbitError::InvalidAccount
         );
 
-        // Verify claim wallet token account belongs to record.claim_wallet
+        // Verify aux account token account belongs to record.aux_account
         require!(
-            ctx.accounts.claim_wallet_token_account.owner == record.claim_wallet,
+            ctx.accounts.aux_token_account.owner == record.aux_account,
             OrbitError::InvalidAccount
         );
 
-        // Transfer ALL funds from ICV token account to claim wallet
+        // Transfer ALL funds from ICV token account to aux account
         let icv_balance = ctx.accounts.icv_token_account.amount;
         require!(icv_balance > 0, OrbitError::ZeroAmount);
 
         let seeds: &[&[u8]] = &[
             RECORD_SEED,
             user_id.as_ref(),
-            record.interaction_wallet.as_ref(),
+            record.primary_account.as_ref(),
             &[ctx.bumps.record],
         ];
         let signer_seeds = &[&seeds[..]];
 
         let cpi_accounts = TransferChecked {
             from: ctx.accounts.icv_token_account.to_account_info(),
-            to: ctx.accounts.claim_wallet_token_account.to_account_info(),
+            to: ctx.accounts.aux_token_account.to_account_info(),
             mint: ctx.accounts.mint.to_account_info(),
             authority: ctx.accounts.record.to_account_info(),
         };
@@ -849,9 +849,9 @@ pub mod zynk_orbit {
             event_name: String::from("claim"),
             user_id,
             from_owner: ctx.accounts.record.key(),
-            to_owner: ctx.accounts.claim_wallet_token_account.owner,
+            to_owner: ctx.accounts.aux_token_account.owner,
             from: ctx.accounts.icv_token_account.key(),
-            to: ctx.accounts.claim_wallet_token_account.key(),
+            to: ctx.accounts.aux_token_account.key(),
             amount: icv_balance,
             token: ctx.accounts.mint.key(),
             domain_separator: DOMAIN_SEPARATOR,
@@ -867,7 +867,7 @@ pub mod zynk_orbit {
 
         if let Some(order) = ctx.accounts.order.as_ref() {
             require!(
-                order.public_key == record.interaction_wallet,
+                order.public_key == record.primary_account,
                 OrbitError::InvalidAccount
             );
             require!(order.amount == amount, OrbitError::Inequality);
@@ -911,10 +911,10 @@ pub mod zynk_orbit {
         ctx: Context<Whitelist>,
         user_id: [u8; 32],
         user_type: UserType,
-        interaction_wallet: Pubkey,
+        primary_account: Pubkey,
         cliff_period: Option<i64>,
         max_deposit: Option<u32>,
-        claim_wallet: Option<Pubkey>,
+        aux_account: Option<Pubkey>,
     ) -> Result<()> {
         let record = &mut ctx.accounts.record;
 
@@ -924,19 +924,19 @@ pub mod zynk_orbit {
             require!(cp > now, OrbitError::CliffPeriodInPast);
         }
 
-        record.interaction_wallet = interaction_wallet;
+        record.primary_account = primary_account;
         record.user_id = user_id;
         record.user_type = user_type;
         record.cliff_period = cliff_period.unwrap_or(i64::MAX);
         record.principle_in = 0;
         record.principle_out = 0;
         record.max_deposit = max_deposit.unwrap_or(u32::MAX);
-        record.claim_wallet = claim_wallet.unwrap_or(interaction_wallet);
+        record.aux_account = aux_account.unwrap_or(primary_account);
 
         emit!(AxEvent {
             event_name: String::from("whitelist"),
             user_id,
-            public_key: interaction_wallet,
+            public_key: primary_account,
             domain_separator: DOMAIN_SEPARATOR,
         });
 
@@ -989,7 +989,7 @@ pub mod zynk_orbit {
     pub fn update_cliff_period(
         ctx: Context<UpdateCliffPeriod>,
         user_id: [u8; 32],
-        interaction_wallet: Pubkey,
+        primary_account: Pubkey,
         cliff_period: Option<i64>,
     ) -> Result<()> {
         let request_record = &mut ctx.accounts.request_record;
@@ -998,14 +998,14 @@ pub mod zynk_orbit {
             let now = Clock::get()?.unix_timestamp;
             require!(cp > now, OrbitError::CliffPeriodInPast);
         }
-        request_record.interaction_wallet = interaction_wallet;
+        request_record.primary_account = primary_account;
         request_record.user_id = user_id;
         request_record.cliff_period = cliff_period.unwrap_or(user_record.cliff_period);
 
         emit!(AxEvent {
             event_name: String::from("cliff_period_updated"),
             user_id: user_id,
-            public_key: interaction_wallet,
+            public_key: primary_account,
             domain_separator: DOMAIN_SEPARATOR,
         });
         Ok(())
@@ -1014,7 +1014,7 @@ pub mod zynk_orbit {
     pub fn update_max_deposit(
         ctx: Context<UpdateMaxDeposit>,
         user_id: [u8; 32],
-        interaction_wallet: Pubkey,
+        primary_account: Pubkey,
         max_deposit: u32,
     ) -> Result<()> {
         let record = &mut ctx.accounts.record;
@@ -1023,7 +1023,7 @@ pub mod zynk_orbit {
         emit!(AxEvent {
             event_name: String::from("max_deposit_updated"),
             user_id,
-            public_key: interaction_wallet,
+            public_key: primary_account,
             domain_separator: DOMAIN_SEPARATOR,
         });
         Ok(())
@@ -1032,7 +1032,7 @@ pub mod zynk_orbit {
     pub fn request_withdraw(
         ctx: Context<RequestWithdraw>,
         user_id: [u8; 32],
-        interaction_wallet: Pubkey,
+        primary_account: Pubkey,
         destination: Pubkey,
         amount: u32,
     ) -> Result<()> {
@@ -1058,7 +1058,7 @@ pub mod zynk_orbit {
         );
 
         let withdraw_request = &mut ctx.accounts.withdraw_request;
-        withdraw_request.interaction_wallet = interaction_wallet;
+        withdraw_request.primary_account = primary_account;
         withdraw_request.user_id = user_id;
         withdraw_request.amount = amount;
         withdraw_request.destination = destination;
@@ -1066,7 +1066,7 @@ pub mod zynk_orbit {
         emit!(AxEvent {
             event_name: String::from("withdraw_requested"),
             user_id,
-            public_key: interaction_wallet,
+            public_key: primary_account,
             domain_separator: DOMAIN_SEPARATOR,
         });
         Ok(())
@@ -1082,7 +1082,7 @@ pub mod zynk_orbit {
         // Verify the record matches the withdraw request
         require!(
             record.user_id == withdraw_request.user_id
-                && record.interaction_wallet == withdraw_request.interaction_wallet,
+                && record.primary_account == withdraw_request.primary_account,
             OrbitError::InvalidAccount
         );
 
@@ -1114,10 +1114,10 @@ pub mod zynk_orbit {
             ctx.accounts.mint.decimals,
         )?;
 
-        // Close the withdraw request account, move lamports to interaction wallet
+        // Close the withdraw request account, move lamports to primary wallet
         close_account(
             ctx.accounts.request.to_account_info(),
-            ctx.accounts.interaction_wallet.to_account_info(),
+            ctx.accounts.primary_account.to_account_info(),
         )?;
 
         emit!(TxEvent {
@@ -1146,23 +1146,23 @@ pub mod zynk_orbit {
         // Verify the record matches the update request
         require!(
             record.user_id == update_request.user_id
-                && record.interaction_wallet == update_request.interaction_wallet,
+                && record.primary_account == update_request.primary_account,
             OrbitError::InvalidAccount
         );
 
         // Update the cliff period on the record
         record.cliff_period = update_request.cliff_period;
 
-        // Close the update request account, move lamports to interaction wallet
+        // Close the update request account, move lamports to primary wallet
         close_account(
             ctx.accounts.request.to_account_info(),
-            ctx.accounts.interaction_wallet.to_account_info(),
+            ctx.accounts.primary_account.to_account_info(),
         )?;
 
         emit!(AxEvent {
             event_name: String::from("cliff_period_approved"),
             user_id: update_request.user_id,
-            public_key: update_request.interaction_wallet,
+            public_key: update_request.primary_account,
             domain_separator: DOMAIN_SEPARATOR,
         });
 
@@ -1353,7 +1353,7 @@ pub struct Disburse<'info> {
     #[account(mut, constraint = source_token_account.owner == ovault.key() @ OrbitError::InvalidAccount)]
     pub source_token_account: InterfaceAccount<'info, TokenAccount>,
 
-    #[account(mut, constraint = destination_token_account.owner == record.interaction_wallet @ OrbitError::InvalidAccount)]
+    #[account(mut, constraint = destination_token_account.owner == record.primary_account @ OrbitError::InvalidAccount)]
     pub destination_token_account: InterfaceAccount<'info, TokenAccount>,
 
     /// CHECK: Ovault - verified by seeds
@@ -1385,13 +1385,13 @@ pub struct Disburse<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(user_id: [u8; 32], interaction_wallet: Pubkey)]
+#[instruction(user_id: [u8; 32], primary_account: Pubkey)]
 pub struct Whitelist<'info> {
     #[account(
         init,
         payer = admin,
         space = 8 + Record::INIT_SPACE,
-        seeds = [RECORD_SEED, user_id.as_ref(), interaction_wallet.as_ref()],
+        seeds = [RECORD_SEED, user_id.as_ref(), primary_account.as_ref()],
         bump
     )]
     pub record: Account<'info, Record>,
@@ -1411,36 +1411,36 @@ pub struct Revoke<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(user_id: [u8; 32], interaction_wallet: Pubkey)]
+#[instruction(user_id: [u8; 32], primary_account: Pubkey)]
 pub struct UpdateCliffPeriod<'info> {
     #[account(
         init,
         payer = user,
         space = 8 + UpdateCliffPeriodRequest::INIT_SPACE,
-        seeds = [RECORD_UPDATE_REQUEST_SEED, user_id.as_ref(), interaction_wallet.as_ref()],
+        seeds = [RECORD_UPDATE_REQUEST_SEED, user_id.as_ref(), primary_account.as_ref()],
         bump
     )]
     pub request_record: Account<'info, UpdateCliffPeriodRequest>,
 
     #[account(
-        seeds = [RECORD_SEED, user_id.as_ref(), interaction_wallet.as_ref()],
+        seeds = [RECORD_SEED, user_id.as_ref(), primary_account.as_ref()],
         bump,
-        constraint = user_record.interaction_wallet == interaction_wallet @ OrbitError::InvalidAccount,
+        constraint = user_record.primary_account == primary_account @ OrbitError::InvalidAccount,
     )]
     pub user_record: Account<'info, Record>,
 
-    #[account(mut, constraint = user.key() == interaction_wallet @ OrbitError::UnauthorizedAdmin)]
+    #[account(mut, constraint = user.key() == primary_account @ OrbitError::UnauthorizedAdmin)]
     pub user: Signer<'info>,
 
     pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
-#[instruction(user_id: [u8; 32], interaction_wallet: Pubkey)]
+#[instruction(user_id: [u8; 32], primary_account: Pubkey)]
 pub struct UpdateMaxDeposit<'info> {
     #[account(
         mut,
-        seeds = [RECORD_SEED, user_id.as_ref(), interaction_wallet.as_ref()],
+        seeds = [RECORD_SEED, user_id.as_ref(), primary_account.as_ref()],
         bump,
     )]
     pub record: Account<'info, Record>,
@@ -1452,10 +1452,10 @@ pub struct UpdateMaxDeposit<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(user_id: [u8; 32], interaction_wallet: Pubkey, destination: Pubkey)]
+#[instruction(user_id: [u8; 32], primary_account: Pubkey, destination: Pubkey)]
 pub struct RequestWithdraw<'info> {
     #[account(
-        seeds = [RECORD_SEED, user_id.as_ref(), interaction_wallet.as_ref()],
+        seeds = [RECORD_SEED, user_id.as_ref(), primary_account.as_ref()],
         bump,
     )]
     pub signer_record: Account<'info, Record>,
@@ -1470,12 +1470,12 @@ pub struct RequestWithdraw<'info> {
         init,
         payer = signer,
         space = 8 + WithdrawRequest::INIT_SPACE,
-        seeds = [WITHDRAW_REQUEST_SEED, user_id.as_ref(), interaction_wallet.as_ref()],
+        seeds = [WITHDRAW_REQUEST_SEED, user_id.as_ref(), primary_account.as_ref()],
         bump
     )]
     pub withdraw_request: Account<'info, WithdrawRequest>,
 
-    #[account(mut, constraint = signer.key() == interaction_wallet @ OrbitError::InvalidAccount)]
+    #[account(mut, constraint = signer.key() == primary_account @ OrbitError::InvalidAccount)]
     pub signer: Signer<'info>,
 
     pub system_program: Program<'info, System>,
@@ -1490,9 +1490,9 @@ pub struct ApproveWithdraw<'info> {
     #[account(mut)]
     pub record: Account<'info, Record>,
 
-    /// CHECK: Interaction wallet from the request - receives lamports from closed account
+    /// CHECK: primary wallet from the request - receives lamports from closed account
     #[account(mut)]
-    pub interaction_wallet: UncheckedAccount<'info>,
+    pub primary_account: UncheckedAccount<'info>,
 
     #[account(mut, constraint = admin.key() == ADMIN @ OrbitError::UnauthorizedAdmin)]
     pub admin: Signer<'info>,
@@ -1526,9 +1526,9 @@ pub struct ApproveCliffPeriod<'info> {
     #[account(mut)]
     pub record: Account<'info, Record>,
 
-    /// CHECK: Interaction wallet from the request - receives lamports from closed account
+    /// CHECK: primary wallet from the request - receives lamports from closed account
     #[account(mut)]
-    pub interaction_wallet: UncheckedAccount<'info>,
+    pub primary_account: UncheckedAccount<'info>,
 
     #[account(mut, constraint = admin.key() == ADMIN @ OrbitError::UnauthorizedAdmin)]
     pub admin: Signer<'info>,
@@ -1551,14 +1551,14 @@ pub struct Claim<'info> {
     #[account(mut)]
     pub icv_token_account: InterfaceAccount<'info, TokenAccount>,
 
-    /// Claim wallet token account — destination for claimed funds
+    /// aux account token account — destination for claimed funds
     #[account(mut)]
-    pub claim_wallet_token_account: InterfaceAccount<'info, TokenAccount>,
+    pub aux_token_account: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
         constraint = ALLOWED_MINTS.contains(&mint.key()) @ OrbitError::InvalidTokenMint,
         constraint = mint.key() == icv_token_account.mint @ OrbitError::InvalidTokenMint,
-        constraint = mint.key() == claim_wallet_token_account.mint @ OrbitError::InvalidTokenMint,
+        constraint = mint.key() == aux_token_account.mint @ OrbitError::InvalidTokenMint,
     )]
     pub mint: InterfaceAccount<'info, Mint>,
 
