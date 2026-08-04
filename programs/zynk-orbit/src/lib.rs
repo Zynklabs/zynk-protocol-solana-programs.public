@@ -162,6 +162,10 @@ pub mod zynk_orbit {
             OrbitError::InvalidOperation
         );
 
+        // Restrict deposit if cliff period is over
+        let now = Clock::get()?.unix_timestamp;
+        require!(now < record.cliff_period, OrbitError::CliffPeriodOver);
+
         // Validate destination based on user type
         match record.user_type {
             UserType::LP => {
@@ -345,6 +349,10 @@ pub mod zynk_orbit {
                     )?;
                 }
                 UserType::ICV => {
+                    // Restrict borrowing from ICV if cliff period is over
+                    let now = Clock::get()?.unix_timestamp;
+                    require!(now < record.cliff_period, OrbitError::CliffPeriodOver);
+
                     let seeds: &[&[u8]] = &[
                         RECORD_SEED,
                         record.user_id.as_ref(),
@@ -770,6 +778,84 @@ pub mod zynk_orbit {
             token: ctx.accounts.mint.key(),
             domain_separator: DOMAIN_SEPARATOR,
             order_id: Some(order_id),
+        });
+
+        Ok(())
+    }
+
+    // ICV users claim their deposited funds after the cliff period is over.
+    // Transfers all funds from the ICV token account (owned by Record PDA) to the claim wallet.
+    //
+    // TODO: In a future iteration, incorporate pull+repay to settle outstanding
+    // borrowed positions before transferring ICV funds to claim wallet. This will
+    // require:
+    //  - CPI to zynk_core::replenish (needs manager signer)
+    //  - CPI to zynk_core::create_order (transient, needs manager signer)
+    //  - Closing the position PDA if fully repaid (needs manager signer)
+    // Currently, claim only transfers funds held in the ICV token account directly
+    // to the claim wallet.
+    pub fn claim(ctx: Context<Claim>, user_id: [u8; 32]) -> Result<()> {
+        let record = &ctx.accounts.record;
+
+        // Verify cliff period is over
+        let now = Clock::get()?.unix_timestamp;
+        require!(now >= record.cliff_period, OrbitError::CliffPeriodNotOver);
+
+        // Verify that the ICV token account is owned by the Record PDA
+        require!(
+            ctx.accounts.icv_token_account.owner == record.key(),
+            OrbitError::InvalidAccount
+        );
+
+        // Verify claim wallet token account belongs to record.claim_wallet
+        require!(
+            ctx.accounts.claim_wallet_token_account.owner == record.claim_wallet,
+            OrbitError::InvalidAccount
+        );
+
+        // Transfer ALL funds from ICV token account to claim wallet
+        let icv_balance = ctx.accounts.icv_token_account.amount;
+        require!(icv_balance > 0, OrbitError::ZeroAmount);
+
+        let seeds: &[&[u8]] = &[
+            RECORD_SEED,
+            user_id.as_ref(),
+            record.interaction_wallet.as_ref(),
+            &[ctx.bumps.record],
+        ];
+        let signer_seeds = &[&seeds[..]];
+
+        let cpi_accounts = TransferChecked {
+            from: ctx.accounts.icv_token_account.to_account_info(),
+            to: ctx.accounts.claim_wallet_token_account.to_account_info(),
+            mint: ctx.accounts.mint.to_account_info(),
+            authority: ctx.accounts.record.to_account_info(),
+        };
+        let cpi_ctx = CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            cpi_accounts,
+            signer_seeds,
+        );
+        token_interface::transfer_checked(cpi_ctx, icv_balance, ctx.accounts.mint.decimals)?;
+
+        // Update record principle_out
+        let record = &mut ctx.accounts.record;
+        record.principle_out = record
+            .principle_out
+            .checked_add(icv_balance)
+            .ok_or(ProgramError::ArithmeticOverflow)?;
+
+        emit!(TxEvent {
+            event_name: String::from("claim"),
+            user_id,
+            from_owner: ctx.accounts.record.key(),
+            to_owner: ctx.accounts.claim_wallet_token_account.owner,
+            from: ctx.accounts.icv_token_account.key(),
+            to: ctx.accounts.claim_wallet_token_account.key(),
+            amount: icv_balance,
+            token: ctx.accounts.mint.key(),
+            domain_separator: DOMAIN_SEPARATOR,
+            order_id: None,
         });
 
         Ok(())
@@ -1450,6 +1536,38 @@ pub struct ApproveCliffPeriod<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[derive(Accounts)]
+#[instruction(user_id: [u8; 32])]
+pub struct Claim<'info> {
+    #[account(
+        mut,
+        seeds = [RECORD_SEED, user_id.as_ref(), signer.key().as_ref()],
+        bump,
+        constraint = record.user_type == UserType::ICV @ OrbitError::InvalidOperation,
+    )]
+    pub record: Account<'info, Record>,
+
+    /// ICV token account — owned by Record PDA, holds all deposited funds
+    #[account(mut)]
+    pub icv_token_account: InterfaceAccount<'info, TokenAccount>,
+
+    /// Claim wallet token account — destination for claimed funds
+    #[account(mut)]
+    pub claim_wallet_token_account: InterfaceAccount<'info, TokenAccount>,
+
+    #[account(
+        constraint = ALLOWED_MINTS.contains(&mint.key()) @ OrbitError::InvalidTokenMint,
+        constraint = mint.key() == icv_token_account.mint @ OrbitError::InvalidTokenMint,
+        constraint = mint.key() == claim_wallet_token_account.mint @ OrbitError::InvalidTokenMint,
+    )]
+    pub mint: InterfaceAccount<'info, Mint>,
+
+    #[account(mut)]
+    pub signer: Signer<'info>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
 #[error_code]
 pub enum OrbitError {
     #[msg("Unauthorized admin")]
@@ -1486,4 +1604,8 @@ pub enum OrbitError {
     InvalidPositionOperation,
     #[msg("Position order IDs do not match")]
     PositionOrderMismatch,
+    #[msg("Cliff period is over, operation not permitted")]
+    CliffPeriodOver,
+    #[msg("Cliff period is not over yet")]
+    CliffPeriodNotOver,
 }
