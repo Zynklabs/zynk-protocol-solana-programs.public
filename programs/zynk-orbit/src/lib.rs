@@ -42,6 +42,8 @@ pub struct Record {
     pub principle_out: u64,
     pub max_deposit: u32,
     pub aux_account: Pubkey,
+    #[max_len(8)]
+    pub whitelisted_partners: Vec<[u8; 32]>,
 }
 
 #[account]
@@ -98,6 +100,7 @@ pub struct AxEvent {
     pub user_id: [u8; 32],
     pub public_key: Pubkey,
     pub domain_separator: u64,
+    pub partners: Option<Vec<[u8; 32]>>,
 }
 
 pub fn close_account<'a, 'b>(
@@ -251,7 +254,7 @@ pub mod zynk_orbit {
     // create a single order in zynk-core, and create Position PDAs for each source.
     pub fn borrow<'info>(
         ctx: Context<'_, '_, '_, 'info, Borrow<'info>>,
-        partner_id: [u8; 32],
+        partner_id: String,
         order_id: [u8; 32],
         zov_id: [u8; 32],
         amount: u64,
@@ -260,6 +263,18 @@ pub mod zynk_orbit {
     ) -> Result<()> {
         require!(!positions.is_empty(), OrbitError::EmptyPositions);
         require!(amount > 0, OrbitError::ZeroAmount);
+
+        // Parse partner_id: extract base part before any colon (e.g., "zp_12345:onramp" -> "zp_12345")
+        // for whitelist check. The full partner_id string is hashed for the create_order CPI.
+        let base_partner_id = if let Some(colon_idx) = partner_id.find(':') {
+            &partner_id[..colon_idx]
+        } else {
+            &partner_id[..]
+        };
+        let base_partner_id_bytes =
+            anchor_lang::solana_program::hash::hash(base_partner_id.as_bytes()).to_bytes();
+        let partner_id_bytes =
+            anchor_lang::solana_program::hash::hash(partner_id.as_bytes()).to_bytes();
 
         // Validate all positions are NCW or ICV (not LP)
         let mut total_position_amount: u64 = 0;
@@ -301,6 +316,14 @@ pub mod zynk_orbit {
                 record.primary_account == pos.lp_primary_account,
                 OrbitError::InvalidAccount
             );
+
+            // Check partner whitelist: if whitelisted_partners is non-empty, verify base partner_id is in it
+            if !record.whitelisted_partners.is_empty() {
+                require!(
+                    record.whitelisted_partners.contains(&base_partner_id_bytes),
+                    OrbitError::PartnerNotWhitelisted
+                );
+            }
             drop(record_data);
 
             // Derive authority seeds, validate, and transfer based on user type
@@ -448,8 +471,13 @@ pub mod zynk_orbit {
 
         let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
         zynk_core::cpi::create_order(
-            cpi_ctx, partner_id, order_id, zov_id, false, // transient = false
-            amount, meta,
+            cpi_ctx,
+            partner_id_bytes,
+            order_id,
+            zov_id,
+            false, // transient = false
+            amount,
+            meta,
         )?;
 
         emit!(TxEvent {
@@ -869,6 +897,7 @@ pub mod zynk_orbit {
         cliff_period: Option<i64>,
         max_deposit: Option<u32>,
         aux_account: Option<Pubkey>,
+        partners: Option<Vec<[u8; 32]>>,
     ) -> Result<()> {
         let record = &mut ctx.accounts.record;
 
@@ -876,6 +905,14 @@ pub mod zynk_orbit {
         if let Some(cp) = cliff_period {
             let now = Clock::get()?.unix_timestamp;
             require!(cp > now, OrbitError::CliffPeriodInPast);
+        }
+
+        // Validate and set whitelisted partners
+        if let Some(ref partners) = partners {
+            require!(partners.len() <= 8, OrbitError::TooManyPartners);
+            record.whitelisted_partners = partners.clone();
+        } else {
+            record.whitelisted_partners = Vec::new();
         }
 
         record.primary_account = primary_account;
@@ -892,6 +929,29 @@ pub mod zynk_orbit {
             user_id,
             public_key: primary_account,
             domain_separator: DOMAIN_SEPARATOR,
+            partners: partners,
+        });
+
+        Ok(())
+    }
+
+    pub fn update_partner_whitelist(
+        ctx: Context<UpdatePartnerWhitelist>,
+        user_id: [u8; 32],
+        primary_account: Pubkey,
+        partners: Vec<[u8; 32]>,
+    ) -> Result<()> {
+        require!(partners.len() <= 8, OrbitError::TooManyPartners);
+
+        let record = &mut ctx.accounts.record;
+        record.whitelisted_partners = partners.clone();
+
+        emit!(AxEvent {
+            event_name: String::from("update_partner_whitelist"),
+            user_id,
+            public_key: primary_account,
+            domain_separator: DOMAIN_SEPARATOR,
+            partners: Some(partners),
         });
 
         Ok(())
@@ -906,6 +966,7 @@ pub mod zynk_orbit {
                         user_id: account.user_id,
                         public_key: $pda_key,
                         domain_separator: DOMAIN_SEPARATOR,
+                        partners: None,
                     });
                     true
                 } else {
@@ -965,6 +1026,7 @@ pub mod zynk_orbit {
             user_id: user_id,
             public_key: primary_account,
             domain_separator: DOMAIN_SEPARATOR,
+            partners: None,
         });
         Ok(())
     }
@@ -994,6 +1056,7 @@ pub mod zynk_orbit {
             user_id,
             public_key: primary_account,
             domain_separator: DOMAIN_SEPARATOR,
+            partners: None,
         });
         Ok(())
     }
@@ -1032,6 +1095,7 @@ pub mod zynk_orbit {
             user_id,
             public_key: primary_account,
             domain_separator: DOMAIN_SEPARATOR,
+            partners: None,
         });
         Ok(())
     }
@@ -1163,6 +1227,7 @@ pub mod zynk_orbit {
             user_id: update_request.user_id,
             public_key: update_request.primary_account,
             domain_separator: DOMAIN_SEPARATOR,
+            partners: None,
         });
 
         Ok(())
@@ -1504,6 +1569,22 @@ pub struct UpdateMaxDeposit<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(user_id: [u8; 32], primary_account: Pubkey)]
+pub struct UpdatePartnerWhitelist<'info> {
+    #[account(
+        mut,
+        seeds = [RECORD_SEED, user_id.as_ref(), primary_account.as_ref()],
+        bump,
+    )]
+    pub record: Account<'info, Record>,
+
+    #[account(mut, constraint = admin.key() == ADMIN @ OrbitError::UnauthorizedAdmin)]
+    pub admin: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
 #[instruction(user_id: [u8; 32], primary_account: Pubkey, destination: Pubkey)]
 pub struct RequestWithdraw<'info> {
     #[account(
@@ -1702,4 +1783,8 @@ pub enum OrbitError {
     MaxDepositExceeded,
     #[msg("Max deposit cannot be reduced below current net balance")]
     MaxDepositBelowBalance,
+    #[msg("Partner is not in the whitelist")]
+    PartnerNotWhitelisted,
+    #[msg("Too many whitelisted partners (max 8)")]
+    TooManyPartners,
 }
