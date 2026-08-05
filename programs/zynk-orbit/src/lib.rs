@@ -138,6 +138,29 @@ fn transfer_to_zov<'info>(
     token_interface::transfer_checked(cpi_ctx, amount, mint.decimals)
 }
 
+/// Transfers tokens from a source to a destination using a PDA authority with signer seeds.
+/// This is the common transfer path shared by LP/NCW and ICV withdrawal approval flows.
+fn transfer_with_signer<'info>(
+    token_program: &Interface<'info, TokenInterface>,
+    source_token_account: &AccountInfo<'info>,
+    destination_token_account: &AccountInfo<'info>,
+    mint: &InterfaceAccount<'info, Mint>,
+    authority: &AccountInfo<'info>,
+    signer_seeds: &[&[&[u8]]],
+    amount: u64,
+) -> Result<()> {
+    let cpi_accounts = TransferChecked {
+        from: source_token_account.to_account_info(),
+        to: destination_token_account.to_account_info(),
+        mint: mint.to_account_info(),
+        authority: authority.to_account_info(),
+    };
+
+    let cpi_ctx =
+        CpiContext::new_with_signer(token_program.to_account_info(), cpi_accounts, signer_seeds);
+    token_interface::transfer_checked(cpi_ctx, amount, mint.decimals)
+}
+
 #[program]
 pub mod zynk_orbit {
     use super::*;
@@ -991,11 +1014,6 @@ pub mod zynk_orbit {
             OrbitError::InsufficientBalance
         );
 
-        require!(
-            signer_record.user_type != UserType::ICV,
-            OrbitError::InvalidOperation
-        );
-
         let withdraw_request = &mut ctx.accounts.withdraw_request;
         withdraw_request.primary_account = primary_account;
         withdraw_request.user_id = user_id;
@@ -1011,25 +1029,17 @@ pub mod zynk_orbit {
         Ok(())
     }
 
-    pub fn approve_withdraw(ctx: Context<ApproveWithdraw>) -> Result<()> {
+    pub fn approve_withdraw(
+        ctx: Context<ApproveWithdraw>,
+        user_id: [u8; 32],
+        primary_account_pk: Pubkey,
+    ) -> Result<()> {
         let request_data = ctx.accounts.request.try_borrow_data()?;
         let withdraw_request = WithdrawRequest::try_deserialize(&mut &request_data[8..])
             .map_err(|_| OrbitError::InvalidRequestAccount)?;
+        drop(request_data);
 
         let record = &mut ctx.accounts.record;
-
-        // Verify the record matches the withdraw request
-        require!(
-            record.user_id == withdraw_request.user_id
-                && record.primary_account == withdraw_request.primary_account,
-            OrbitError::InvalidAccount
-        );
-
-        // Verify destination token account matches the withdraw request
-        require!(
-            ctx.accounts.destination_token_account.owner == withdraw_request.destination,
-            OrbitError::InvalidAccount
-        );
 
         // Update principle_out on the record
         record.principle_out = record
@@ -1037,27 +1047,64 @@ pub mod zynk_orbit {
             .checked_add(withdraw_request.amount as u64)
             .ok_or(ProgramError::ArithmeticOverflow)?;
 
-        // Transfer tokens from ovault to destination
-        let seeds: &[&[u8]] = &[VAULT_SEED, b"orbit", &[ctx.bumps.ovault]];
-        let signer_seeds = &[&seeds[..]];
-
-        let cpi_accounts = TransferChecked {
-            from: ctx.accounts.source_token_account.to_account_info(),
-            to: ctx.accounts.destination_token_account.to_account_info(),
-            mint: ctx.accounts.mint.to_account_info(),
-            authority: ctx.accounts.ovault.to_account_info(),
-        };
-
-        let cpi_ctx = CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
-            cpi_accounts,
-            signer_seeds,
+        // Verify destination token account matches the withdraw request
+        require!(
+            ctx.accounts.destination_token_account.owner == withdraw_request.destination,
+            OrbitError::InvalidAccount
         );
-        token_interface::transfer_checked(
-            cpi_ctx,
-            withdraw_request.amount as u64,
-            ctx.accounts.mint.decimals,
-        )?;
+
+        // Handle transfer based on user type
+        match record.user_type {
+            UserType::ICV => {
+                // For ICVs, transfer from the ICV token account (owned by Record PDA)
+                // to the destination, using Record PDA seeds as authority
+                require!(
+                    ctx.accounts.source_token_account.owner == record.key(),
+                    OrbitError::InvalidAccount
+                );
+
+                let seeds: &[&[u8]] = &[
+                    RECORD_SEED,
+                    user_id.as_ref(),
+                    primary_account_pk.as_ref(),
+                    &[ctx.bumps.record],
+                ];
+                let signer_seeds = &[&seeds[..]];
+                transfer_with_signer(
+                    &ctx.accounts.token_program,
+                    &ctx.accounts.source_token_account.to_account_info(),
+                    &ctx.accounts.destination_token_account.to_account_info(),
+                    &ctx.accounts.mint,
+                    &ctx.accounts.record.to_account_info(),
+                    signer_seeds,
+                    withdraw_request.amount as u64,
+                )?;
+            }
+            UserType::LP => {
+                // For LPs transfer from ovault to destination
+                let ovault = ctx
+                    .accounts
+                    .ovault
+                    .as_ref()
+                    .ok_or(OrbitError::InvalidAccount)?;
+                let (_, ovault_bump) =
+                    Pubkey::find_program_address(&[VAULT_SEED, b"orbit"], ctx.program_id);
+                let seeds: &[&[u8]] = &[VAULT_SEED, b"orbit", &[ovault_bump]];
+                let signer_seeds = &[&seeds[..]];
+                transfer_with_signer(
+                    &ctx.accounts.token_program,
+                    &ctx.accounts.source_token_account.to_account_info(),
+                    &ctx.accounts.destination_token_account.to_account_info(),
+                    &ctx.accounts.mint,
+                    &ovault.to_account_info(),
+                    signer_seeds,
+                    withdraw_request.amount as u64,
+                )?;
+            }
+            UserType::NCW => {
+                return Err(OrbitError::InvalidOperation.into());
+            }
+        }
 
         // Close the withdraw request account, move lamports to primary wallet
         close_account(
@@ -1067,7 +1114,7 @@ pub mod zynk_orbit {
 
         emit!(TxEvent {
             event_name: String::from("withdraw_approved"),
-            user_id: Some(withdraw_request.user_id),
+            user_id: Some(user_id),
             from_owner: ctx.accounts.source_token_account.owner.key(),
             to_owner: ctx.accounts.destination_token_account.owner.key(),
             from: ctx.accounts.source_token_account.key(),
@@ -1386,12 +1433,17 @@ pub struct RequestWithdraw<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(user_id: [u8; 32], primary_account_pk: Pubkey)]
 pub struct ApproveWithdraw<'info> {
     /// CHECK: WithdrawRequest PDA - validated in handler
     #[account(mut)]
     pub request: UncheckedAccount<'info>,
 
-    #[account(mut)]
+    #[account(
+        mut,
+        seeds = [RECORD_SEED, user_id.as_ref(), primary_account_pk.as_ref()],
+        bump,
+    )]
     pub record: Account<'info, Record>,
 
     /// CHECK: primary wallet from the request - receives lamports from closed account
@@ -1407,12 +1459,8 @@ pub struct ApproveWithdraw<'info> {
     #[account(mut)]
     pub destination_token_account: InterfaceAccount<'info, TokenAccount>,
 
-    /// CHECK: Ovault - verified by seeds
-    #[account(
-        seeds = [VAULT_SEED, b"orbit"],
-        bump
-    )]
-    pub ovault: UncheckedAccount<'info>,
+    /// CHECK: Ovault - verified by seeds (only required for LP withdrawals)
+    pub ovault: Option<UncheckedAccount<'info>>,
 
     pub mint: InterfaceAccount<'info, Mint>,
 
