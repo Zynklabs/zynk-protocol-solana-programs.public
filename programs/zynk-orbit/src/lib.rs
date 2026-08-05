@@ -333,10 +333,6 @@ pub mod zynk_orbit {
                     )?;
                 }
                 UserType::ICV => {
-                    // Restrict borrowing from ICV if cliff period is over
-                    let now = Clock::get()?.unix_timestamp;
-                    require!(now < record.cliff_period, OrbitError::CliffPeriodOver);
-
                     let seeds: &[&[u8]] = &[
                         RECORD_SEED,
                         record.user_id.as_ref(),
@@ -980,6 +976,17 @@ pub mod zynk_orbit {
         max_deposit: u32,
     ) -> Result<()> {
         let record = &mut ctx.accounts.record;
+
+        // When reducing max_deposit, ensure it does not go below the current net balance
+        let net_balance = record
+            .principle_in
+            .checked_sub(record.principle_out)
+            .ok_or(ProgramError::ArithmeticOverflow)?;
+        require!(
+            max_deposit as u64 >= net_balance,
+            OrbitError::MaxDepositBelowBalance
+        );
+
         record.max_deposit = max_deposit;
 
         emit!(AxEvent {
@@ -1156,6 +1163,100 @@ pub mod zynk_orbit {
             user_id: update_request.user_id,
             public_key: update_request.primary_account,
             domain_separator: DOMAIN_SEPARATOR,
+        });
+
+        Ok(())
+    }
+
+    // Pledge: deposit yield back into the system. Same validations as deposit.
+    // For LP: moves funds from ovault to ZOV (ovault PDA is the authority).
+    // For ICV: moves funds from ovault to ICV's ATA (token account owned by Record PDA).
+    pub fn pledge(
+        ctx: Context<Pledge>,
+        user_id: [u8; 32],
+        _primary_account: Pubkey,
+        amount: u64,
+    ) -> Result<()> {
+        require!(amount != 0, OrbitError::ZeroAmount);
+
+        let record = &ctx.accounts.record;
+
+        // Only LPs and ICVs can pledge. NCWs cannot.
+        require!(
+            record.user_type != UserType::NCW,
+            OrbitError::InvalidOperation
+        );
+
+        // Restrict pledge if cliff period is over
+        let now = Clock::get()?.unix_timestamp;
+        require!(now < record.cliff_period, OrbitError::CliffPeriodOver);
+
+        // Enforce max_deposit cap on net balance (principle_in - principle_out)
+        require!(
+            record
+                .principle_in
+                .checked_sub(record.principle_out)
+                .ok_or(ProgramError::ArithmeticOverflow)?
+                .checked_add(amount)
+                .ok_or(ProgramError::ArithmeticOverflow)?
+                <= record.max_deposit as u64,
+            OrbitError::MaxDepositExceeded
+        );
+
+        // Validate destination and perform transfer based on user type
+        // Source is always ovault for both LP and ICV
+        let (_, ovault_bump) =
+            Pubkey::find_program_address(&[VAULT_SEED, b"orbit"], ctx.program_id);
+        let seeds: &[&[u8]] = &[VAULT_SEED, b"orbit", &[ovault_bump]];
+        let signer_seeds = &[&seeds[..]];
+
+        match record.user_type {
+            UserType::LP => {
+                // LP pledge: move funds from ovault to ZOV
+                require!(
+                    ctx.accounts.destination_token_account.owner == ZOV,
+                    OrbitError::InvalidAccount
+                );
+            }
+            UserType::ICV => {
+                // ICV pledge: move funds from ovault to ICV's ATA (owned by Record PDA)
+                require!(
+                    ctx.accounts.destination_token_account.owner == record.key(),
+                    OrbitError::InvalidAccount
+                );
+            }
+            UserType::NCW => {
+                return Err(OrbitError::InvalidOperation.into());
+            }
+        }
+
+        transfer_with_signer(
+            &ctx.accounts.token_program,
+            &ctx.accounts.source_token_account.to_account_info(),
+            &ctx.accounts.destination_token_account.to_account_info(),
+            &ctx.accounts.mint,
+            &ctx.accounts.ovault.to_account_info(),
+            signer_seeds,
+            amount,
+        )?;
+
+        let record = &mut ctx.accounts.record;
+        record.principle_in = record
+            .principle_in
+            .checked_add(amount)
+            .ok_or(ProgramError::ArithmeticOverflow)?;
+
+        emit!(TxEvent {
+            event_name: String::from("pledge"),
+            user_id: Some(user_id),
+            from_owner: ctx.accounts.source_token_account.owner.key(),
+            to_owner: ctx.accounts.destination_token_account.owner.key(),
+            from: ctx.accounts.source_token_account.key(),
+            to: ctx.accounts.destination_token_account.key(),
+            amount,
+            token: ctx.accounts.mint.key(),
+            domain_separator: DOMAIN_SEPARATOR,
+            order_id: None,
         });
 
         Ok(())
@@ -1366,7 +1467,7 @@ pub struct Revoke<'info> {
 pub struct UpdateCliffPeriod<'info> {
     #[account(
         init,
-        payer = user,
+        payer = admin,
         space = 8 + UpdateCliffPeriodRequest::INIT_SPACE,
         seeds = [RECORD_UPDATE_REQUEST_SEED, user_id.as_ref(), primary_account.as_ref()],
         bump
@@ -1380,8 +1481,8 @@ pub struct UpdateCliffPeriod<'info> {
     )]
     pub user_record: Account<'info, Record>,
 
-    #[account(mut, constraint = user.key() == primary_account @ OrbitError::UnauthorizedAdmin)]
-    pub user: Signer<'info>,
+    #[account(mut, constraint = admin.key() == ADMIN @ OrbitError::UnauthorizedAdmin)]
+    pub admin: Signer<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -1482,8 +1583,8 @@ pub struct ApproveCliffPeriod<'info> {
     #[account(mut)]
     pub primary_account: UncheckedAccount<'info>,
 
-    #[account(mut, constraint = admin.key() == ADMIN @ OrbitError::UnauthorizedAdmin)]
-    pub admin: Signer<'info>,
+    #[account(mut, constraint = primary_account.key() == record.primary_account @ OrbitError::UnauthorizedAdmin)]
+    pub primary_account_signer: Signer<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -1516,6 +1617,43 @@ pub struct Claim<'info> {
 
     #[account(mut)]
     pub signer: Signer<'info>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+#[derive(Accounts)]
+#[instruction(user_id: [u8; 32], primary_account: Pubkey)]
+pub struct Pledge<'info> {
+    #[account(mut)]
+    pub source_token_account: InterfaceAccount<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub destination_token_account: InterfaceAccount<'info, TokenAccount>,
+
+    #[account(
+        seeds = [RECORD_SEED, user_id.as_ref(), primary_account.as_ref()],
+        bump,
+    )]
+    pub record: Account<'info, Record>,
+
+    #[account(
+        constraint = ALLOWED_MINTS.contains(&mint.key()) @ OrbitError::InvalidTokenMint,
+        constraint = mint.key() == source_token_account.mint @ OrbitError::InvalidTokenMint,
+        constraint = mint.key() == destination_token_account.mint @ OrbitError::InvalidTokenMint,
+    )]
+    pub mint: InterfaceAccount<'info, Mint>,
+
+    #[account(
+        mut,
+        constraint = manager.key() == MANAGER @ OrbitError::UnauthorizedManager
+    )]
+    pub manager: Signer<'info>,
+
+    #[account(
+        seeds = [VAULT_SEED, b"orbit"],
+        bump
+    )]
+    pub ovault: UncheckedAccount<'info>,
 
     pub token_program: Interface<'info, TokenInterface>,
 }
@@ -1562,4 +1700,6 @@ pub enum OrbitError {
     CliffPeriodNotOver,
     #[msg("Deposit would exceed max deposit cap")]
     MaxDepositExceeded,
+    #[msg("Max deposit cannot be reduced below current net balance")]
+    MaxDepositBelowBalance,
 }
