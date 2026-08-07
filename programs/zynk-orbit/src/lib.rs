@@ -42,8 +42,8 @@ pub struct Record {
     pub principle_out: u64,
     pub max_deposit: u32,
     pub aux_account: Pubkey,
-    #[max_len(8)]
-    pub whitelisted_partners: Vec<[u8; 32]>,
+    #[max_len(1000)]
+    pub whitelisted_partners: Vec<u32>,
 }
 
 #[account]
@@ -100,7 +100,7 @@ pub struct AxEvent {
     pub user_id: [u8; 32],
     pub public_key: Pubkey,
     pub domain_separator: u64,
-    pub partners: Option<Vec<[u8; 32]>>,
+    pub partners: Option<Vec<u32>>,
 }
 
 pub fn close_account<'a, 'b>(
@@ -116,6 +116,26 @@ pub fn close_account<'a, 'b>(
 
     from.assign(&SYSTEM_PROGRAM_ID);
     from.realloc(0, false).map_err(Into::into)
+}
+
+/// Extracts the 6-digit numeric partner ID from a partner_id string.
+/// E.g., "zp_123456:context" -> 123456u32
+fn extract_partner_number(partner_id: &str) -> Result<u32> {
+    let base = if let Some(colon_idx) = partner_id.find(':') {
+        &partner_id[..colon_idx]
+    } else {
+        partner_id
+    };
+    // base is e.g. "zp_123456"
+    // Strip the "zp_" prefix and parse the remaining digits
+    let digits = base
+        .strip_prefix("zp_")
+        .ok_or(OrbitError::InvalidPartnerId)?;
+    require!(digits.len() == 6, OrbitError::InvalidPartnerId);
+    let num = digits
+        .parse::<u32>()
+        .map_err(|_| OrbitError::InvalidPartnerId)?;
+    Ok(num)
 }
 
 /// Transfers tokens from a source account to ZOV using a PDA authority with signer seeds.
@@ -264,15 +284,9 @@ pub mod zynk_orbit {
         require!(!positions.is_empty(), OrbitError::EmptyPositions);
         require!(amount > 0, OrbitError::ZeroAmount);
 
-        // Parse partner_id: extract base part before any colon (e.g., "zp_12345:onramp" -> "zp_12345")
+        // Parse partner_id: extract the numeric portion (e.g., "zp_123456:onramp" -> 123456)
         // for whitelist check. The full partner_id string is hashed for the create_order CPI.
-        let base_partner_id = if let Some(colon_idx) = partner_id.find(':') {
-            &partner_id[..colon_idx]
-        } else {
-            &partner_id[..]
-        };
-        let base_partner_id_bytes =
-            anchor_lang::solana_program::hash::hash(base_partner_id.as_bytes()).to_bytes();
+        let partner_number = extract_partner_number(&partner_id)?;
         let partner_id_bytes =
             anchor_lang::solana_program::hash::hash(partner_id.as_bytes()).to_bytes();
 
@@ -317,10 +331,10 @@ pub mod zynk_orbit {
                 OrbitError::InvalidAccount
             );
 
-            // Check partner whitelist: if whitelisted_partners is non-empty, verify base partner_id is in it
+            // Check partner whitelist: if whitelisted_partners is non-empty, verify partner_number is in it
             if !record.whitelisted_partners.is_empty() {
                 require!(
-                    record.whitelisted_partners.contains(&base_partner_id_bytes),
+                    record.whitelisted_partners.contains(&partner_number),
                     OrbitError::PartnerNotWhitelisted
                 );
             }
@@ -897,7 +911,7 @@ pub mod zynk_orbit {
         cliff_period: Option<i64>,
         max_deposit: Option<u32>,
         aux_account: Option<Pubkey>,
-        partners: Option<Vec<[u8; 32]>>,
+        partners: Option<Vec<u32>>,
     ) -> Result<()> {
         let record = &mut ctx.accounts.record;
 
@@ -939,7 +953,7 @@ pub mod zynk_orbit {
         ctx: Context<UpdatePartnerWhitelist>,
         user_id: [u8; 32],
         primary_account: Pubkey,
-        partners: Vec<[u8; 32]>,
+        partners: Vec<u32>,
     ) -> Result<()> {
         require!(partners.len() <= 8, OrbitError::TooManyPartners);
 
@@ -1730,6 +1744,7 @@ pub struct Pledge<'info> {
     )]
     pub manager: Signer<'info>,
 
+    /// CHECK: Ovault - verified by seeds. Must be whitelisted as a beneficiary in zynk-core with allow_transient=true.
     #[account(
         seeds = [VAULT_SEED, b"orbit"],
         bump
@@ -1787,4 +1802,6 @@ pub enum OrbitError {
     PartnerNotWhitelisted,
     #[msg("Too many whitelisted partners (max 8)")]
     TooManyPartners,
+    #[msg("Invalid partner ID format")]
+    InvalidPartnerId,
 }
