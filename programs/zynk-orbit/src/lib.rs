@@ -60,6 +60,7 @@ pub struct UpdateCliffPeriodRequest {
 #[derive(InitSpace)]
 pub struct Position {
     pub order_id: [u8; 32],
+    pub partner_id: [u8; 32],
     pub amount_borrowed: u64,
     pub amount_repaid: u64,
     pub public_key: Pubkey,
@@ -483,6 +484,7 @@ pub mod zynk_orbit {
             let mut position_account =
                 Position::try_deserialize_unchecked(&mut &position_data[..])?;
             position_account.order_id = order_id;
+            position_account.partner_id = partner_id_bytes;
             position_account.amount_borrowed = pos.amount;
             position_account.amount_repaid = 0;
             position_account.public_key = pos.lp_primary_account;
@@ -833,15 +835,16 @@ pub mod zynk_orbit {
     }
 
     // ICV users claim their deposited funds after the cliff period is over.
-    // Transfers all funds from the ICV token account (owned by Record PDA) to the aux account.
+    // Transfers all funds from the ICV token account (owned by Record PDA) to the
+    // destination token account (owned by record.primary_account or record.aux_account).
     //
     // TODO: In a future iteration, incorporate pull+repay to settle outstanding
-    // borrowed positions before transferring ICV funds to aux account. This will
+    // borrowed positions before transferring ICV funds to destination. This will
     // require:
     //  - CPI to zynk_core::pull_and_repay
     //  - Closing the position PDA if fully repaid
     // Currently, claim only transfers funds held in the ICV token account directly
-    // to the aux account.
+    // to the destination token account.
     pub fn claim(ctx: Context<Claim>, user_id: [u8; 32]) -> Result<()> {
         let record = &ctx.accounts.record;
 
@@ -862,9 +865,10 @@ pub mod zynk_orbit {
             OrbitError::InvalidAccount
         );
 
-        // Verify aux account token account belongs to record.aux_account
+        // Verify destination token account belongs to record.primary_account or record.aux_account
         require!(
-            ctx.accounts.aux_token_account.owner == record.aux_account,
+            ctx.accounts.destination_token_account.owner == record.primary_account
+                || ctx.accounts.destination_token_account.owner == record.aux_account,
             OrbitError::InvalidAccount
         );
 
@@ -882,7 +886,7 @@ pub mod zynk_orbit {
 
         let cpi_accounts = TransferChecked {
             from: ctx.accounts.icv_token_account.to_account_info(),
-            to: ctx.accounts.aux_token_account.to_account_info(),
+            to: ctx.accounts.destination_token_account.to_account_info(),
             mint: ctx.accounts.mint.to_account_info(),
             authority: ctx.accounts.record.to_account_info(),
         };
@@ -904,9 +908,9 @@ pub mod zynk_orbit {
             event_name: String::from("claim"),
             user_id: Some(user_id),
             from_owner: ctx.accounts.record.key(),
-            to_owner: ctx.accounts.aux_token_account.owner,
+            to_owner: ctx.accounts.destination_token_account.owner,
             from: ctx.accounts.icv_token_account.key(),
-            to: ctx.accounts.aux_token_account.key(),
+            to: ctx.accounts.destination_token_account.key(),
             amount: icv_balance,
             token: ctx.accounts.mint.key(),
             domain_separator: DOMAIN_SEPARATOR,
@@ -1862,13 +1866,13 @@ pub struct Claim<'info> {
     #[account(mut)]
     pub icv_token_account: InterfaceAccount<'info, TokenAccount>,
 
-    /// aux account token account — destination for claimed funds
+    /// Token account to receive claimed funds — must be owned by record.primary_account or record.aux_account
     #[account(mut)]
-    pub aux_token_account: InterfaceAccount<'info, TokenAccount>,
+    pub destination_token_account: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
         constraint = mint.key() == icv_token_account.mint @ OrbitError::InvalidTokenMint,
-        constraint = mint.key() == aux_token_account.mint @ OrbitError::InvalidTokenMint,
+        constraint = mint.key() == destination_token_account.mint @ OrbitError::InvalidTokenMint,
     )]
     pub mint: InterfaceAccount<'info, Mint>,
 
