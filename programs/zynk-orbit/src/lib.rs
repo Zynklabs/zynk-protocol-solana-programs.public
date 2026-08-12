@@ -24,19 +24,49 @@ pub enum UserType {
     ICV = 2,
 }
 
+/// Action to perform on the partner whitelist.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq)]
+pub enum WhitelistAction {
+    /// Add a partner_id to the whitelist (errors if already present).
+    Add,
+    /// Remove a partner_id from the whitelist (errors if not present).
+    Remove,
+}
+
 #[account]
-#[derive(InitSpace)]
 pub struct Record {
-    pub primary_account: Pubkey,
-    pub user_id: [u8; 32],
-    pub user_type: UserType,
-    pub cliff_period: i64,
-    pub principle_in: u64,
-    pub principle_out: u64,
-    pub max_deposit: u32,
-    pub aux_account: Pubkey,
-    #[max_len(1000)]
-    pub whitelisted_partners: Vec<u32>,
+    pub primary_account: Pubkey,   // 32 bytes
+    pub user_id: [u8; 32],         // 32 bytes
+    pub user_type: UserType,       // 1  byte  (repr u8)
+    pub cliff_period: i64,         // 8  bytes
+    pub principle_in: u64,         // 8  bytes
+    pub principle_out: u64,        // 8  bytes
+    pub max_deposit: u32,          // 4  bytes
+    pub aux_account: Pubkey,       // 32 bytes
+    pub whitelisted_partners: Vec<u32>, // 4-byte length prefix + (len × 4) bytes
+}
+
+impl Record {
+    /// Fixed byte cost of every field except the vector's element storage:
+    ///   8   discriminator
+    /// + 32  primary_account
+    /// + 32  user_id
+    /// + 1   user_type
+    /// + 8   cliff_period
+    /// + 8   principle_in
+    /// + 8   principle_out
+    /// + 4   max_deposit
+    /// + 32  aux_account
+    /// + 4   Vec<u32> length prefix
+    /// = 137 bytes
+    pub const BASE_SIZE: usize = 8 + 32 + 32 + 1 + 8 + 8 + 8 + 4 + 32 + 4;
+
+    /// Total account space required to hold exactly `len` partner IDs.
+    /// Each `u32` partner ID occupies 4 bytes.
+    #[inline]
+    pub fn space_for_len(len: usize) -> usize {
+        Self::BASE_SIZE + len * 4
+    }
 }
 
 #[account]
@@ -991,9 +1021,8 @@ pub mod zynk_orbit {
         cliff_period: Option<i64>,
         max_deposit: Option<u32>,
         aux_account: Option<Pubkey>,
-        partners: Option<Vec<u32>>,
     ) -> Result<()> {
-        // Validate admin signer against zynk-core config
+        // Validate admin signer against zynk-core config.
         let config = read_core_config(&ctx.accounts.core_config, &ctx.accounts.zynk_core_program.key())?;
         require!(
             ctx.accounts.admin.key() == config.admin,
@@ -1002,18 +1031,10 @@ pub mod zynk_orbit {
 
         let record = &mut ctx.accounts.record;
 
-        // Validate cliff_period is in the future if provided
+        // Validate cliff_period is in the future if provided.
         if let Some(cp) = cliff_period {
             let now = Clock::get()?.unix_timestamp;
             require!(cp > now, OrbitError::CliffPeriodInPast);
-        }
-
-        // Validate and set whitelisted partners
-        if let Some(ref partners) = partners {
-            require!(partners.len() <= 8, OrbitError::TooManyPartners);
-            record.whitelisted_partners = partners.clone();
-        } else {
-            record.whitelisted_partners = Vec::new();
         }
 
         record.primary_account = primary_account;
@@ -1024,13 +1045,16 @@ pub mod zynk_orbit {
         record.principle_out = 0;
         record.max_deposit = max_deposit.unwrap_or(u32::MAX);
         record.aux_account = aux_account.unwrap_or(primary_account);
+        // Always start with an empty whitelist; add partners via
+        // update_partner_whitelist, which reallocs the account on demand.
+        record.whitelisted_partners = Vec::new();
 
         emit!(AxEvent {
             event_name: String::from("whitelist"),
             user_id,
             public_key: primary_account,
             domain_separator: DOMAIN_SEPARATOR,
-            partners: partners,
+            partners: None,
         });
 
         Ok(())
@@ -1040,26 +1064,48 @@ pub mod zynk_orbit {
         ctx: Context<UpdatePartnerWhitelist>,
         user_id: [u8; 32],
         primary_account: Pubkey,
-        partners: Vec<u32>,
+        action: WhitelistAction,
+        partner_id: u32,
     ) -> Result<()> {
-        // Validate admin signer against zynk-core config
+        // Validate admin signer against zynk-core config.
         let config = read_core_config(&ctx.accounts.core_config, &ctx.accounts.zynk_core_program.key())?;
         require!(
             ctx.accounts.admin.key() == config.admin,
             OrbitError::UnauthorizedAdmin
         );
 
-        require!(partners.len() <= 8, OrbitError::TooManyPartners);
-
         let record = &mut ctx.accounts.record;
-        record.whitelisted_partners = partners.clone();
+
+        match action {
+            WhitelistAction::Add => {
+                // Prevent duplicates — realloc already grew the buffer; an
+                // early error here lets Solana roll the whole tx back cleanly.
+                require!(
+                    !record.whitelisted_partners.contains(&partner_id),
+                    OrbitError::PartnerAlreadyWhitelisted
+                );
+                record.whitelisted_partners.push(partner_id);
+            }
+            WhitelistAction::Remove => {
+                // locate the element; error if it doesn't exist.
+                let pos = record
+                    .whitelisted_partners
+                    .iter()
+                    .position(|&id| id == partner_id)
+                    .ok_or(OrbitError::PartnerNotWhitelisted)?;
+                // swap_remove is O(1) and order doesn't matter for a whitelist.
+                record.whitelisted_partners.swap_remove(pos);
+            }
+        }
+
+        let updated_partners = record.whitelisted_partners.clone();
 
         emit!(AxEvent {
             event_name: String::from("update_partner_whitelist"),
             user_id,
             public_key: primary_account,
             domain_separator: DOMAIN_SEPARATOR,
-            partners: Some(partners),
+            partners: Some(updated_partners),
         });
 
         Ok(())
@@ -1681,7 +1727,9 @@ pub struct Whitelist<'info> {
     #[account(
         init,
         payer = admin,
-        space = 8 + Record::INIT_SPACE,
+        // Allocate only baseline space (empty whitelist). Partners are added
+        // later via update_partner_whitelist, which reallocs on demand.
+        space = Record::space_for_len(0),
         seeds = [RECORD_SEED, user_id.as_ref(), primary_account.as_ref()],
         bump
     )]
@@ -1767,12 +1815,27 @@ pub struct UpdateMaxDeposit<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(user_id: [u8; 32], primary_account: Pubkey)]
+// `action` is bound here so the realloc expression below can reference it.
+#[instruction(user_id: [u8; 32], primary_account: Pubkey, action: WhitelistAction)]
 pub struct UpdatePartnerWhitelist<'info> {
     #[account(
         mut,
         seeds = [RECORD_SEED, user_id.as_ref(), primary_account.as_ref()],
         bump,
+        // Dynamically resize the account buffer before the handler runs:
+        //   • Add    → grow by one u32 slot (4 bytes)
+        //   • Remove → shrink by one u32 slot, floored at 0 via saturating_sub
+        // Anchor automatically tops up (or refunds) rent to/from `admin`.
+        realloc = Record::space_for_len(
+            match action {
+                WhitelistAction::Add    => record.whitelisted_partners.len().saturating_add(1),
+                WhitelistAction::Remove => record.whitelisted_partners.len().saturating_sub(1),
+            }
+        ),
+        realloc::payer = admin,
+        // false → do NOT zero-fill new bytes; Anchor re-serialises the whole
+        // account on exit anyway, so zeroing is wasted compute.
+        realloc::zero = false,
     )]
     pub record: Account<'info, Record>,
 
@@ -2003,8 +2066,8 @@ pub enum OrbitError {
     MaxDepositBelowBalance,
     #[msg("Partner is not in the whitelist")]
     PartnerNotWhitelisted,
-    #[msg("Too many whitelisted partners (max 8)")]
-    TooManyPartners,
+    #[msg("Partner is already in the whitelist")]
+    PartnerAlreadyWhitelisted,
     #[msg("Invalid partner ID format")]
     InvalidPartnerId,
     #[msg("Invalid zynk-core config account")]
