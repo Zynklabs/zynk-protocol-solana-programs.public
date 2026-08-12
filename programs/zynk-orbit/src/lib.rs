@@ -192,7 +192,7 @@ fn read_core_config<'info>(
         OrbitError::InvalidCoreConfig
     );
     let data = core_config.try_borrow_data()?;
-    zynk_core::Config::try_deserialize(&mut &data[8..])
+    zynk_core::Config::try_deserialize(&mut &data[..])
         .map_err(|_| error!(OrbitError::InvalidCoreConfig))
 }
 
@@ -356,7 +356,7 @@ pub mod zynk_orbit {
 
             // Verify the record account
             let record_data = record_account.data.borrow();
-            let record = Record::try_deserialize(&mut &record_data[8..])
+            let record = Record::try_deserialize(&mut &record_data[..])
                 .map_err(|_| OrbitError::InvalidAccount)?;
             require!(
                 record.primary_account == pos.lp_primary_account,
@@ -582,7 +582,7 @@ pub mod zynk_orbit {
         // Read the order tracker to determine remaining order amount
         let order_tracker_data = ctx.accounts.core_order_tracker.try_borrow_data()?;
         // Skip 8-byte discriminator
-        let order_tracker = zynk_core::OrderTracker::try_deserialize(&mut &order_tracker_data[8..])
+        let order_tracker = zynk_core::OrderTracker::try_deserialize(&mut &order_tracker_data[..])
             .map_err(|_| OrbitError::InvalidAccount)?;
         let amount_out = order_tracker.amount_out;
         let amount_in = order_tracker.amount_in;
@@ -627,7 +627,7 @@ pub mod zynk_orbit {
             pdv_token_account: None,
             zynk_op_vault: ctx.accounts.core_zynk_op_vault.to_account_info(),
             zov_token_account: ctx.accounts.zov_token_account.to_account_info(),
-            beneficiary: ctx.accounts.ovault.to_account_info(),
+            beneficiary: ctx.accounts.ovaults_beneficiary_pda.to_account_info(),
             beneficiary_token_account: ctx.accounts.ovault_token_account.to_account_info(),
             order_tracker: ctx.accounts.core_transient_order_tracker.to_account_info(),
             mint: ctx.accounts.mint.to_account_info(),
@@ -676,7 +676,7 @@ pub mod zynk_orbit {
 
             // Verify the record account
             let record_data = record_account.data.borrow();
-            let record = Record::try_deserialize(&mut &record_data[8..])
+            let record = Record::try_deserialize(&mut &record_data[..])
                 .map_err(|_| OrbitError::InvalidAccount)?;
             require!(
                 record.primary_account == pos.lp_primary_account,
@@ -687,7 +687,7 @@ pub mod zynk_orbit {
 
             // Verify the position PDA
             let position_data = position_pda.data.borrow();
-            let position = Position::try_deserialize(&mut &position_data[8..])
+            let position = Position::try_deserialize(&mut &position_data[..])
                 .map_err(|_| OrbitError::InvalidAccount)?;
             require!(
                 position.order_id == order_id,
@@ -760,19 +760,31 @@ pub mod zynk_orbit {
                 continue;
             }
 
+            // Deserialize the SPL token account data to read its authority (owner field).
+            // AccountInfo.owner is the Token Program address, not the token account's authority.
+            // The authority is stored inside the account data at bytes 32–64.
+            let dst_token_authority = {
+                let data = dst_token_account.try_borrow_data()?;
+                let token_account = TokenAccount::try_deserialize_unchecked(&mut &data[..])
+                    .map_err(|_| OrbitError::InvalidAccount)?;
+                token_account.owner
+            };
+
             // Verify destination based on user type (using cached position info)
             match pos.user_type {
                 UserType::NCW => {
                     require!(info.user_type == UserType::NCW, OrbitError::InvalidAccount);
+                    // NCW: destination token account must be owned by the NCW's primary account
                     require!(
-                        *dst_token_account.owner == pos.lp_primary_account,
+                        dst_token_authority == pos.lp_primary_account,
                         OrbitError::InvalidAccount
                     );
                 }
                 UserType::ICV => {
                     require!(info.user_type == UserType::ICV, OrbitError::InvalidAccount);
+                    // ICV: destination token account must be owned by the Record PDA
                     require!(
-                        *dst_token_account.owner == record_account.key(),
+                        dst_token_authority == record_account.key(),
                         OrbitError::InvalidAccount
                     );
                 }
@@ -802,7 +814,7 @@ pub mod zynk_orbit {
 
             // Update the Position PDA
             let mut position_data = position_pda.try_borrow_mut_data()?;
-            let mut position = Position::try_deserialize_unchecked(&mut &position_data[8..])?;
+            let mut position = Position::try_deserialize_unchecked(&mut &position_data[..])?;
             position.amount_repaid = position
                 .amount_repaid
                 .checked_add(info.share)
@@ -1230,7 +1242,7 @@ pub mod zynk_orbit {
         );
 
         let request_data = ctx.accounts.request.try_borrow_data()?;
-        let withdraw_request = WithdrawRequest::try_deserialize(&mut &request_data[8..])
+        let withdraw_request = WithdrawRequest::try_deserialize(&mut &request_data[..])
             .map_err(|_| OrbitError::InvalidRequestAccount)?;
         drop(request_data);
 
@@ -1324,9 +1336,15 @@ pub mod zynk_orbit {
     }
 
     pub fn approve_cliff_period(ctx: Context<ApproveCliffPeriod>) -> Result<()> {
-        let request_data = ctx.accounts.request.try_borrow_data()?;
-        let update_request = UpdateCliffPeriodRequest::try_deserialize(&mut &request_data[8..])
-            .map_err(|_| OrbitError::InvalidRequestAccount)?;
+        // Deserialize the request inside its own block so the immutable borrow
+        // of `request`'s data RefCell is dropped before close_account() needs
+        // a mutable borrow of the same account (assign + realloc).
+        let update_request = {
+            let request_data = ctx.accounts.request.try_borrow_data()?;
+            UpdateCliffPeriodRequest::try_deserialize(&mut &request_data[..])
+                .map_err(|_| OrbitError::InvalidRequestAccount)?
+            // `request_data` (Ref<[u8]>) is dropped here — RefCell is fully released
+        };
 
         let record = &mut ctx.accounts.record;
 
@@ -1340,7 +1358,8 @@ pub mod zynk_orbit {
         // Update the cliff period on the record
         record.cliff_period = update_request.cliff_period;
 
-        // Close the update request account, move lamports to primary wallet
+        // Close the update request account, move lamports to primary wallet.
+        // Safe now — no live borrows on `request`'s data RefCell remain.
         close_account(
             ctx.accounts.request.to_account_info(),
             ctx.accounts.primary_account.to_account_info(),
@@ -1475,6 +1494,7 @@ pub struct Deposit<'info> {
     pub destination_token_account: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
+        mut,
         seeds = [RECORD_SEED, user_id.as_ref(), signer.key().as_ref()],
         bump,
     )]
@@ -1597,13 +1617,16 @@ pub struct Repay<'info> {
     #[account(mut)]
     pub core_transient_order_tracker: UncheckedAccount<'info>,
 
-    // --- Ovault PDA (signer for ovault → position transfers, and beneficiary for transient create_order) ---
-    /// CHECK: Ovault - verified by seeds. Must be whitelisted as a beneficiary in zynk-core with allow_transient=true.
+    // --- Ovault PDA (signer for ovault → position transfers) ---
+    /// CHECK: Ovault - verified by seeds.
     #[account(
         seeds = [VAULT_SEED, b"orbit"],
         bump
     )]
     pub ovault: UncheckedAccount<'info>,
+
+    /// CHECK: zynk-core Beneficiary PDA for ovault (whitelisted with allow_transient=true)
+    pub ovaults_beneficiary_pda: UncheckedAccount<'info>,
     // Remaining accounts (3 per position):
     // [destination_token_account, record, position_pda]
 }
@@ -1647,7 +1670,7 @@ pub struct Disburse<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(user_id: [u8; 32], primary_account: Pubkey)]
+#[instruction(user_id: [u8; 32], user_type: UserType, primary_account: Pubkey)]
 pub struct Whitelist<'info> {
     #[account(
         init,
