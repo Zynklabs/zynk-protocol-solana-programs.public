@@ -1096,18 +1096,24 @@ pub mod zynk_orbit {
                 OrbitError::PdaNotOwnedByContract
             );
 
-            let data = account_info.data.borrow();
-            let pda_key = account_info.key();
+            // Deserialize and emit inside its own block so the immutable borrow
+            // of `account_info.data` (a RefCell) is dropped before close_account()
+            // needs a mutable borrow of the same account (assign + realloc).
+            {
+                let data = account_info.data.borrow();
+                let pda_key = account_info.key();
 
-            if data.len() >= 8 {
-                let _ = try_revoke!(data, pda_key, Record, "revoke_whitelist")
-                    || try_revoke!(data, pda_key, WithdrawRequest, "revoke_withdraw_request")
-                    || try_revoke!(
-                        data,
-                        pda_key,
-                        UpdateCliffPeriodRequest,
-                        "deny_update_request"
-                    );
+                if data.len() >= 8 {
+                    let _ = try_revoke!(data, pda_key, Record, "revoke_whitelist")
+                        || try_revoke!(data, pda_key, WithdrawRequest, "revoke_withdraw_request")
+                        || try_revoke!(
+                            data,
+                            pda_key,
+                            UpdateCliffPeriodRequest,
+                            "deny_update_request"
+                        );
+                }
+                // `data` (Ref<[u8]>) is dropped here — RefCell is fully released
             }
 
             close_account(account_info, &ctx.accounts.admin)?;
