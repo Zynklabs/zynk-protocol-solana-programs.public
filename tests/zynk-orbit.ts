@@ -291,8 +291,9 @@ describe("zynk-orbit", () => {
                 icvUser.publicKey,
                 futureCliffPeriod,
                 1_000_000_000, // max_deposit: u32 — plain number
-                null,          // aux_account
-                null           // partners (open — no restriction)
+                null           // aux_account
+                // NOTE: partners param removed — whitelist now always inits
+                // with an empty vec; use updatePartnerWhitelist to add/remove.
             )
             .accounts({
                 admin: admin.publicKey,
@@ -309,6 +310,13 @@ describe("zynk-orbit", () => {
         assert.equal(record.principleIn.toNumber(), 0, "principleIn should be 0");
         assert.equal(record.principleOut.toNumber(), 0, "principleOut should be 0");
         assert.equal(record.maxDeposit, 1_000_000_000, "maxDeposit should match");
+        // Account is initialised at BASE_SIZE — empty whitelist
+        assert.deepEqual(record.whitelistedPartners, [], "whitelistedPartners should start empty");
+
+        // Verify the on-chain account size matches BASE_SIZE (137 bytes)
+        const BASE_SIZE = 137; // 8 disc + 32 + 32 + 1 + 8 + 8 + 8 + 4 + 32 + 4
+        const accountInfo = await provider.connection.getAccountInfo(recordPDA);
+        assert.equal(accountInfo!.data.length, BASE_SIZE, `account data should be ${BASE_SIZE} bytes for empty whitelist`);
 
         console.log("✅ ICV user whitelisted:", recordPDA.toBase58());
     });
@@ -636,20 +644,21 @@ describe("zynk-orbit", () => {
     });
 
     // =========================================================================
-    // TEST 10 – Update whitelisted partners
+    // TEST 10a – Add first partner (realloc: BASE_SIZE → BASE_SIZE + 4)
     // =========================================================================
-    it("Admin should update the whitelisted partner list", async () => {
+    it("Admin should add a partner to the whitelist (realloc grows account)", async () => {
         const recordPDA = deriveRecordPDA(icvUserId, icvUser.publicKey);
+        const partnerA = 321420; // numeric suffix from "zp_321420"
 
-        // Extract the numeric suffix from the partner ID string ("zp_321420" → 321420)
-        const partnerNumber = 321420;
-        const newPartners = [partnerNumber];
+        const infoBefore = await provider.connection.getAccountInfo(recordPDA);
+        const sizeBefore = infoBefore!.data.length; // should be BASE_SIZE = 137
 
         await program.methods
             .updatePartnerWhitelist(
                 Array.from(icvUserId),
                 icvUser.publicKey,
-                newPartners
+                { add: {} },   // WhitelistAction::Add
+                partnerA
             )
             .accounts({
                 record: recordPDA,
@@ -660,13 +669,155 @@ describe("zynk-orbit", () => {
             .rpc();
 
         const record = await program.account.record.fetch(recordPDA);
-        assert.deepEqual(
-            record.whitelistedPartners,
-            newPartners,
-            "whitelistedPartners should be updated to the new list"
-        );
+        assert.deepEqual(record.whitelistedPartners, [partnerA], "whitelist should contain partnerA");
 
-        console.log("✅ Partner whitelist updated | whitelistedPartners:", record.whitelistedPartners);
+        const infoAfter = await provider.connection.getAccountInfo(recordPDA);
+        assert.equal(
+            infoAfter!.data.length,
+            sizeBefore + 4,
+            "account should have grown by 4 bytes (one u32 slot)"
+        );
+        console.log("✅ Added partner", partnerA, "| bytes:", sizeBefore, "→", infoAfter!.data.length);
+    });
+
+    // =========================================================================
+    // TEST 10b – Add second partner (realloc grows another 4 bytes)
+    // =========================================================================
+    it("Admin should add a second partner (realloc grows again)", async () => {
+        const recordPDA = deriveRecordPDA(icvUserId, icvUser.publicKey);
+        const partnerB = 654321;
+
+        const infoBefore = await provider.connection.getAccountInfo(recordPDA);
+        const sizeBefore = infoBefore!.data.length; // BASE_SIZE + 4
+
+        await program.methods
+            .updatePartnerWhitelist(
+                Array.from(icvUserId),
+                icvUser.publicKey,
+                { add: {} },
+                partnerB
+            )
+            .accounts({
+                record: recordPDA,
+                admin: admin.publicKey,
+                coreConfig: configPDA,
+            } as any)
+            .signers([admin])
+            .rpc();
+
+        const record = await program.account.record.fetch(recordPDA);
+        assert.equal(record.whitelistedPartners.length, 2, "whitelist should have 2 entries");
+        assert.include(record.whitelistedPartners, partnerB, "partnerB should be in the list");
+
+        const infoAfter = await provider.connection.getAccountInfo(recordPDA);
+        assert.equal(
+            infoAfter!.data.length,
+            sizeBefore + 4,
+            "account should have grown by another 4 bytes"
+        );
+        console.log("✅ Added partner", partnerB, "| bytes:", sizeBefore, "→", infoAfter!.data.length);
+    });
+
+    // =========================================================================
+    // TEST 10c – Add duplicate partner (must fail with PartnerAlreadyWhitelisted)
+    // =========================================================================
+    it("Admin should NOT be able to add a duplicate partner", async () => {
+        const recordPDA = deriveRecordPDA(icvUserId, icvUser.publicKey);
+        const partnerA = 321420; // already in the list from 10a
+
+        try {
+            await program.methods
+                .updatePartnerWhitelist(
+                    Array.from(icvUserId),
+                    icvUser.publicKey,
+                    { add: {} },
+                    partnerA
+                )
+                .accounts({
+                    record: recordPDA,
+                    admin: admin.publicKey,
+                    coreConfig: configPDA,
+                } as any)
+                .signers([admin])
+                .rpc();
+            assert.fail("Expected transaction to fail with PartnerAlreadyWhitelisted");
+        } catch (err: any) {
+            assert.include(err.message, "PartnerAlreadyWhitelisted", "error should be PartnerAlreadyWhitelisted");
+            console.log("✅ Correctly rejected duplicate partner add");
+        }
+    });
+
+    // =========================================================================
+    // TEST 10d – Remove a partner (realloc shrinks account, rent refunded)
+    // =========================================================================
+    it("Admin should remove a partner from the whitelist (realloc shrinks account)", async () => {
+        const recordPDA = deriveRecordPDA(icvUserId, icvUser.publicKey);
+        const partnerA = 321420;
+
+        const infoBefore = await provider.connection.getAccountInfo(recordPDA);
+        const sizeBefore  = infoBefore!.data.length;    // BASE_SIZE + 8 (two partners)
+        const lamportsBefore = infoBefore!.lamports;
+
+        await program.methods
+            .updatePartnerWhitelist(
+                Array.from(icvUserId),
+                icvUser.publicKey,
+                { remove: {} },  // WhitelistAction::Remove
+                partnerA
+            )
+            .accounts({
+                record: recordPDA,
+                admin: admin.publicKey,
+                coreConfig: configPDA,
+            } as any)
+            .signers([admin])
+            .rpc();
+
+        const record = await program.account.record.fetch(recordPDA);
+        assert.equal(record.whitelistedPartners.length, 1, "whitelist should have 1 entry after removal");
+        assert.notInclude(record.whitelistedPartners, partnerA, "partnerA should no longer be in the list");
+
+        const infoAfter = await provider.connection.getAccountInfo(recordPDA);
+        assert.equal(
+            infoAfter!.data.length,
+            sizeBefore - 4,
+            "account should have shrunk by 4 bytes (one u32 slot freed)"
+        );
+        assert.isBelow(
+            infoAfter!.lamports,
+            lamportsBefore,
+            "excess rent-exempt lamports should have been refunded to admin"
+        );
+        console.log("✅ Removed partner", partnerA, "| bytes:", sizeBefore, "→", infoAfter!.data.length);
+    });
+
+    // =========================================================================
+    // TEST 10e – Remove non-existent partner (must fail with PartnerNotWhitelisted)
+    // =========================================================================
+    it("Admin should NOT be able to remove a partner that is not in the whitelist", async () => {
+        const recordPDA = deriveRecordPDA(icvUserId, icvUser.publicKey);
+        const nonExistent = 999999;
+
+        try {
+            await program.methods
+                .updatePartnerWhitelist(
+                    Array.from(icvUserId),
+                    icvUser.publicKey,
+                    { remove: {} },
+                    nonExistent
+                )
+                .accounts({
+                    record: recordPDA,
+                    admin: admin.publicKey,
+                    coreConfig: configPDA,
+                } as any)
+                .signers([admin])
+                .rpc();
+            assert.fail("Expected transaction to fail with PartnerNotWhitelisted");
+        } catch (err: any) {
+            assert.include(err.message, "PartnerNotWhitelisted", "error should be PartnerNotWhitelisted");
+            console.log("✅ Correctly rejected removal of non-existent partner");
+        }
     });
 
     // =========================================================================
