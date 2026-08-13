@@ -10,7 +10,6 @@ pub const DOMAIN_SEPARATOR: u64 = 115131153410997;
 pub const ZOV: Pubkey = pubkey!("2FUNdgyGtGQAffBJ1UYPZrhgu4FSUStsohEzkPbUctnu");
 
 pub const VAULT_SEED: &[u8] = b"vault";
-pub const ORDER_SEED: &[u8] = b"order";
 pub const RECORD_SEED: &[u8] = b"record";
 pub const WITHDRAW_REQUEST_SEED: &[u8] = b"withdraw_request";
 pub const RECORD_UPDATE_REQUEST_SEED: &[u8] = b"record_update_request";
@@ -27,9 +26,7 @@ pub enum UserType {
 /// Action to perform on the partner whitelist.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq)]
 pub enum WhitelistAction {
-    /// Add a partner_id to the whitelist (errors if already present).
     Add,
-    /// Remove a partner_id from the whitelist (errors if not present).
     Remove,
 }
 
@@ -107,7 +104,7 @@ pub struct PositionOperation {
 #[event]
 pub struct TxEvent {
     pub event_name: String,
-    pub user_id: Option<[u8; 32]>,
+    pub user_id: [u8; 32],
     pub from_owner: Pubkey,
     pub to_owner: Pubkey,
     pub from: Pubkey,
@@ -115,7 +112,7 @@ pub struct TxEvent {
     pub amount: u64,
     pub token: Pubkey,
     pub domain_separator: u64,
-    pub order_id: Option<[u8; 32]>,
+    pub order_id: [u8; 32],
 }
 
 #[event]
@@ -124,7 +121,7 @@ pub struct AxEvent {
     pub user_id: [u8; 32],
     pub public_key: Pubkey,
     pub domain_separator: u64,
-    pub partners: Option<Vec<u32>>,
+    pub partners: Vec<u32>,
 }
 
 pub fn close_account<'a, 'b>(
@@ -162,31 +159,7 @@ fn extract_partner_number(partner_id: &str) -> Result<u32> {
     Ok(num)
 }
 
-/// Transfers tokens from a source account to ZOV using a PDA authority with signer seeds.
-/// This is the common transfer path shared by both NCW and ICV position operations in borrow.
-fn transfer_to_zov<'info>(
-    token_program: &Interface<'info, TokenInterface>,
-    zov_token_account: &InterfaceAccount<'info, TokenAccount>,
-    mint: &InterfaceAccount<'info, Mint>,
-    source_token_account: &AccountInfo<'info>,
-    authority: &AccountInfo<'info>,
-    signer_seeds: &[&[&[u8]]],
-    amount: u64,
-) -> Result<()> {
-    let cpi_accounts = TransferChecked {
-        from: source_token_account.to_account_info(),
-        to: zov_token_account.to_account_info(),
-        mint: mint.to_account_info(),
-        authority: authority.to_account_info(),
-    };
-
-    let cpi_ctx =
-        CpiContext::new_with_signer(token_program.to_account_info(), cpi_accounts, signer_seeds);
-    token_interface::transfer_checked(cpi_ctx, amount, mint.decimals)
-}
-
 /// Transfers tokens from a source to a destination using a PDA authority with signer seeds.
-/// This is the common transfer path shared by LP/NCW and ICV withdrawal approval flows.
 fn transfer_with_signer<'info>(
     token_program: &Interface<'info, TokenInterface>,
     source_token_account: &AccountInfo<'info>,
@@ -304,8 +277,8 @@ pub mod zynk_orbit {
             .ok_or(ProgramError::ArithmeticOverflow)?;
 
         emit!(TxEvent {
-            event_name: String::from("deposit"),
-            user_id: Some(user_id),
+            event_name: "Deposit".to_string(),
+            user_id,
             from_owner: ctx.accounts.source_token_account.owner.key(),
             to_owner: ctx.accounts.destination_token_account.owner.key(),
             from: ctx.accounts.source_token_account.key(),
@@ -313,7 +286,7 @@ pub mod zynk_orbit {
             amount,
             token: ctx.accounts.mint.key(),
             domain_separator: DOMAIN_SEPARATOR,
-            order_id: None,
+            order_id: [0u8; 32],
         });
 
         Ok(())
@@ -421,11 +394,11 @@ pub mod zynk_orbit {
 
                     let seeds_with_bump: &[&[u8]] = &[VAULT_SEED, pos.vault_id.as_ref(), &[bump]];
                     let signer_seeds = &[&seeds_with_bump[..]];
-                    transfer_to_zov(
+                    transfer_with_signer(
                         &ctx.accounts.token_program,
-                        &ctx.accounts.zov_token_account,
-                        &ctx.accounts.mint,
                         source_token_account,
+                        &ctx.accounts.zov_token_account.to_account_info(),
+                        &ctx.accounts.mint,
                         authority_account,
                         signer_seeds,
                         pos.amount,
@@ -451,11 +424,11 @@ pub mod zynk_orbit {
                         &[bump],
                     ];
                     let signer_seeds = &[&seeds_with_bump[..]];
-                    transfer_to_zov(
+                    transfer_with_signer(
                         &ctx.accounts.token_program,
-                        &ctx.accounts.zov_token_account,
-                        &ctx.accounts.mint,
                         source_token_account,
+                        &ctx.accounts.zov_token_account.to_account_info(),
+                        &ctx.accounts.mint,
                         authority_account,
                         signer_seeds,
                         pos.amount,
@@ -511,15 +484,14 @@ pub mod zynk_orbit {
             // Write discriminator + data
             let mut position_data = position_pda.try_borrow_mut_data()?;
             position_data[..8].copy_from_slice(&Position::DISCRIMINATOR);
-            let mut position_account =
-                Position::try_deserialize_unchecked(&mut &position_data[..])?;
-            position_account.order_id = order_id;
-            position_account.partner_id = partner_id_bytes;
-            position_account.amount_borrowed = pos.amount;
-            position_account.amount_repaid = 0;
-            position_account.public_key = pos.lp_primary_account;
-            let encoded = position_account.try_to_vec()?;
-            position_data[8..8 + encoded.len()].copy_from_slice(&encoded);
+            let position_account = Position {
+                order_id,
+                partner_id: partner_id_bytes,
+                amount_borrowed: pos.amount,
+                amount_repaid: 0,
+                public_key: pos.lp_primary_account,
+            };
+            position_account.try_serialize(&mut &mut position_data[..])?;
             drop(position_data);
         }
 
@@ -558,8 +530,8 @@ pub mod zynk_orbit {
         )?;
 
         emit!(TxEvent {
-            event_name: String::from("borrow"),
-            user_id: None,
+            event_name: "Borrow".to_string(),
+            user_id: [0u8; 32],
             from_owner: ZOV,
             to_owner: ZOV,
             from: ctx.accounts.zov_token_account.key(),
@@ -567,7 +539,7 @@ pub mod zynk_orbit {
             amount,
             token: ctx.accounts.mint.key(),
             domain_separator: DOMAIN_SEPARATOR,
-            order_id: Some(order_id),
+            order_id,
         });
 
         Ok(())
@@ -842,17 +814,19 @@ pub mod zynk_orbit {
                 ctx.accounts.mint.decimals,
             )?;
 
-            // Update the Position PDA
-            let mut position_data = position_pda.try_borrow_mut_data()?;
-            let mut position = Position::try_deserialize_unchecked(&mut &position_data[..])?;
-            position.amount_repaid = position
-                .amount_repaid
-                .checked_add(info.share)
-                .ok_or(ProgramError::ArithmeticOverflow)?;
-            let is_position_closed = position.amount_repaid >= position.amount_borrowed;
-            let encoded = position.try_to_vec()?;
-            position_data[8..8 + encoded.len()].copy_from_slice(&encoded);
-            drop(position_data);
+            // Update the Position PDA — deserialize, mutate, re-serialize in place.
+            let is_position_closed = {
+                let mut position_data = position_pda.try_borrow_mut_data()?;
+                let mut position =
+                    Position::try_deserialize_unchecked(&mut &position_data[..])?;
+                position.amount_repaid = position
+                    .amount_repaid
+                    .checked_add(info.share)
+                    .ok_or(ProgramError::ArithmeticOverflow)?;
+                let closed = position.amount_repaid >= position.amount_borrowed;
+                position.try_serialize(&mut &mut position_data[..])?;
+                closed
+            };
 
             // Close the Position PDA if fully repaid
             if is_position_closed {
@@ -861,8 +835,8 @@ pub mod zynk_orbit {
         }
 
         emit!(TxEvent {
-            event_name: String::from("repay"),
-            user_id: None,
+            event_name: "Repay".to_string(),
+            user_id: [0u8; 32],
             from_owner: ZOV,
             to_owner: ctx.accounts.ovault.key(),
             from: ctx.accounts.zov_token_account.key(),
@@ -870,7 +844,7 @@ pub mod zynk_orbit {
             amount: prepared_amount,
             token: ctx.accounts.mint.key(),
             domain_separator: DOMAIN_SEPARATOR,
-            order_id: Some(order_id),
+            order_id,
         });
 
         Ok(())
@@ -947,8 +921,8 @@ pub mod zynk_orbit {
             .ok_or(ProgramError::ArithmeticOverflow)?;
 
         emit!(TxEvent {
-            event_name: String::from("claim"),
-            user_id: Some(user_id),
+            event_name: "Claim".to_string(),
+            user_id,
             from_owner: ctx.accounts.record.key(),
             to_owner: ctx.accounts.destination_token_account.owner,
             from: ctx.accounts.icv_token_account.key(),
@@ -956,7 +930,7 @@ pub mod zynk_orbit {
             amount: icv_balance,
             token: ctx.accounts.mint.key(),
             domain_separator: DOMAIN_SEPARATOR,
-            order_id: None,
+            order_id: [0u8; 32],
         });
 
         Ok(())
@@ -998,8 +972,8 @@ pub mod zynk_orbit {
         token_interface::transfer_checked(cpi_ctx, amount, ctx.accounts.mint.decimals)?;
 
         emit!(TxEvent {
-            event_name: String::from("disburse"),
-            user_id: Some(record.user_id),
+            event_name: "Disburse".to_string(),
+            user_id: record.user_id,
             from_owner: ctx.accounts.source_token_account.owner.key(),
             to_owner: ctx.accounts.destination_token_account.owner.key(),
             from: ctx.accounts.source_token_account.key(),
@@ -1007,7 +981,7 @@ pub mod zynk_orbit {
             amount,
             token: ctx.accounts.mint.key(),
             domain_separator: DOMAIN_SEPARATOR,
-            order_id: None,
+            order_id: [0u8; 32],
         });
 
         Ok(())
@@ -1050,11 +1024,11 @@ pub mod zynk_orbit {
         record.whitelisted_partners = Vec::new();
 
         emit!(AxEvent {
-            event_name: String::from("whitelist"),
+            event_name: "Whitelist".to_string(),
             user_id,
             public_key: primary_account,
             domain_separator: DOMAIN_SEPARATOR,
-            partners: None,
+            partners: Vec::new(),
         });
 
         Ok(())
@@ -1098,14 +1072,12 @@ pub mod zynk_orbit {
             }
         }
 
-        let updated_partners = record.whitelisted_partners.clone();
-
         emit!(AxEvent {
-            event_name: String::from("update_partner_whitelist"),
+            event_name: "UpdatePartnerWhitelist".to_string(),
             user_id,
             public_key: primary_account,
             domain_separator: DOMAIN_SEPARATOR,
-            partners: Some(updated_partners),
+            partners: record.whitelisted_partners.clone(),
         });
 
         Ok(())
@@ -1120,14 +1092,14 @@ pub mod zynk_orbit {
         );
 
         macro_rules! try_revoke {
-            ($data:expr, $pda_key:expr, $ty:ty, $event:literal) => {
+            ($data:expr, $pda_key:expr, $ty:ty, $event:expr) => {
                 if let Ok(account) = <$ty>::try_deserialize(&mut &$data[..]) {
                     emit!(AxEvent {
-                        event_name: String::from($event),
+                        event_name: $event.to_string(),
                         user_id: account.user_id,
                         public_key: $pda_key,
                         domain_separator: DOMAIN_SEPARATOR,
-                        partners: None,
+                        partners: Vec::new(),
                     });
                     true
                 } else {
@@ -1150,13 +1122,13 @@ pub mod zynk_orbit {
                 let pda_key = account_info.key();
 
                 if data.len() >= 8 {
-                    let _ = try_revoke!(data, pda_key, Record, "revoke_whitelist")
-                        || try_revoke!(data, pda_key, WithdrawRequest, "revoke_withdraw_request")
+                    let _ = try_revoke!(data, pda_key, Record, "RevokeWhitelist")
+                        || try_revoke!(data, pda_key, WithdrawRequest, "RevokeWithdrawRequest")
                         || try_revoke!(
                             data,
                             pda_key,
                             UpdateCliffPeriodRequest,
-                            "deny_update_request"
+                            "DenyUpdateRequest"
                         );
                 }
                 // `data` (Ref<[u8]>) is dropped here — RefCell is fully released
@@ -1181,26 +1153,21 @@ pub mod zynk_orbit {
             OrbitError::UnauthorizedAdmin
         );
 
-        let request_record = &mut ctx.accounts.request_record;
-        let user_record = &ctx.accounts.user_record;
-        if let Some(cp) = cliff_period {
-            let now = Clock::get()?.unix_timestamp;
-            require!(cp > now, OrbitError::CliffPeriodInPast);
-        }
-        let resolved_cliff = cliff_period.unwrap_or(user_record.cliff_period);
-        // Validate the resolved cliff period is in the future
         let now = Clock::get()?.unix_timestamp;
+        let resolved_cliff = cliff_period.unwrap_or(ctx.accounts.user_record.cliff_period);
         require!(resolved_cliff > now, OrbitError::CliffPeriodInPast);
+
+        let request_record = &mut ctx.accounts.request_record;
         request_record.primary_account = primary_account;
         request_record.user_id = user_id;
         request_record.cliff_period = resolved_cliff;
 
         emit!(AxEvent {
-            event_name: String::from("cliff_period_updated"),
-            user_id: user_id,
+            event_name: "CliffPeriodUpdated".to_string(),
+            user_id,
             public_key: primary_account,
             domain_separator: DOMAIN_SEPARATOR,
-            partners: None,
+            partners: Vec::new(),
         });
         Ok(())
     }
@@ -1233,11 +1200,11 @@ pub mod zynk_orbit {
         record.max_deposit = max_deposit;
 
         emit!(AxEvent {
-            event_name: String::from("max_deposit_updated"),
+            event_name: "MaxDepositUpdated".to_string(),
             user_id,
             public_key: primary_account,
             domain_separator: DOMAIN_SEPARATOR,
-            partners: None,
+            partners: Vec::new(),
         });
         Ok(())
     }
@@ -1261,7 +1228,11 @@ pub mod zynk_orbit {
         );
 
         require!(
-            signer_record.principle_in - signer_record.principle_out >= amount as u64,
+            signer_record
+                .principle_in
+                .checked_sub(signer_record.principle_out)
+                .ok_or(ProgramError::ArithmeticOverflow)?
+                >= amount as u64,
             OrbitError::InsufficientBalance
         );
 
@@ -1272,11 +1243,11 @@ pub mod zynk_orbit {
         withdraw_request.destination = destination;
 
         emit!(AxEvent {
-            event_name: String::from("withdraw_requested"),
+            event_name: "WithdrawRequested".to_string(),
             user_id,
             public_key: primary_account,
             domain_separator: DOMAIN_SEPARATOR,
-            partners: None,
+            partners: Vec::new(),
         });
         Ok(())
     }
@@ -1346,10 +1317,9 @@ pub mod zynk_orbit {
                     .ovault
                     .as_ref()
                     .ok_or(OrbitError::InvalidAccount)?;
-                let (_, ovault_bump) =
-                    Pubkey::find_program_address(&[VAULT_SEED, b"orbit"], ctx.program_id);
-                let seeds: &[&[u8]] = &[VAULT_SEED, b"orbit", &[ovault_bump]];
-                let signer_seeds = &[&seeds[..]];
+                let ovault_bump = ctx.bumps.ovault.ok_or(OrbitError::InvalidAccount)?;
+                let ovault_bump_ref = [ovault_bump];
+                let signer_seeds = &[&[VAULT_SEED, b"orbit", &ovault_bump_ref][..]];
                 transfer_with_signer(
                     &ctx.accounts.token_program,
                     &ctx.accounts.source_token_account.to_account_info(),
@@ -1372,8 +1342,8 @@ pub mod zynk_orbit {
         )?;
 
         emit!(TxEvent {
-            event_name: String::from("withdraw_approved"),
-            user_id: Some(user_id),
+            event_name: "WithdrawApproved".to_string(),
+            user_id,
             from_owner: ctx.accounts.source_token_account.owner.key(),
             to_owner: ctx.accounts.destination_token_account.owner.key(),
             from: ctx.accounts.source_token_account.key(),
@@ -1381,7 +1351,7 @@ pub mod zynk_orbit {
             amount: withdraw_request.amount as u64,
             token: ctx.accounts.mint.key(),
             domain_separator: DOMAIN_SEPARATOR,
-            order_id: None,
+            order_id: [0u8; 32],
         });
 
         Ok(())
@@ -1418,11 +1388,11 @@ pub mod zynk_orbit {
         )?;
 
         emit!(AxEvent {
-            event_name: String::from("cliff_period_approved"),
+            event_name: "CliffPeriodApproved".to_string(),
             user_id: update_request.user_id,
             public_key: update_request.primary_account,
             domain_separator: DOMAIN_SEPARATOR,
-            partners: None,
+            partners: Vec::new(),
         });
 
         Ok(())
@@ -1476,12 +1446,11 @@ pub mod zynk_orbit {
             OrbitError::MaxDepositExceeded
         );
 
-        // Validate destination and perform transfer based on user type
-        // Source is always ovault for both LP and ICV
-        let (_, ovault_bump) =
-            Pubkey::find_program_address(&[VAULT_SEED, b"orbit"], ctx.program_id);
-        let seeds: &[&[u8]] = &[VAULT_SEED, b"orbit", &[ovault_bump]];
-        let signer_seeds = &[&seeds[..]];
+        // Validate destination and perform transfer based on user type.
+        // Source is always ovault for both LP and ICV.
+        // Anchor provides ctx.bumps.ovault from the seed-constrained account — no find_program_address needed.
+        let ovault_bump_ref = [ctx.bumps.ovault];
+        let signer_seeds = &[&[VAULT_SEED, b"orbit", &ovault_bump_ref][..]];
 
         match record.user_type {
             UserType::LP => {
@@ -1520,8 +1489,8 @@ pub mod zynk_orbit {
             .ok_or(ProgramError::ArithmeticOverflow)?;
 
         emit!(TxEvent {
-            event_name: String::from("pledge"),
-            user_id: Some(user_id),
+            event_name: "Pledge".to_string(),
+            user_id,
             from_owner: ctx.accounts.source_token_account.owner.key(),
             to_owner: ctx.accounts.destination_token_account.owner.key(),
             from: ctx.accounts.source_token_account.key(),
@@ -1529,7 +1498,7 @@ pub mod zynk_orbit {
             amount,
             token: ctx.accounts.mint.key(),
             domain_separator: DOMAIN_SEPARATOR,
-            order_id: None,
+            order_id: [0u8; 32],
         });
 
         Ok(())
@@ -1908,7 +1877,12 @@ pub struct ApproveWithdraw<'info> {
     #[account(mut)]
     pub destination_token_account: InterfaceAccount<'info, TokenAccount>,
 
-    /// CHECK: Ovault - verified by seeds (only required for LP withdrawals)
+    /// CHECK: Ovault PDA — seed-constrained so Anchor populates ctx.bumps.ovault.
+    /// Only required for LP withdrawals; pass None for ICV/NCW paths.
+    #[account(
+        seeds = [VAULT_SEED, b"orbit"],
+        bump
+    )]
     pub ovault: Option<UncheckedAccount<'info>>,
 
     pub mint: InterfaceAccount<'info, Mint>,
@@ -2026,8 +2000,6 @@ pub enum OrbitError {
     UnauthorizedAdmin,
     #[msg("Unauthorized manager")]
     UnauthorizedManager,
-    #[msg("Disbursal amount should be equal to deposited")]
-    Inequality,
     #[msg("Invalid account")]
     InvalidAccount,
     #[msg("Invalid token mint")]

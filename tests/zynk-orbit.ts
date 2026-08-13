@@ -317,8 +317,6 @@ describe("zynk-orbit", () => {
         const BASE_SIZE = 137; // 8 disc + 32 + 32 + 1 + 8 + 8 + 8 + 4 + 32 + 4
         const accountInfo = await provider.connection.getAccountInfo(recordPDA);
         assert.equal(accountInfo!.data.length, BASE_SIZE, `account data should be ${BASE_SIZE} bytes for empty whitelist`);
-
-        console.log("✅ ICV user whitelisted:", recordPDA.toBase58());
     });
 
     // =========================================================================
@@ -343,8 +341,6 @@ describe("zynk-orbit", () => {
 
         const record = await program.account.record.fetch(recordPDA);
         assert.equal(record.maxDeposit, newMaxDeposit, "maxDeposit should be updated");
-
-        console.log("✅ Max deposit updated to:", newMaxDeposit);
     });
 
     // =========================================================================
@@ -374,8 +370,6 @@ describe("zynk-orbit", () => {
         const record = await program.account.record.fetch(recordPDA);
         assert.equal(record.principleIn.toNumber(), depositAmount.toNumber(), "principleIn should equal deposit");
         assert.equal(record.principleOut.toNumber(), 0, "principleOut should still be 0");
-
-        console.log("✅ ICV deposited:", depositAmount.toNumber(), "| custody:", icvTokenAccount.toBase58());
     });
 
     // =========================================================================
@@ -433,8 +427,6 @@ describe("zynk-orbit", () => {
         const positionAccountInfo = await provider.connection.getAccountInfo(positionPDA);
         assert.isNotNull(positionAccountInfo, "Position PDA should have been created");
         assert.ok(positionAccountInfo!.owner.equals(program.programId), "Position PDA should be owned by orbit program");
-
-        console.log("✅ Borrow position opened | positionPDA:", positionPDA.toBase58());
     });
 
 
@@ -498,7 +490,6 @@ describe("zynk-orbit", () => {
         const positionInfo = await provider.connection.getAccountInfo(positionPDA);
         assert.isNull(positionInfo, "Position PDA should be closed after full repay");
 
-        console.log("✅ Position fully repaid and closed | repayAmount:", repayAmount.toNumber());
     });
 
 
@@ -532,7 +523,6 @@ describe("zynk-orbit", () => {
         assert.ok(request.destination.equals(icvUser.publicKey), "Destination should be ICV user");
         assert.isTrue(Buffer.from(request.userId).equals(icvUserId), "UserId in request should match");
 
-        console.log("✅ Withdraw request raised | amount:", withdrawAmount, "| PDA:", withdrawRequestPDA.toBase58());
     });
 
     // =========================================================================
@@ -571,7 +561,6 @@ describe("zynk-orbit", () => {
         const reqInfo = await provider.connection.getAccountInfo(withdrawRequestPDA);
         assert.isNull(reqInfo, "WithdrawRequest PDA should be closed after approval");
 
-        console.log("✅ Withdrawal approved | principleOut:", record.principleOut.toNumber());
     });
 
 
@@ -606,7 +595,6 @@ describe("zynk-orbit", () => {
         assert.equal(request.cliffPeriod.toNumber(), newCliffPeriod.toNumber(), "Request cliff period should match");
         assert.ok(request.primaryAccount.equals(icvUser.publicKey), "primaryAccount should match ICV user");
 
-        console.log("✅ Cliff update request created | newCliff:", newCliffPeriod.toNumber());
     });
 
     // =========================================================================
@@ -640,7 +628,6 @@ describe("zynk-orbit", () => {
         const reqInfo = await provider.connection.getAccountInfo(updateCliffRequestPDA);
         assert.isNull(reqInfo, "UpdateCliffPeriodRequest PDA should be closed after approval");
 
-        console.log("✅ Cliff period approved | cliffPeriod:", record.cliffPeriod.toNumber());
     });
 
     // =========================================================================
@@ -677,7 +664,6 @@ describe("zynk-orbit", () => {
             sizeBefore + 4,
             "account should have grown by 4 bytes (one u32 slot)"
         );
-        console.log("✅ Added partner", partnerA, "| bytes:", sizeBefore, "→", infoAfter!.data.length);
     });
 
     // =========================================================================
@@ -715,7 +701,6 @@ describe("zynk-orbit", () => {
             sizeBefore + 4,
             "account should have grown by another 4 bytes"
         );
-        console.log("✅ Added partner", partnerB, "| bytes:", sizeBefore, "→", infoAfter!.data.length);
     });
 
     // =========================================================================
@@ -743,7 +728,6 @@ describe("zynk-orbit", () => {
             assert.fail("Expected transaction to fail with PartnerAlreadyWhitelisted");
         } catch (err: any) {
             assert.include(err.message, "PartnerAlreadyWhitelisted", "error should be PartnerAlreadyWhitelisted");
-            console.log("✅ Correctly rejected duplicate partner add");
         }
     });
 
@@ -788,7 +772,6 @@ describe("zynk-orbit", () => {
             lamportsBefore,
             "excess rent-exempt lamports should have been refunded to admin"
         );
-        console.log("✅ Removed partner", partnerA, "| bytes:", sizeBefore, "→", infoAfter!.data.length);
     });
 
     // =========================================================================
@@ -816,7 +799,6 @@ describe("zynk-orbit", () => {
             assert.fail("Expected transaction to fail with PartnerNotWhitelisted");
         } catch (err: any) {
             assert.include(err.message, "PartnerNotWhitelisted", "error should be PartnerNotWhitelisted");
-            console.log("✅ Correctly rejected removal of non-existent partner");
         }
     });
 
@@ -841,7 +823,6 @@ describe("zynk-orbit", () => {
         const accountInfo = await provider.connection.getAccountInfo(recordPDA);
         assert.isNull(accountInfo, "Record PDA should be closed after revoke");
 
-        console.log("✅ Whitelist revoked | recordPDA:", recordPDA.toBase58(), "is now closed");
     });
 });
 
