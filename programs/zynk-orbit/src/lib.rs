@@ -1234,6 +1234,12 @@ pub mod zynk_orbit {
         let signer_record = &ctx.accounts.signer_record;
         let destination_record = &ctx.accounts.destination_record;
 
+        // NCW users are not permitted to raise withdraw requests
+        require!(
+            signer_record.user_type != UserType::NCW,
+            OrbitError::InvalidOperation
+        );
+
         // Verify both records belong to the same user_id
         require!(
             signer_record.user_id == user_id && destination_record.user_id == user_id,
@@ -1294,6 +1300,12 @@ pub mod zynk_orbit {
         require!(
             ctx.accounts.destination_token_account.owner == withdraw_request.destination,
             OrbitError::InvalidAccount
+        );
+
+        // Verify the source token account holds enough tokens for the withdrawal
+        require!(
+            ctx.accounts.source_token_account.amount >= withdraw_request.amount as u64,
+            OrbitError::InsufficientTokenBalance
         );
 
         // Handle transfer based on user type
@@ -1365,6 +1377,46 @@ pub mod zynk_orbit {
             token: ctx.accounts.mint.key(),
             domain_separator: DOMAIN_SEPARATOR,
             order_id: [0u8; 32],
+        });
+
+        Ok(())
+    }
+
+    /// Reject (cancel) a pending withdraw request.
+    ///
+    /// Only the user who raised the request (the primary account holder) may
+    /// reject it.  The WithdrawRequest PDA is closed and its rent-exempt
+    /// lamports are returned to the primary account.
+    pub fn reject_withdraw(ctx: Context<RejectWithdraw>) -> Result<()> {
+        // Deserialize the request inside its own block so the immutable borrow
+        // of the data RefCell is dropped before close_account() mutably borrows it.
+        let withdraw_request = {
+            let request_data = ctx.accounts.request.try_borrow_data()?;
+            WithdrawRequest::try_deserialize(&mut &request_data[..])
+                .map_err(|_| OrbitError::InvalidRequestAccount)?
+            // `request_data` (Ref<[u8]>) is dropped here
+        };
+
+        // Verify the signer is the primary account registered in the request
+        require!(
+            ctx.accounts.primary_account.key() == withdraw_request.primary_account,
+            OrbitError::InvalidAccount
+        );
+
+        let user_id = withdraw_request.user_id;
+
+        // Close the WithdrawRequest PDA — return lamports to the primary account
+        close_account(
+            ctx.accounts.request.to_account_info(),
+            ctx.accounts.primary_account.to_account_info(),
+        )?;
+
+        emit!(AxEvent {
+            event_name: "WithdrawRejected".to_string(),
+            user_id,
+            public_key: ctx.accounts.primary_account.key(),
+            domain_separator: DOMAIN_SEPARATOR,
+            partners: Vec::new(),
         });
 
         Ok(())
@@ -1912,6 +1964,27 @@ pub struct ApproveWithdraw<'info> {
 }
 
 #[derive(Accounts)]
+pub struct RejectWithdraw<'info> {
+    /// CHECK: WithdrawRequest PDA - validated in handler
+    #[account(mut)]
+    pub request: UncheckedAccount<'info>,
+
+    /// CHECK: primary wallet — must match withdraw_request.primary_account.
+    /// Receives rent lamports when the request PDA is closed.
+    #[account(mut)]
+    pub primary_account: UncheckedAccount<'info>,
+
+    /// The user who originally raised the request; must be the primary account.
+    #[account(
+        mut,
+        constraint = signer.key() == primary_account.key() @ OrbitError::InvalidAccount
+    )]
+    pub signer: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
 pub struct ApproveCliffPeriod<'info> {
     /// CHECK: UpdateCliffPeriodRequest PDA - validated in handler
     #[account(mut)]
@@ -2059,4 +2132,6 @@ pub enum OrbitError {
     InvalidCoreConfig,
     #[msg("Repay amount exceeds remaining order amount")]
     ExcessiveRepay,
+    #[msg("Source token account has insufficient token balance for withdrawal")]
+    InsufficientTokenBalance,
 }
