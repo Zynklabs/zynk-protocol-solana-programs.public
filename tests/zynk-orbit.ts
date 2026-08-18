@@ -67,6 +67,103 @@ describe("zynk-orbit", () => {
     icvUserId.write("icv_user_1", 0, "utf-8");
     const icvUser = Keypair.generate();
 
+    // ── Whitelist test users ───────────────────────────────────────────────────
+    const ncwUser = Keypair.generate();
+    const ncwUserId = Buffer.alloc(32);
+    ncwUserId.write("ncw_user_wl_1", 0, "utf-8");
+
+    const lpUser = Keypair.generate();
+    const lpUserId = Buffer.alloc(32);
+    lpUserId.write("lp_user_wl_1", 0, "utf-8");
+
+    const lpUserWithPartners = Keypair.generate();
+    const lpUserWithPartnersId = Buffer.alloc(32);
+    lpUserWithPartnersId.write("lp_user_wl_2", 0, "utf-8");
+
+    const icvUserNoCliff = Keypair.generate();
+    const icvUserNoCliffId = Buffer.alloc(32);
+    icvUserNoCliffId.write("icv_user_wl_nc", 0, "utf-8");
+
+    const icvUserNoMaxDeposit = Keypair.generate();
+    const icvUserNoMaxDepositId = Buffer.alloc(32);
+    icvUserNoMaxDepositId.write("icv_user_wl_nm", 0, "utf-8");
+
+    // ── Duplicate user (for already-whitelisted / pending-request tests) ───────
+    const dupWlUser = Keypair.generate();
+    const dupWlUserId = Buffer.alloc(32);
+    dupWlUserId.write("dup_wl_user_1", 0, "utf-8");
+
+    // ── Approve / UpdateMaxDeposit test users ─────────────────────────────────
+    // umdUser is whitelisted + deposited in-test so we can verify max-deposit
+    // guard against reducing below the active balance.
+    const umdUser = Keypair.generate();
+    const umdUserId = Buffer.alloc(32);
+    umdUserId.write("umd_user_1", 0, "utf-8");
+
+    // ── Deposit test users ────────────────────────────────────────────────────
+    // Dedicated users so that deposit tests remain self-contained and do not
+    // interfere with the existing TEST 1–11 flow.
+    const depositIcvUser = Keypair.generate();
+    const depositIcvUserId = Buffer.alloc(32);
+    depositIcvUserId.write("dep_icv_user_1", 0, "utf-8");
+
+    const depositLpUser = Keypair.generate();
+    const depositLpUserId = Buffer.alloc(32);
+    depositLpUserId.write("dep_lp_user_1", 0, "utf-8");
+
+    // Non-whitelisted user — never has a Record PDA.
+    const nonWlUser = Keypair.generate();
+    const nonWlUserId = Buffer.alloc(32);
+    nonWlUserId.write("dep_nonwl_user1", 0, "utf-8");
+
+    // ── Borrow test users ─────────────────────────────────────────────────────
+    // Fresh users so borrow tests are self-contained and don't disturb TEST 1-11.
+
+    // ICV user for borrow happy-path + over-borrow negative tests.
+    const borrowIcvUser = Keypair.generate();
+    const borrowIcvUserId = Buffer.alloc(32);
+    borrowIcvUserId.write("bor_icv_user_1", 0, "utf-8");
+
+    // NCW user for borrow happy-path.
+    const borrowNcwUser = Keypair.generate();
+    const borrowNcwUserId = Buffer.alloc(32);
+    borrowNcwUserId.write("bor_ncw_user_1", 0, "utf-8");
+
+    // LP user – only used in the "LP cannot borrow" negative test.
+    const borrowLpUser = Keypair.generate();
+    const borrowLpUserId = Buffer.alloc(32);
+    borrowLpUserId.write("bor_lp_user_1", 0, "utf-8");
+
+    // ICV user with a restricted partner whitelist – used for B-N2.
+    const borrowIcvRestrictedUser = Keypair.generate();
+    const borrowIcvRestrictedUserId = Buffer.alloc(32);
+    borrowIcvRestrictedUserId.write("bor_icv_restr_1", 0, "utf-8");
+
+    // 10 ICV users for the multi-position borrow test (B-P3).
+    const multiIcvUsers: Keypair[] = Array.from({ length: 10 }, () => Keypair.generate());
+    const multiIcvUserIds: Buffer[] = multiIcvUsers.map((_, i) => {
+        const buf = Buffer.alloc(32);
+        buf.write(`bor_multi_${i}`, 0, "utf-8");
+        return buf;
+    });
+
+    let umdUserAta: PublicKey;       // umdUser's source ATA (funded in before-hook)
+    let umdTokenAccount: PublicKey;  // Record-PDA-owned ICV custody account
+
+    // ── Deposit test ATA handles ──────────────────────────────────────────────
+    let depositIcvUserAta: PublicKey;   // depositIcvUser source token account
+    let depositLpUserAta: PublicKey;    // depositLpUser source token account
+
+    // ── Borrow test ATA / account handles ────────────────────────────────────
+    let borrowIcvUserAta: PublicKey;         // borrowIcvUser source ATA
+    let borrowIcvTokenAccount: PublicKey;    // ICV custody account (owned by record PDA)
+    let borrowNcwUserAta: PublicKey;         // borrowNcwUser source ATA
+    let ncwVaultId: Buffer;                  // vault_id for NCW vault PDA
+    let ncwVaultAuthority: PublicKey;        // PDA([b"vault", ncwVaultId], orbit)
+    let ncwVaultTokenAccount: PublicKey;     // token account owned by ncwVaultAuthority
+    let multiIcvUserAtas: PublicKey[];       // source ATAs for multi-position users
+    let multiIcvTokenAccounts: PublicKey[];  // custody accounts for multi-position users
+
     // ── zynk-core PDAs ────────────────────────────────────────────────────────
     const defaultZovId = Buffer.alloc(32);
     defaultZovId.write("default", 0, "utf-8");
@@ -198,7 +295,13 @@ describe("zynk-orbit", () => {
     // =========================================================================
     before(async () => {
         // Airdrop SOL to every wallet that will sign transactions
-        for (const kp of [admin, manager, guardian, icvUser, partnerOperationalWallet]) {
+        for (const kp of [
+            admin, manager, guardian, icvUser, partnerOperationalWallet,
+            ncwUser, lpUser, lpUserWithPartners, icvUserNoCliff, icvUserNoMaxDeposit, dupWlUser,
+            umdUser, depositIcvUser, depositLpUser, nonWlUser,
+            borrowIcvUser, borrowNcwUser, borrowLpUser, borrowIcvRestrictedUser,
+            ...multiIcvUsers,
+        ]) {
             try {
                 const tx = await provider.connection.requestAirdrop(
                     kp.publicKey,
@@ -253,6 +356,38 @@ describe("zynk-orbit", () => {
         // ICV user ATA – user's own wallet, deposits from here
         icvUserAta = await gocAtaAndMint(icvUser.publicKey, tokenMint, 1_000_000_000);
 
+        // umdUser ATA – funded so UMD tests can make a real deposit
+        umdUserAta = await gocAtaAndMint(umdUser.publicKey, tokenMint, 1_000_000_000);
+
+        // depositIcvUser ATA – funded for deposit section tests
+        depositIcvUserAta = await gocAtaAndMint(depositIcvUser.publicKey, tokenMint, 1_000_000_000);
+
+        // depositLpUser ATA – funded for deposit section tests
+        depositLpUserAta = await gocAtaAndMint(depositLpUser.publicKey, tokenMint, 1_000_000_000);
+
+        // ── Borrow test accounts ──────────────────────────────────────────────
+        // borrowIcvUser source ATA
+        borrowIcvUserAta = await gocAtaAndMint(borrowIcvUser.publicKey, tokenMint, 500_000_000);
+
+        // borrowNcwUser source ATA (personal wallet ATA, not used for vault)
+        borrowNcwUserAta = await gocAta(borrowNcwUser.publicKey, tokenMint);
+
+        // NCW vault: vault_id = "ncw_vault_1" padded to 32 bytes
+        ncwVaultId = Buffer.alloc(32);
+        ncwVaultId.write("ncw_vault_1", 0, "utf-8");
+        [ncwVaultAuthority] = PublicKey.findProgramAddressSync(
+            [Buffer.from("vault"), ncwVaultId],
+            program.programId
+        );
+        // Fund the NCW vault token account (owned by ncwVaultAuthority)
+        ncwVaultTokenAccount = await gocAtaAndMint(ncwVaultAuthority, tokenMint, 500_000_000);
+
+        // Multi-position ICV users: source ATAs funded
+        multiIcvUserAtas = await Promise.all(
+            multiIcvUsers.map(u => gocAtaAndMint(u.publicKey, tokenMint, 200_000_000))
+        );
+        multiIcvTokenAccounts = [];
+
         // ── Whitelist ovaultPDA as beneficiary in zynk-core ──────────────────
         // Required so borrow's create_order (non-transient) and repay's
         // create_order (transient) CPIs succeed with ovault as the beneficiary.
@@ -272,6 +407,1208 @@ describe("zynk-orbit", () => {
                 } as any)
                 .signers([admin])
                 .rpc();
+        }
+    });
+
+    // =========================================================================
+    // WHITELIST NEGATIVE TESTS – must be first so positive tests have a clean slate
+    // =========================================================================
+
+    // ── WL-N1 : Non-admin (manager) cannot whitelist ──────────────────────────
+    it("Should not raise whitelist request with some other wallet than primary wallet (eg manager) signing the request", async () => {
+        const nonAdminUser = Keypair.generate();
+        const nonAdminUserId = Buffer.alloc(32);
+        nonAdminUserId.write("non_admin_user", 0, "utf-8");
+
+        try {
+            await program.methods
+                .whitelist(
+                    Array.from(nonAdminUserId),
+                    { ncw: {} },
+                    nonAdminUser.publicKey,
+                    null,
+                    null,
+                    null
+                )
+                .accounts({
+                    admin: manager.publicKey,    // manager signs, NOT the protocol admin
+                    coreConfig: configPDA,
+                } as any)
+                .signers([manager])
+                .rpc();
+            assert.fail("Expected transaction to fail with UnauthorizedAdmin");
+        } catch (err: any) {
+            assert.include(
+                err.message,
+                "UnauthorizedAdmin",
+                "Error should be UnauthorizedAdmin when a non-admin signs the whitelist request"
+            );
+        }
+    });
+
+    // ── WL-N2 : Invalid user type cannot be whitelisted ───────────────────────
+    it("Should not whitelist an invalid user type", async () => {
+        const invalidTypeUser = Keypair.generate();
+        const invalidTypeUserId = Buffer.alloc(32);
+        invalidTypeUserId.write("invalid_type_u", 0, "utf-8");
+
+        try {
+            await program.methods
+                .whitelist(
+                    Array.from(invalidTypeUserId),
+                    { unknownType: {} } as any,   // invalid variant — not LP / NCW / ICV
+                    invalidTypeUser.publicKey,
+                    null,
+                    null,
+                    null
+                )
+                .accounts({
+                    admin: admin.publicKey,
+                    coreConfig: configPDA,
+                } as any)
+                .signers([admin])
+                .rpc();
+            assert.fail("Expected transaction to fail due to invalid user type");
+        } catch (err: any) {
+            // Anchor throws a client-side encoding error before the tx reaches the chain.
+            assert.ok(
+                err.message.length > 0,
+                "An error should be thrown for an invalid user type"
+            );
+        }
+    });
+
+    // ── WL-N3 : Already-whitelisted address cannot be whitelisted again ────────
+    it("Should not raise whitelist request for an already whitelisted address", async () => {
+        const dupRecordPDA = deriveRecordPDA(dupWlUserId, dupWlUser.publicKey);
+
+        // Step 1 – whitelist dupWlUser for the first time (must succeed).
+        await program.methods
+            .whitelist(
+                Array.from(dupWlUserId),
+                { ncw: {} },
+                dupWlUser.publicKey,
+                null,
+                null,
+                null
+            )
+            .accounts({
+                admin: admin.publicKey,
+                coreConfig: configPDA,
+            } as any)
+            .signers([admin])
+            .rpc();
+
+        const record = await program.account.record.fetch(dupRecordPDA);
+        assert.ok(record.primaryAccount.equals(dupWlUser.publicKey), "Record should exist after first whitelist");
+
+        // Step 2 – attempt to whitelist the same address again — must fail.
+        try {
+            await program.methods
+                .whitelist(
+                    Array.from(dupWlUserId),
+                    { ncw: {} },
+                    dupWlUser.publicKey,
+                    null,
+                    null,
+                    null
+                )
+                .accounts({
+                    admin: admin.publicKey,
+                    coreConfig: configPDA,
+                } as any)
+                .signers([admin])
+                .rpc();
+            assert.fail("Expected transaction to fail for an already-whitelisted address");
+        } catch (err: any) {
+            assert.ok(
+                err.message.length > 0,
+                "An error should be thrown when trying to whitelist an already-whitelisted address"
+            );
+        }
+    });
+
+    // ── WL-N4 : Cannot whitelist an address that already has a pending entry ───
+    it("Should not raise whitelist request for an address for which there is already a whitelist request", async () => {
+        // dupWlUser was whitelisted in WL-N3 — the Record PDA is still live.
+        const dupRecordPDA = deriveRecordPDA(dupWlUserId, dupWlUser.publicKey);
+
+        const existingRecord = await program.account.record.fetch(dupRecordPDA);
+        assert.ok(
+            existingRecord.primaryAccount.equals(dupWlUser.publicKey),
+            "Record should still exist from WL-N3"
+        );
+
+        try {
+            await program.methods
+                .whitelist(
+                    Array.from(dupWlUserId),
+                    { ncw: {} },
+                    dupWlUser.publicKey,
+                    null,
+                    null,
+                    null
+                )
+                .accounts({
+                    admin: admin.publicKey,
+                    coreConfig: configPDA,
+                } as any)
+                .signers([admin])
+                .rpc();
+            assert.fail("Expected transaction to fail because a whitelist entry already exists for this address");
+        } catch (err: any) {
+            assert.ok(
+                err.message.length > 0,
+                "An error should be thrown when a whitelist entry already exists for the address"
+            );
+        }
+    });
+
+    // =========================================================================
+    // WHITELIST POSITIVE TESTS
+    // =========================================================================
+
+    // ── WL-P1 : Whitelist an NCW user ─────────────────────────────────────────
+    it("Should be able to Whitelist NCW user", async () => {
+        const recordPDA = deriveRecordPDA(ncwUserId, ncwUser.publicKey);
+
+        await program.methods
+            .whitelist(
+                Array.from(ncwUserId),
+                { ncw: {} },
+                ncwUser.publicKey,
+                null,
+                null,
+                null
+            )
+            .accounts({
+                admin: admin.publicKey,
+                coreConfig: configPDA,
+            } as any)
+            .signers([admin])
+            .rpc();
+
+        const record = await program.account.record.fetch(recordPDA);
+        assert.ok(record.primaryAccount.equals(ncwUser.publicKey), "Primary account should match NCW user");
+        assert.isTrue(Buffer.from(record.userId).equals(ncwUserId), "User ID should match");
+        assert.deepEqual(record.userType, { ncw: {} }, "User type should be NCW");
+        assert.ok(record.auxAccount.equals(ncwUser.publicKey), "aux_account should default to primary_account");
+        assert.equal(record.maxDeposit, 4294967295 /* u32::MAX */, "maxDeposit should be u32::MAX when not provided");
+        assert.deepEqual(record.whitelistedPartners, [], "whitelistedPartners should start empty");
+    });
+
+    // ── WL-P2 : Whitelist LP user without aux wallet ──────────────────────────
+    it("Should be able to Whitelist LP user without aux wallet => Primary wallet stored as aux wallet", async () => {
+        const recordPDA = deriveRecordPDA(lpUserId, lpUser.publicKey);
+        const now = Math.floor(Date.now() / 1000);
+        const futureCliff = new anchor.BN(now + 365 * 24 * 60 * 60);
+
+        await program.methods
+            .whitelist(
+                Array.from(lpUserId),
+                { lp: {} },
+                lpUser.publicKey,
+                futureCliff,
+                1_000_000_000,
+                null
+            )
+            .accounts({
+                admin: admin.publicKey,
+                coreConfig: configPDA,
+            } as any)
+            .signers([admin])
+            .rpc();
+
+        const record = await program.account.record.fetch(recordPDA);
+        assert.ok(record.primaryAccount.equals(lpUser.publicKey), "Primary account should match LP user");
+        assert.deepEqual(record.userType, { lp: {} }, "User type should be LP");
+        assert.ok(
+            record.auxAccount.equals(lpUser.publicKey),
+            "aux_account should be set to primary_account when no aux wallet is provided"
+        );
+        assert.deepEqual(record.whitelistedPartners, [], "whitelistedPartners should start empty");
+    });
+
+    // ── WL-P3 : Whitelist ICV user without cliff period => stored as i64::MAX ──
+    it("Should be able to Whitelist ICV user without cliff period => Set as max time", async () => {
+        const recordPDA = deriveRecordPDA(icvUserNoCliffId, icvUserNoCliff.publicKey);
+        const I64_MAX = new anchor.BN("9223372036854775807");
+
+        await program.methods
+            .whitelist(
+                Array.from(icvUserNoCliffId),
+                { icv: {} },
+                icvUserNoCliff.publicKey,
+                null,
+                1_000_000_000,
+                null
+            )
+            .accounts({
+                admin: admin.publicKey,
+                coreConfig: configPDA,
+            } as any)
+            .signers([admin])
+            .rpc();
+
+        const record = await program.account.record.fetch(recordPDA);
+        assert.ok(record.primaryAccount.equals(icvUserNoCliff.publicKey), "Primary account should match");
+        assert.deepEqual(record.userType, { icv: {} }, "User type should be ICV");
+        assert.equal(
+            record.cliffPeriod.toString(),
+            I64_MAX.toString(),
+            "cliff_period should be i64::MAX when not provided"
+        );
+    });
+
+    // ── WL-P4 : Whitelist ICV user without max deposit => stored as u32::MAX ──
+    it("Should be able to Whitelist ICV user without max Deposit => Max deposit set as max number", async () => {
+        const recordPDA = deriveRecordPDA(icvUserNoMaxDepositId, icvUserNoMaxDeposit.publicKey);
+        const U32_MAX = 4294967295;
+        const now = Math.floor(Date.now() / 1000);
+        const futureCliff = new anchor.BN(now + 365 * 24 * 60 * 60);
+
+        await program.methods
+            .whitelist(
+                Array.from(icvUserNoMaxDepositId),
+                { icv: {} },
+                icvUserNoMaxDeposit.publicKey,
+                futureCliff,
+                null,
+                null
+            )
+            .accounts({
+                admin: admin.publicKey,
+                coreConfig: configPDA,
+            } as any)
+            .signers([admin])
+            .rpc();
+
+        const record = await program.account.record.fetch(recordPDA);
+        assert.ok(record.primaryAccount.equals(icvUserNoMaxDeposit.publicKey), "Primary account should match");
+        assert.deepEqual(record.userType, { icv: {} }, "User type should be ICV");
+        assert.equal(record.maxDeposit, U32_MAX, "maxDeposit should be u32::MAX (4294967295) when not provided");
+    });
+
+    // ── WL-P5 : Whitelist LP with many partner whitelisting ───────────────────
+    it("Should be able to Whitelist LP with many partner whitelisting", async () => {
+        const recordPDA = deriveRecordPDA(lpUserWithPartnersId, lpUserWithPartners.publicKey);
+        const now = Math.floor(Date.now() / 1000);
+        const futureCliff = new anchor.BN(now + 365 * 24 * 60 * 60);
+
+        // Step 1 – whitelist the LP user (empty partner list initially).
+        await program.methods
+            .whitelist(
+                Array.from(lpUserWithPartnersId),
+                { lp: {} },
+                lpUserWithPartners.publicKey,
+                futureCliff,
+                2_000_000_000,
+                null
+            )
+            .accounts({
+                admin: admin.publicKey,
+                coreConfig: configPDA,
+            } as any)
+            .signers([admin])
+            .rpc();
+
+        const recordAfterWl = await program.account.record.fetch(recordPDA);
+        assert.ok(
+            recordAfterWl.primaryAccount.equals(lpUserWithPartners.publicKey),
+            "Primary account should match LP user with partners"
+        );
+        assert.deepEqual(recordAfterWl.whitelistedPartners, [], "Whitelist should be empty after initial whitelist");
+
+        // Step 2 – add multiple partners via updatePartnerWhitelist.
+        const partnerIds = [111111, 222222, 333333, 444444, 555555];
+        for (const pid of partnerIds) {
+            await program.methods
+                .updatePartnerWhitelist(
+                    Array.from(lpUserWithPartnersId),
+                    lpUserWithPartners.publicKey,
+                    { add: {} },
+                    pid
+                )
+                .accounts({
+                    record: recordPDA,
+                    admin: admin.publicKey,
+                    coreConfig: configPDA,
+                } as any)
+                .signers([admin])
+                .rpc();
+        }
+
+        // Step 3 – verify all partners were recorded.
+        const recordAfterPartners = await program.account.record.fetch(recordPDA);
+        assert.equal(recordAfterPartners.whitelistedPartners.length, partnerIds.length,
+            `whitelistedPartners should contain ${partnerIds.length} entries`);
+        for (const pid of partnerIds) {
+            assert.include(recordAfterPartners.whitelistedPartners, pid, `Partner ${pid} should be in the list`);
+        }
+
+        // Step 4 – verify account size grew by 4 bytes per partner.
+        const accountInfo = await provider.connection.getAccountInfo(recordPDA);
+        const BASE_SIZE = 137;
+        const expectedSize = BASE_SIZE + partnerIds.length * 4;
+        assert.equal(accountInfo!.data.length, expectedSize,
+            `Account should be ${expectedSize} bytes (BASE_SIZE + ${partnerIds.length} × 4)`);
+    });
+
+   
+    // =========================================================================
+    // UPDATE MAX DEPOSIT NEGATIVE TESTS
+    // =========================================================================
+
+    // ── UMD-N1 : Non-admin wallet cannot update max deposit ───────────────────
+    it("Other wallet than admin should not update max deposit", async () => {
+        try {
+            await program.methods
+                .updateMaxDeposit(
+                    Array.from(ncwUserId),
+                    ncwUser.publicKey,
+                    999_999_999
+                )
+                .accounts({
+                    admin: manager.publicKey,
+                    coreConfig: configPDA,
+                } as any)
+                .signers([manager])
+                .rpc();
+            assert.fail("Expected transaction to fail with UnauthorizedAdmin");
+        } catch (err: any) {
+            assert.include(
+                err.message,
+                "UnauthorizedAdmin",
+                "Error should be UnauthorizedAdmin when a non-admin calls updateMaxDeposit"
+            );
+        }
+    });
+
+    // ── UMD-N2 : Admin cannot reduce max deposit below current net balance ─────
+    it("Admin should not be able to reduce the max deposit below the current deposit of the wallet", async () => {
+        const umdRecordPDA = deriveRecordPDA(umdUserId, umdUser.publicKey);
+        const now = Math.floor(Date.now() / 1000);
+        const futureCliff = new anchor.BN(now + 2 * 365 * 24 * 60 * 60);
+
+        // Whitelist umdUser as ICV with a 500M cap.
+        await program.methods
+            .whitelist(
+                Array.from(umdUserId),
+                { icv: {} },
+                umdUser.publicKey,
+                futureCliff,
+                500_000_000,
+                null
+            )
+            .accounts({
+                admin: admin.publicKey,
+                coreConfig: configPDA,
+            } as any)
+            .signers([admin])
+            .rpc();
+
+        // Deposit 200M into the Record-PDA-owned custody account.
+        const depositAmount = new anchor.BN(200_000_000);
+        umdTokenAccount = await gocAta(umdRecordPDA, tokenMint);
+
+        await program.methods
+            .deposit(Array.from(umdUserId), depositAmount)
+            .accounts({
+                sourceTokenAccount: umdUserAta,
+                destinationTokenAccount: umdTokenAccount,
+                record: umdRecordPDA,
+                mint: tokenMint,
+                signer: umdUser.publicKey,
+                tokenProgram: TOKEN_PROGRAM_ID,
+                coreConfig: configPDA,
+            } as any)
+            .signers([umdUser])
+            .rpc();
+
+        const afterDeposit = await program.account.record.fetch(umdRecordPDA);
+        assert.equal(afterDeposit.principleIn.toNumber(), depositAmount.toNumber(),
+            "principle_in should equal the deposit amount");
+
+        // Attempt to reduce cap below net balance (200M - 1) — must fail.
+        try {
+            await program.methods
+                .updateMaxDeposit(
+                    Array.from(umdUserId),
+                    umdUser.publicKey,
+                    depositAmount.toNumber() - 1
+                )
+                .accounts({
+                    admin: admin.publicKey,
+                    coreConfig: configPDA,
+                } as any)
+                .signers([admin])
+                .rpc();
+            assert.fail("Expected transaction to fail with MaxDepositBelowBalance");
+        } catch (err: any) {
+            assert.include(
+                err.message,
+                "MaxDepositBelowBalance",
+                "Error should be MaxDepositBelowBalance when cap < net balance"
+            );
+        }
+    });
+
+    // =========================================================================
+    // UPDATE MAX DEPOSIT POSITIVE TESTS
+    // =========================================================================
+
+    // ── UMD-P1 : Admin can increase max deposit ───────────────────────────────
+    it("Should be able to increase the max deposit of whitelisted user", async () => {
+        // umdUser has principle_in = 200M and cap = 500M (set at whitelist in UMD-N2).
+        // Increase cap to 1_000_000_000.
+        const umdRecordPDA = deriveRecordPDA(umdUserId, umdUser.publicKey);
+        const newCap = 1_000_000_000;
+
+        await program.methods
+            .updateMaxDeposit(Array.from(umdUserId), umdUser.publicKey, newCap)
+            .accounts({
+                admin: admin.publicKey,
+                coreConfig: configPDA,
+            } as any)
+            .signers([admin])
+            .rpc();
+
+        const record = await program.account.record.fetch(umdRecordPDA);
+        assert.equal(record.maxDeposit, newCap, "maxDeposit should be increased to the new cap");
+        assert.isAbove(record.maxDeposit, record.principleIn.toNumber(),
+            "new cap should be above current balance");
+    });
+
+    // ── UMD-P2 : Admin can decrease max deposit (while staying above balance) ─
+    it("Should be able to decrease the max deposit of whitelisted user", async () => {
+        // umdUser has principle_in = 200M and cap = 1_000_000_000 (from UMD-P1).
+        // Reduce cap to 300_000_000 — still above the 200M net balance.
+        const umdRecordPDA = deriveRecordPDA(umdUserId, umdUser.publicKey);
+        const reducedCap = 300_000_000;
+
+        await program.methods
+            .updateMaxDeposit(Array.from(umdUserId), umdUser.publicKey, reducedCap)
+            .accounts({
+                admin: admin.publicKey,
+                coreConfig: configPDA,
+            } as any)
+            .signers([admin])
+            .rpc();
+
+        const record = await program.account.record.fetch(umdRecordPDA);
+        assert.equal(record.maxDeposit, reducedCap, "maxDeposit should be reduced to the new cap");
+
+        // Verify the cap is still >= the net balance.
+        const netBalance = record.principleIn.toNumber() - record.principleOut.toNumber();
+        assert.isAtLeast(record.maxDeposit, netBalance,
+            "reduced cap must still be >= net balance");
+    });
+
+    // =========================================================================
+    // TEST 6 – Deposit
+    // =========================================================================
+    //
+    // Negative tests first, positive tests after.
+    //
+    // Users involved:
+    //   ncwUser           – already whitelisted as NCW (WL-P1); cannot deposit.
+    //   nonWlUser         – never whitelisted; record PDA does not exist.
+    //   depositIcvUser    – whitelisted as ICV inside the max-deposit negative
+    //                       test; same record re-used for the positive ICV test.
+    //   depositLpUser     – whitelisted as LP inside the positive LP deposit test.
+    // -------------------------------------------------------------------------
+
+    // ── D-N1 : NCW user cannot deposit ───────────────────────────────────────
+    it("Should not be able to deposits funds into the contract for NCW user", async () => {
+        // ncwUser was whitelisted as NCW in WL-P1 and is still live.
+        const recordPDA = deriveRecordPDA(ncwUserId, ncwUser.publicKey);
+        const ncwUserAta = await gocAta(ncwUser.publicKey, tokenMint);
+
+        try {
+            await program.methods
+                .deposit(Array.from(ncwUserId), new anchor.BN(1_000_000))
+                .accounts({
+                    sourceTokenAccount: ncwUserAta,
+                    destinationTokenAccount: ncwUserAta,
+                    record: recordPDA,
+                    mint: tokenMint,
+                    signer: ncwUser.publicKey,
+                    tokenProgram: TOKEN_PROGRAM_ID,
+                    coreConfig: configPDA,
+                } as any)
+                .signers([ncwUser])
+                .rpc();
+            assert.fail("Expected transaction to fail with InvalidOperation for NCW user");
+        } catch (err: any) {
+            assert.include(
+                err.message,
+                "InvalidOperation",
+                "Error should be InvalidOperation when an NCW user attempts to deposit"
+            );
+        }
+    });
+
+    // ── D-N2 : Non-whitelisted user cannot deposit ────────────────────────────
+    it("Should not be able to deposit by non-whitelisted user", async () => {
+        const nonWlRecordPDA = deriveRecordPDA(nonWlUserId, nonWlUser.publicKey);
+        const nonWlUserAta = await gocAta(nonWlUser.publicKey, tokenMint);
+
+        try {
+            await program.methods
+                .deposit(Array.from(nonWlUserId), new anchor.BN(1_000_000))
+                .accounts({
+                    sourceTokenAccount: nonWlUserAta,
+                    destinationTokenAccount: nonWlUserAta,
+                    record: nonWlRecordPDA,
+                    mint: tokenMint,
+                    signer: nonWlUser.publicKey,
+                    tokenProgram: TOKEN_PROGRAM_ID,
+                    coreConfig: configPDA,
+                } as any)
+                .signers([nonWlUser])
+                .rpc();
+            assert.fail("Expected transaction to fail for non-whitelisted user");
+        } catch (err: any) {
+            // Anchor will throw an AccountNotInitialized / deserialization error
+            // because the record PDA has never been created.
+            assert.ok(
+                err.message.length > 0,
+                "An error should be thrown when a non-whitelisted user attempts to deposit"
+            );
+        }
+    });
+
+    // ── D-N3 : Deposit exceeding max_deposit is rejected ─────────────────────
+    it("Should not be able to exceed deposit more than max_deposit", async () => {
+        // Whitelist depositIcvUser with a tight cap of 100_000_000.
+        const depositIcvRecordPDA = deriveRecordPDA(depositIcvUserId, depositIcvUser.publicKey);
+        const now = Math.floor(Date.now() / 1000);
+        const futureCliff = new anchor.BN(now + 365 * 24 * 60 * 60);
+        const cap = 100_000_000;
+
+        await program.methods
+            .whitelist(
+                Array.from(depositIcvUserId),
+                { icv: {} },
+                depositIcvUser.publicKey,
+                futureCliff,
+                cap,
+                null
+            )
+            .accounts({
+                admin: admin.publicKey,
+                coreConfig: configPDA,
+            } as any)
+            .signers([admin])
+            .rpc();
+
+        // Attempt to deposit one unit above the cap — must fail.
+        const overCap = new anchor.BN(cap + 1);
+        const depositIcvTokenAccount = await gocAta(depositIcvRecordPDA, tokenMint);
+
+        try {
+            await program.methods
+                .deposit(Array.from(depositIcvUserId), overCap)
+                .accounts({
+                    sourceTokenAccount: depositIcvUserAta,
+                    destinationTokenAccount: depositIcvTokenAccount,
+                    record: depositIcvRecordPDA,
+                    mint: tokenMint,
+                    signer: depositIcvUser.publicKey,
+                    tokenProgram: TOKEN_PROGRAM_ID,
+                    coreConfig: configPDA,
+                } as any)
+                .signers([depositIcvUser])
+                .rpc();
+            assert.fail("Expected transaction to fail with MaxDepositExceeded");
+        } catch (err: any) {
+            assert.include(
+                err.message,
+                "MaxDepositExceeded",
+                "Error should be MaxDepositExceeded when deposit exceeds the cap"
+            );
+        }
+    });
+
+    // ── D-P1 : ICV user can deposit ───────────────────────────────────────────
+    it("Should be able to deposits funds into the contract for ICV user", async () => {
+        // depositIcvUser was whitelisted in D-N3 with cap = 100_000_000.
+        // Deposit exactly the cap — should succeed.
+        const depositIcvRecordPDA = deriveRecordPDA(depositIcvUserId, depositIcvUser.publicKey);
+        const depositAmount = new anchor.BN(100_000_000); // equal to cap
+
+        // ICV custody account is owned by the Record PDA.
+        const depositIcvTokenAccount = await gocAta(depositIcvRecordPDA, tokenMint);
+
+        await program.methods
+            .deposit(Array.from(depositIcvUserId), depositAmount)
+            .accounts({
+                sourceTokenAccount: depositIcvUserAta,
+                destinationTokenAccount: depositIcvTokenAccount,
+                record: depositIcvRecordPDA,
+                mint: tokenMint,
+                signer: depositIcvUser.publicKey,
+                tokenProgram: TOKEN_PROGRAM_ID,
+                coreConfig: configPDA,
+            } as any)
+            .signers([depositIcvUser])
+            .rpc();
+
+        const record = await program.account.record.fetch(depositIcvRecordPDA);
+        assert.equal(
+            record.principleIn.toNumber(),
+            depositAmount.toNumber(),
+            "principleIn should equal the deposited amount"
+        );
+        assert.equal(record.principleOut.toNumber(), 0, "principleOut should remain 0");
+        assert.deepEqual(record.userType, { icv: {} }, "User type should still be ICV");
+    });
+
+    // ── D-P2 : LP user can deposit ────────────────────────────────────────────
+    it("Should be able to deposits funds into the contract for LP user", async () => {
+        // 1. Whitelist depositLpUser as LP with a future cliff and a cap.
+        const depositLpRecordPDA = deriveRecordPDA(depositLpUserId, depositLpUser.publicKey);
+        const now = Math.floor(Date.now() / 1000);
+        const futureCliff = new anchor.BN(now + 365 * 24 * 60 * 60);
+        const cap = 500_000_000;
+
+        await program.methods
+            .whitelist(
+                Array.from(depositLpUserId),
+                { lp: {} },
+                depositLpUser.publicKey,
+                futureCliff,
+                cap,
+                null
+            )
+            .accounts({
+                admin: admin.publicKey,
+                coreConfig: configPDA,
+            } as any)
+            .signers([admin])
+            .rpc();
+
+        // 2. LP deposits go to the ZOV token account (owner == ZOV constant).
+        //    zovAta is owned by zynkOpVault (== ZOV) and already funded.
+        const depositAmount = new anchor.BN(200_000_000);
+
+        await program.methods
+            .deposit(Array.from(depositLpUserId), depositAmount)
+            .accounts({
+                sourceTokenAccount: depositLpUserAta,
+                destinationTokenAccount: zovAta,
+                record: depositLpRecordPDA,
+                mint: tokenMint,
+                signer: depositLpUser.publicKey,
+                tokenProgram: TOKEN_PROGRAM_ID,
+                coreConfig: configPDA,
+            } as any)
+            .signers([depositLpUser])
+            .rpc();
+
+        const record = await program.account.record.fetch(depositLpRecordPDA);
+        assert.equal(
+            record.principleIn.toNumber(),
+            depositAmount.toNumber(),
+            "principleIn should equal the deposited amount"
+        );
+        assert.equal(record.principleOut.toNumber(), 0, "principleOut should remain 0");
+        assert.deepEqual(record.userType, { lp: {} }, "User type should still be LP");
+    });
+
+    // =========================================================================
+    // TEST 7 – Borrow
+    // =========================================================================
+    //
+    // Negative tests first, positive tests after.
+    //
+    // Setup is performed inside each test (whitelist + deposit) so tests are
+    // self-contained and do not rely on ordering of other suites.
+    // -------------------------------------------------------------------------
+
+    // ── B-N1 : LP user cannot be a borrow position ───────────────────────────
+    it("Should not be able to borrow against LP user", async () => {
+        const now = Math.floor(Date.now() / 1000);
+        const futureCliff = new anchor.BN(now + 365 * 24 * 60 * 60);
+        const lpRecordPDA = deriveRecordPDA(borrowLpUserId, borrowLpUser.publicKey);
+
+        await program.methods
+            .whitelist(
+                Array.from(borrowLpUserId),
+                { lp: {} },
+                borrowLpUser.publicKey,
+                futureCliff,
+                500_000_000,
+                null
+            )
+            .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+            .signers([admin])
+            .rpc();
+
+        const orderId = generateOrderId();
+        const orderTrackerPDA = deriveOrderTrackerPDA(borrowPartnerIdBytes, orderId);
+        const positionPDA = derivePositionPDA(orderId, borrowLpUser.publicKey);
+        const lpTokenAccount = await gocAta(lpRecordPDA, tokenMint);
+
+        const [coreZovPDA] = PublicKey.findProgramAddressSync(
+            [Buffer.from("zynk_op_vault"), defaultZovId],
+            core_program.programId
+        );
+
+        try {
+            await program.methods
+                .borrow(
+                    zynkPartnerId,
+                    Array.from(orderId),
+                    Array.from(defaultZovId),
+                    new anchor.BN(50_000_000),
+                    [{ amount: new anchor.BN(50_000_000), vaultId: Array.from(zeroZovId) }],
+                    null
+                )
+                .accounts({
+                    zovTokenAccount: zovAta, mint: tokenMint, manager: manager.publicKey,
+                    tokenProgram: TOKEN_PROGRAM_ID, coreConfig: configPDA,
+                    corePartnerDepositVault: partnerDepositVaultPDA, coreZynkOpVault: coreZovPDA,
+                    coreBeneficiary: coreBeneficiaryPDA, coreBeneficiaryTokenAccount: ovaultAta,
+                    coreOrderTracker: orderTrackerPDA,
+                } as any)
+                .remainingAccounts([
+                    { pubkey: lpTokenAccount, isSigner: false, isWritable: true },
+                    { pubkey: lpRecordPDA,    isSigner: false, isWritable: false },
+                    { pubkey: lpRecordPDA,    isSigner: false, isWritable: false },
+                    { pubkey: positionPDA,    isSigner: false, isWritable: true },
+                ])
+                .signers([manager])
+                .rpc();
+            assert.fail("Expected transaction to fail with UnauthorizedBorrower for LP user");
+        } catch (err: any) {
+            assert.include(err.message, "UnauthorizedBorrower",
+                "Error should be UnauthorizedBorrower when an LP user is in a borrow position");
+        }
+    });
+
+    // ── B-N2 : Partner not whitelisted for position user ─────────────────────
+    it("Should not be able to borrow if partnerId is not whitelisted for all of the position user (Open user are allowed)", async () => {
+        const now = Math.floor(Date.now() / 1000);
+        const futureCliff = new anchor.BN(now + 365 * 24 * 60 * 60);
+        const restrictedRecordPDA = deriveRecordPDA(borrowIcvRestrictedUserId, borrowIcvRestrictedUser.publicKey);
+
+        await program.methods
+            .whitelist(Array.from(borrowIcvRestrictedUserId), { icv: {} }, borrowIcvRestrictedUser.publicKey, futureCliff, 500_000_000, null)
+            .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+            .signers([admin]).rpc();
+
+        // Add partner 999999 (not 321420) so the whitelist is non-empty.
+        await program.methods
+            .updatePartnerWhitelist(Array.from(borrowIcvRestrictedUserId), borrowIcvRestrictedUser.publicKey, { add: {} }, 999999)
+            .accounts({ record: restrictedRecordPDA, admin: admin.publicKey, coreConfig: configPDA } as any)
+            .signers([admin]).rpc();
+
+        const restrictedUserAta = await gocAtaAndMint(borrowIcvRestrictedUser.publicKey, tokenMint, 200_000_000);
+        const restrictedTokenAccount = await gocAta(restrictedRecordPDA, tokenMint);
+        await program.methods
+            .deposit(Array.from(borrowIcvRestrictedUserId), new anchor.BN(100_000_000))
+            .accounts({
+                sourceTokenAccount: restrictedUserAta, destinationTokenAccount: restrictedTokenAccount,
+                record: restrictedRecordPDA, mint: tokenMint,
+                signer: borrowIcvRestrictedUser.publicKey,
+                tokenProgram: TOKEN_PROGRAM_ID, coreConfig: configPDA,
+            } as any)
+            .signers([borrowIcvRestrictedUser]).rpc();
+
+        const orderId = generateOrderId();
+        const orderTrackerPDA = deriveOrderTrackerPDA(borrowPartnerIdBytes, orderId);
+        const positionPDA = derivePositionPDA(orderId, borrowIcvRestrictedUser.publicKey);
+        const [coreZovPDA] = PublicKey.findProgramAddressSync([Buffer.from("zynk_op_vault"), defaultZovId], core_program.programId);
+
+        try {
+            await program.methods
+                .borrow(
+                    zynkPartnerId,  // partner 321420 — NOT in restricted user's whitelist
+                    Array.from(orderId), Array.from(defaultZovId),
+                    new anchor.BN(50_000_000),
+                    [{ amount: new anchor.BN(50_000_000), vaultId: Array.from(zeroZovId) }],
+                    null
+                )
+                .accounts({
+                    zovTokenAccount: zovAta, mint: tokenMint, manager: manager.publicKey,
+                    tokenProgram: TOKEN_PROGRAM_ID, coreConfig: configPDA,
+                    corePartnerDepositVault: partnerDepositVaultPDA, coreZynkOpVault: coreZovPDA,
+                    coreBeneficiary: coreBeneficiaryPDA, coreBeneficiaryTokenAccount: ovaultAta,
+                    coreOrderTracker: orderTrackerPDA,
+                } as any)
+                .remainingAccounts([
+                    { pubkey: restrictedTokenAccount, isSigner: false, isWritable: true },
+                    { pubkey: restrictedRecordPDA,    isSigner: false, isWritable: false },
+                    { pubkey: restrictedRecordPDA,    isSigner: false, isWritable: false },
+                    { pubkey: positionPDA,            isSigner: false, isWritable: true },
+                ])
+                .signers([manager]).rpc();
+            assert.fail("Expected transaction to fail with PartnerNotWhitelisted");
+        } catch (err: any) {
+            assert.include(err.message, "PartnerNotWhitelisted",
+                "Error should be PartnerNotWhitelisted when the partner is not in the user's restricted list");
+        }
+    });
+
+    // ── B-N3 : Order amount ≠ sum of positions ───────────────────────────────
+    it("Should not be able to borrow if order amount is not equal to sum of all positions amount", async () => {
+        // Whitelist + deposit borrowIcvUser if not already done (idempotent guard).
+        const now = Math.floor(Date.now() / 1000);
+        const futureCliff = new anchor.BN(now + 365 * 24 * 60 * 60);
+        const borrowIcvRecordPDA = deriveRecordPDA(borrowIcvUserId, borrowIcvUser.publicKey);
+
+        const existingRecord = await provider.connection.getAccountInfo(borrowIcvRecordPDA);
+        if (!existingRecord) {
+            await program.methods
+                .whitelist(Array.from(borrowIcvUserId), { icv: {} }, borrowIcvUser.publicKey, futureCliff, 500_000_000, null)
+                .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+                .signers([admin]).rpc();
+
+            borrowIcvTokenAccount = await gocAta(borrowIcvRecordPDA, tokenMint);
+            await program.methods
+                .deposit(Array.from(borrowIcvUserId), new anchor.BN(200_000_000))
+                .accounts({
+                    sourceTokenAccount: borrowIcvUserAta, destinationTokenAccount: borrowIcvTokenAccount,
+                    record: borrowIcvRecordPDA, mint: tokenMint, signer: borrowIcvUser.publicKey,
+                    tokenProgram: TOKEN_PROGRAM_ID, coreConfig: configPDA,
+                } as any)
+                .signers([borrowIcvUser]).rpc();
+        } else {
+            borrowIcvTokenAccount = await gocAta(borrowIcvRecordPDA, tokenMint);
+        }
+
+        const orderId = generateOrderId();
+        const orderTrackerPDA = deriveOrderTrackerPDA(borrowPartnerIdBytes, orderId);
+        const positionPDA = derivePositionPDA(orderId, borrowIcvUser.publicKey);
+        const [coreZovPDA] = PublicKey.findProgramAddressSync(
+            [Buffer.from("zynk_op_vault"), defaultZovId], core_program.programId
+        );
+
+        // order total = 60M but single position = 50M → AmountMismatch
+        try {
+            await program.methods
+                .borrow(
+                    zynkPartnerId,
+                    Array.from(orderId), Array.from(defaultZovId),
+                    new anchor.BN(60_000_000),
+                    [{ amount: new anchor.BN(50_000_000), vaultId: Array.from(zeroZovId) }],
+                    null
+                )
+                .accounts({
+                    zovTokenAccount: zovAta, mint: tokenMint, manager: manager.publicKey,
+                    tokenProgram: TOKEN_PROGRAM_ID, coreConfig: configPDA,
+                    corePartnerDepositVault: partnerDepositVaultPDA, coreZynkOpVault: coreZovPDA,
+                    coreBeneficiary: coreBeneficiaryPDA, coreBeneficiaryTokenAccount: ovaultAta,
+                    coreOrderTracker: orderTrackerPDA,
+                } as any)
+                .remainingAccounts([
+                    { pubkey: borrowIcvTokenAccount, isSigner: false, isWritable: true },
+                    { pubkey: borrowIcvRecordPDA,    isSigner: false, isWritable: false },
+                    { pubkey: borrowIcvRecordPDA,    isSigner: false, isWritable: false },
+                    { pubkey: positionPDA,           isSigner: false, isWritable: true },
+                ])
+                .signers([manager]).rpc();
+            assert.fail("Expected transaction to fail with AmountMismatch");
+        } catch (err: any) {
+            assert.include(err.message, "AmountMismatch",
+                "Error should be AmountMismatch when total order amount ≠ sum of positions");
+        }
+    });
+
+    // ── B-N4 : Non-manager cannot borrow ─────────────────────────────────────
+    it("Should not be able to borrow if requesting signer is not manager", async () => {
+        const borrowIcvRecordPDA = deriveRecordPDA(borrowIcvUserId, borrowIcvUser.publicKey);
+        const orderId = generateOrderId();
+        const orderTrackerPDA = deriveOrderTrackerPDA(borrowPartnerIdBytes, orderId);
+        const positionPDA = derivePositionPDA(orderId, borrowIcvUser.publicKey);
+        const [coreZovPDA] = PublicKey.findProgramAddressSync(
+            [Buffer.from("zynk_op_vault"), defaultZovId], core_program.programId
+        );
+        try {
+            await program.methods
+                .borrow(
+                    zynkPartnerId, Array.from(orderId), Array.from(defaultZovId),
+                    new anchor.BN(50_000_000),
+                    [{ amount: new anchor.BN(50_000_000), vaultId: Array.from(zeroZovId) }],
+                    null
+                )
+                .accounts({
+                    zovTokenAccount: zovAta, mint: tokenMint,
+                    manager: admin.publicKey,   // admin signs — NOT the protocol manager
+                    tokenProgram: TOKEN_PROGRAM_ID, coreConfig: configPDA,
+                    corePartnerDepositVault: partnerDepositVaultPDA, coreZynkOpVault: coreZovPDA,
+                    coreBeneficiary: coreBeneficiaryPDA, coreBeneficiaryTokenAccount: ovaultAta,
+                    coreOrderTracker: orderTrackerPDA,
+                } as any)
+                .remainingAccounts([
+                    { pubkey: borrowIcvTokenAccount, isSigner: false, isWritable: true },
+                    { pubkey: borrowIcvRecordPDA,    isSigner: false, isWritable: false },
+                    { pubkey: borrowIcvRecordPDA,    isSigner: false, isWritable: false },
+                    { pubkey: positionPDA,           isSigner: false, isWritable: true },
+                ])
+                .signers([admin]).rpc();
+            assert.fail("Expected transaction to fail with UnauthorizedManager");
+        } catch (err: any) {
+            assert.include(err.message, "UnauthorizedManager",
+                "Error should be UnauthorizedManager when a non-manager tries to borrow");
+        }
+    });
+
+    // ── B-N5 : Borrow exceeds available deposited balance ────────────────────
+    it("Should not be able to borrow from a user exceeding its available deposited amount", async () => {
+        // borrowIcvUser deposited 200M. Attempt to borrow 201M — SPL will reject the transfer.
+        const borrowIcvRecordPDA = deriveRecordPDA(borrowIcvUserId, borrowIcvUser.publicKey);
+        const orderId = generateOrderId();
+        const orderTrackerPDA = deriveOrderTrackerPDA(borrowPartnerIdBytes, orderId);
+        const positionPDA = derivePositionPDA(orderId, borrowIcvUser.publicKey);
+        const [coreZovPDA] = PublicKey.findProgramAddressSync(
+            [Buffer.from("zynk_op_vault"), defaultZovId], core_program.programId
+        );
+        try {
+            await program.methods
+                .borrow(
+                    zynkPartnerId, Array.from(orderId), Array.from(defaultZovId),
+                    new anchor.BN(201_000_000),
+                    [{ amount: new anchor.BN(201_000_000), vaultId: Array.from(zeroZovId) }],
+                    null
+                )
+                .accounts({
+                    zovTokenAccount: zovAta, mint: tokenMint, manager: manager.publicKey,
+                    tokenProgram: TOKEN_PROGRAM_ID, coreConfig: configPDA,
+                    corePartnerDepositVault: partnerDepositVaultPDA, coreZynkOpVault: coreZovPDA,
+                    coreBeneficiary: coreBeneficiaryPDA, coreBeneficiaryTokenAccount: ovaultAta,
+                    coreOrderTracker: orderTrackerPDA,
+                } as any)
+                .remainingAccounts([
+                    { pubkey: borrowIcvTokenAccount, isSigner: false, isWritable: true },
+                    { pubkey: borrowIcvRecordPDA,    isSigner: false, isWritable: false },
+                    { pubkey: borrowIcvRecordPDA,    isSigner: false, isWritable: false },
+                    { pubkey: positionPDA,           isSigner: false, isWritable: true },
+                ])
+                .signers([manager]).rpc();
+            assert.fail("Expected transaction to fail when borrow exceeds deposited balance");
+        } catch (err: any) {
+            assert.ok(err.message.length > 0,
+                "An error should be thrown when borrow amount exceeds deposited balance");
+        }
+    });
+
+    // ── B-N6 : ICV total borrow exceeds deposited amount ─────────────────────
+    it("Should not be able to borrow from ICV user if the total borrow is exceeding the deposited amount", async () => {
+        // borrowIcvUser deposited 200M. Attempt a single-position borrow of 250M.
+        const borrowIcvRecordPDA = deriveRecordPDA(borrowIcvUserId, borrowIcvUser.publicKey);
+        const orderId = generateOrderId();
+        const orderTrackerPDA = deriveOrderTrackerPDA(borrowPartnerIdBytes, orderId);
+        const positionPDA = derivePositionPDA(orderId, borrowIcvUser.publicKey);
+        const [coreZovPDA] = PublicKey.findProgramAddressSync(
+            [Buffer.from("zynk_op_vault"), defaultZovId], core_program.programId
+        );
+        try {
+            await program.methods
+                .borrow(
+                    zynkPartnerId, Array.from(orderId), Array.from(defaultZovId),
+                    new anchor.BN(250_000_000),
+                    [{ amount: new anchor.BN(250_000_000), vaultId: Array.from(zeroZovId) }],
+                    null
+                )
+                .accounts({
+                    zovTokenAccount: zovAta, mint: tokenMint, manager: manager.publicKey,
+                    tokenProgram: TOKEN_PROGRAM_ID, coreConfig: configPDA,
+                    corePartnerDepositVault: partnerDepositVaultPDA, coreZynkOpVault: coreZovPDA,
+                    coreBeneficiary: coreBeneficiaryPDA, coreBeneficiaryTokenAccount: ovaultAta,
+                    coreOrderTracker: orderTrackerPDA,
+                } as any)
+                .remainingAccounts([
+                    { pubkey: borrowIcvTokenAccount, isSigner: false, isWritable: true },
+                    { pubkey: borrowIcvRecordPDA,    isSigner: false, isWritable: false },
+                    { pubkey: borrowIcvRecordPDA,    isSigner: false, isWritable: false },
+                    { pubkey: positionPDA,           isSigner: false, isWritable: true },
+                ])
+                .signers([manager]).rpc();
+            assert.fail("Expected transaction to fail when ICV total borrow exceeds deposited amount");
+        } catch (err: any) {
+            assert.ok(err.message.length > 0,
+                "An error should be thrown when total ICV borrow exceeds deposited amount");
+        }
+    });
+
+    // ── B-P1 : Manager borrows against ICV user ───────────────────────────────
+    it("Should be able to borrow against the ICV user", async () => {
+        // borrowIcvUser was whitelisted + deposited 200M in B-N3.
+        // Borrow 100M — well within the available balance.
+        const borrowIcvRecordPDA = deriveRecordPDA(borrowIcvUserId, borrowIcvUser.publicKey);
+        const borrowAmount = new anchor.BN(100_000_000);
+        const orderId = generateOrderId();
+        const orderTrackerPDA = deriveOrderTrackerPDA(borrowPartnerIdBytes, orderId);
+        const positionPDA = derivePositionPDA(orderId, borrowIcvUser.publicKey);
+        const [coreZovPDA] = PublicKey.findProgramAddressSync(
+            [Buffer.from("zynk_op_vault"), defaultZovId], core_program.programId
+        );
+
+        await program.methods
+            .borrow(
+                zynkPartnerId,
+                Array.from(orderId), Array.from(defaultZovId),
+                borrowAmount,
+                [{ amount: borrowAmount, vaultId: Array.from(zeroZovId) }],
+                null
+            )
+            .accounts({
+                zovTokenAccount: zovAta, mint: tokenMint, manager: manager.publicKey,
+                tokenProgram: TOKEN_PROGRAM_ID, coreConfig: configPDA,
+                corePartnerDepositVault: partnerDepositVaultPDA, coreZynkOpVault: coreZovPDA,
+                coreBeneficiary: coreBeneficiaryPDA, coreBeneficiaryTokenAccount: ovaultAta,
+                coreOrderTracker: orderTrackerPDA,
+            } as any)
+            .remainingAccounts([
+                { pubkey: borrowIcvTokenAccount, isSigner: false, isWritable: true },
+                { pubkey: borrowIcvRecordPDA,    isSigner: false, isWritable: false },
+                { pubkey: borrowIcvRecordPDA,    isSigner: false, isWritable: false },
+                { pubkey: positionPDA,           isSigner: false, isWritable: true },
+            ])
+            .signers([manager]).rpc();
+
+        const positionInfo = await provider.connection.getAccountInfo(positionPDA);
+        assert.isNotNull(positionInfo, "Position PDA should have been created");
+        assert.ok(positionInfo!.owner.equals(program.programId),
+            "Position PDA should be owned by the orbit program");
+    });
+
+    // ── B-P2 : Manager borrows against NCW user ───────────────────────────────
+    it("Should be able to borrow against NCW user", async () => {
+        // Whitelist borrowNcwUser as NCW (NCW users don't deposit; the NCW vault is pre-funded).
+        const now = Math.floor(Date.now() / 1000);
+        const futureCliff = new anchor.BN(now + 365 * 24 * 60 * 60);
+        const ncwRecordPDA = deriveRecordPDA(borrowNcwUserId, borrowNcwUser.publicKey);
+
+        const existingRecord = await provider.connection.getAccountInfo(ncwRecordPDA);
+        if (!existingRecord) {
+            await program.methods
+                .whitelist(Array.from(borrowNcwUserId), { ncw: {} }, borrowNcwUser.publicKey, futureCliff, null, null)
+                .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+                .signers([admin]).rpc();
+        }
+
+        const borrowAmount = new anchor.BN(50_000_000);
+        const orderId = generateOrderId();
+        const orderTrackerPDA = deriveOrderTrackerPDA(borrowPartnerIdBytes, orderId);
+        const positionPDA = derivePositionPDA(orderId, borrowNcwUser.publicKey);
+        const [coreZovPDA] = PublicKey.findProgramAddressSync(
+            [Buffer.from("zynk_op_vault"), defaultZovId], core_program.programId
+        );
+
+        // For NCW: source = ncwVaultTokenAccount (owned by ncwVaultAuthority PDA)
+        //          authority = ncwVaultAuthority PDA([b"vault", ncwVaultId], orbit)
+        await program.methods
+            .borrow(
+                zynkPartnerId,
+                Array.from(orderId), Array.from(defaultZovId),
+                borrowAmount,
+                [{ amount: borrowAmount, vaultId: Array.from(ncwVaultId) }],
+                null
+            )
+            .accounts({
+                zovTokenAccount: zovAta, mint: tokenMint, manager: manager.publicKey,
+                tokenProgram: TOKEN_PROGRAM_ID, coreConfig: configPDA,
+                corePartnerDepositVault: partnerDepositVaultPDA, coreZynkOpVault: coreZovPDA,
+                coreBeneficiary: coreBeneficiaryPDA, coreBeneficiaryTokenAccount: ovaultAta,
+                coreOrderTracker: orderTrackerPDA,
+            } as any)
+            .remainingAccounts([
+                { pubkey: ncwVaultTokenAccount, isSigner: false, isWritable: true },  // source
+                { pubkey: ncwVaultAuthority,    isSigner: false, isWritable: false }, // authority
+                { pubkey: ncwRecordPDA,         isSigner: false, isWritable: false }, // record
+                { pubkey: positionPDA,          isSigner: false, isWritable: true },  // position
+            ])
+            .signers([manager]).rpc();
+
+        const positionInfo = await provider.connection.getAccountInfo(positionPDA);
+        assert.isNotNull(positionInfo, "Position PDA should have been created for NCW user");
+        assert.ok(positionInfo!.owner.equals(program.programId),
+            "Position PDA should be owned by the orbit program");
+    });
+
+
+    it("Should be able to borrow with multiple positions (3 positions) for an order with different users", async () => {
+        const MAX_POSITIONS = 3; // fits comfortably within the 1232-byte legacy TX cap
+        const now = Math.floor(Date.now() / 1000);
+        const futureCliff = new anchor.BN(now + 365 * 24 * 60 * 60);
+        const positionAmount = new anchor.BN(10_000_000); // 10M each
+        const totalAmount = new anchor.BN(10_000_000 * MAX_POSITIONS);
+
+        // Whitelist each ICV user and deposit funds into their custody accounts.
+        for (let i = 0; i < MAX_POSITIONS; i++) {
+            const recordPDA = deriveRecordPDA(multiIcvUserIds[i], multiIcvUsers[i].publicKey);
+            const existingRecord = await provider.connection.getAccountInfo(recordPDA);
+            if (!existingRecord) {
+                await program.methods
+                    .whitelist(Array.from(multiIcvUserIds[i]), { icv: {} }, multiIcvUsers[i].publicKey, futureCliff, 100_000_000, null)
+                    .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+                    .signers([admin]).rpc();
+
+                const custodyAccount = await gocAta(recordPDA, tokenMint);
+                multiIcvTokenAccounts.push(custodyAccount);
+
+                await program.methods
+                    .deposit(Array.from(multiIcvUserIds[i]), positionAmount)
+                    .accounts({
+                        sourceTokenAccount: multiIcvUserAtas[i], destinationTokenAccount: custodyAccount,
+                        record: recordPDA, mint: tokenMint, signer: multiIcvUsers[i].publicKey,
+                        tokenProgram: TOKEN_PROGRAM_ID, coreConfig: configPDA,
+                    } as any)
+                    .signers([multiIcvUsers[i]]).rpc();
+            } else {
+                const custodyAccount = await gocAta(recordPDA, tokenMint);
+                multiIcvTokenAccounts.push(custodyAccount);
+            }
+        }
+
+        const orderId = generateOrderId();
+        const orderTrackerPDA = deriveOrderTrackerPDA(borrowPartnerIdBytes, orderId);
+        const [coreZovPDA] = PublicKey.findProgramAddressSync(
+            [Buffer.from("zynk_op_vault"), defaultZovId], core_program.programId
+        );
+
+        // Build positions array and remaining accounts (4 remaining-account slots per position).
+        const positions = multiIcvUsers.slice(0, MAX_POSITIONS).map((_u) => ({
+            amount: positionAmount,
+            vaultId: Array.from(zeroZovId),
+        }));
+
+        const remainingAccounts: { pubkey: PublicKey; isSigner: boolean; isWritable: boolean }[] = [];
+        for (let i = 0; i < MAX_POSITIONS; i++) {
+            const recordPDA = deriveRecordPDA(multiIcvUserIds[i], multiIcvUsers[i].publicKey);
+            const positionPDA = derivePositionPDA(orderId, multiIcvUsers[i].publicKey);
+            remainingAccounts.push(
+                { pubkey: multiIcvTokenAccounts[i], isSigner: false, isWritable: true },  // source token account
+                { pubkey: recordPDA,                isSigner: false, isWritable: false }, // authority (= record PDA for ICV)
+                { pubkey: recordPDA,                isSigner: false, isWritable: false }, // record
+                { pubkey: positionPDA,              isSigner: false, isWritable: true },  // position PDA
+            );
+        }
+
+        await program.methods
+            .borrow(zynkPartnerId, Array.from(orderId), Array.from(defaultZovId), totalAmount, positions, null)
+            .accounts({
+                zovTokenAccount: zovAta, mint: tokenMint, manager: manager.publicKey,
+                tokenProgram: TOKEN_PROGRAM_ID, coreConfig: configPDA,
+                corePartnerDepositVault: partnerDepositVaultPDA, coreZynkOpVault: coreZovPDA,
+                coreBeneficiary: coreBeneficiaryPDA, coreBeneficiaryTokenAccount: ovaultAta,
+                coreOrderTracker: orderTrackerPDA,
+            } as any)
+            .remainingAccounts(remainingAccounts)
+            .signers([manager]).rpc();
+
+        // Verify every position PDA was created and is owned by the orbit program.
+        for (let i = 0; i < MAX_POSITIONS; i++) {
+            const positionPDA = derivePositionPDA(orderId, multiIcvUsers[i].publicKey);
+            const positionInfo = await provider.connection.getAccountInfo(positionPDA);
+            assert.isNotNull(positionInfo, `Position PDA for user ${i} should have been created`);
+            assert.ok(
+                positionInfo!.owner.equals(program.programId),
+                `Position PDA for user ${i} should be owned by the orbit program`
+            );
         }
     });
 
@@ -395,9 +1732,7 @@ describe("zynk-orbit", () => {
                 Array.from(defaultZovId),
                 borrowAmount,
                 [{
-                    lpPrimaryAccount: icvUser.publicKey,
                     amount: borrowAmount,
-                    userType: { icv: {} },
                     vaultId: Array.from(zeroZovId),
                 }],
                 null
@@ -457,9 +1792,7 @@ describe("zynk-orbit", () => {
                 Array.from(transientOrderId),
                 repayAmount,
                 [{
-                    lpPrimaryAccount: icvUser.publicKey,
                     amount: repayAmount,
-                    userType: { icv: {} },
                     vaultId: Array.from(zeroZovId),
                 }],
                 null

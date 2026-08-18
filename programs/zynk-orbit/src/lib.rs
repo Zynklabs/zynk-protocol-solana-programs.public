@@ -95,9 +95,7 @@ pub struct Position {
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct PositionOperation {
-    pub lp_primary_account: Pubkey,
     pub amount: u64,
-    pub user_type: UserType,
     pub vault_id: [u8; 32],
 }
 
@@ -325,13 +323,11 @@ pub mod zynk_orbit {
         let partner_id_bytes =
             anchor_lang::solana_program::hash::hash(partner_id.as_bytes()).to_bytes();
 
-        // Validate all positions are NCW or ICV (not LP)
+        // Pre-validate amounts and sum them up.
+        // LP/NCW/ICV type validation is deferred to per-position processing
+        // where record data is available.
         let mut total_position_amount: u64 = 0;
         for pos in &positions {
-            require!(
-                pos.user_type != UserType::LP,
-                OrbitError::UnauthorizedBorrower
-            );
             require!(pos.amount > 0, OrbitError::ZeroAmount);
             total_position_amount = total_position_amount
                 .checked_add(pos.amount)
@@ -357,26 +353,33 @@ pub mod zynk_orbit {
             let record_account = &remaining_accounts[base_idx + 2];
             let position_pda = &remaining_accounts[base_idx + 3];
 
-            // Verify the record account
-            let record_data = record_account.data.borrow();
-            let record = Record::try_deserialize(&mut &record_data[..])
-                .map_err(|_| OrbitError::InvalidAccount)?;
+            // Deserialise record and capture all fields needed later before dropping the borrow.
+            let (primary_account, record_user_id, record_user_type) = {
+                let record_data = record_account.data.borrow();
+                let record = Record::try_deserialize(&mut &record_data[..])
+                    .map_err(|_| OrbitError::InvalidAccount)?;
+
+                // Check partner whitelist: if whitelisted_partners is non-empty,
+                // verify partner_number is present.
+                if !record.whitelisted_partners.is_empty() {
+                    require!(
+                        record.whitelisted_partners.contains(&partner_number),
+                        OrbitError::PartnerNotWhitelisted
+                    );
+                }
+
+                (record.primary_account, record.user_id, record.user_type)
+                // record_data Ref is dropped here
+            };
+
+            // Validate that this position is not an LP borrow.
             require!(
-                record.primary_account == pos.lp_primary_account,
-                OrbitError::InvalidAccount
+                record_user_type != UserType::LP,
+                OrbitError::UnauthorizedBorrower
             );
 
-            // Check partner whitelist: if whitelisted_partners is non-empty, verify partner_number is in it
-            if !record.whitelisted_partners.is_empty() {
-                require!(
-                    record.whitelisted_partners.contains(&partner_number),
-                    OrbitError::PartnerNotWhitelisted
-                );
-            }
-            drop(record_data);
-
             // Derive authority seeds, validate, and transfer based on user type
-            match pos.user_type {
+            match record_user_type {
                 UserType::NCW => {
                     let seeds: &[&[u8]] = &[VAULT_SEED, pos.vault_id.as_ref()];
                     let (expected_authority, bump) =
@@ -407,8 +410,8 @@ pub mod zynk_orbit {
                 UserType::ICV => {
                     let seeds: &[&[u8]] = &[
                         RECORD_SEED,
-                        record.user_id.as_ref(),
-                        record.primary_account.as_ref(),
+                        record_user_id.as_ref(),
+                        primary_account.as_ref(),
                     ];
                     let (expected_authority, bump) =
                         Pubkey::find_program_address(seeds, ctx.program_id);
@@ -419,8 +422,8 @@ pub mod zynk_orbit {
 
                     let seeds_with_bump: &[&[u8]] = &[
                         RECORD_SEED,
-                        record.user_id.as_ref(),
-                        record.primary_account.as_ref(),
+                        record_user_id.as_ref(),
+                        primary_account.as_ref(),
                         &[bump],
                     ];
                     let signer_seeds = &[&seeds_with_bump[..]];
@@ -443,7 +446,7 @@ pub mod zynk_orbit {
             let position_seeds: &[&[u8]] = &[
                 POSITION_SEED,
                 order_id.as_ref(),
-                pos.lp_primary_account.as_ref(),
+                primary_account.as_ref(),
             ];
             let (expected_position_key, position_bump) =
                 Pubkey::find_program_address(position_seeds, ctx.program_id);
@@ -455,7 +458,7 @@ pub mod zynk_orbit {
             let position_seeds_with_bump: &[&[u8]] = &[
                 POSITION_SEED,
                 order_id.as_ref(),
-                pos.lp_primary_account.as_ref(),
+                primary_account.as_ref(),
                 &[position_bump],
             ];
             let position_signer_seeds = &[&position_seeds_with_bump[..]];
@@ -489,7 +492,7 @@ pub mod zynk_orbit {
                 partner_id: partner_id_bytes,
                 amount_borrowed: pos.amount,
                 amount_repaid: 0,
-                public_key: pos.lp_primary_account,
+                public_key: primary_account,
             };
             position_account.try_serialize(&mut &mut position_data[..])?;
             drop(position_data);
@@ -573,13 +576,8 @@ pub mod zynk_orbit {
             OrbitError::InvalidTokenMint
         );
 
-        // Validate all positions are NCW or ICV (not LP)
-        for pos in &positions {
-            require!(
-                pos.user_type != UserType::LP,
-                OrbitError::UnauthorizedBorrower
-            );
-        }
+        // LP/NCW/ICV type validation is deferred to per-position processing
+        // where record data (from remaining_accounts) is available.
 
         // Read the order tracker to determine remaining order amount
         let order_tracker_data = ctx.accounts.core_order_tracker.try_borrow_data()?;
@@ -664,13 +662,14 @@ pub mod zynk_orbit {
         // Second pass: distribute shares and execute transfers using cached data.
         struct PositionInfo {
             user_type: UserType,
+            primary_account: Pubkey,
             remaining: u64,
             share: u64,
         }
         let mut position_infos = Vec::with_capacity(num_positions);
         let mut total_position_remaining: u64 = 0;
 
-        for (i, pos) in positions.iter().enumerate() {
+        for (i, _pos) in positions.iter().enumerate() {
             let base_idx = i * 3;
             let _dst_token_account = &remaining_accounts[base_idx];
             let record_account = &remaining_accounts[base_idx + 1];
@@ -680,12 +679,15 @@ pub mod zynk_orbit {
             let record_data = record_account.data.borrow();
             let record = Record::try_deserialize(&mut &record_data[..])
                 .map_err(|_| OrbitError::InvalidAccount)?;
-            require!(
-                record.primary_account == pos.lp_primary_account,
-                OrbitError::InvalidAccount
-            );
             let record_user_type = record.user_type;
+            let record_primary_account = record.primary_account;
             drop(record_data);
+
+            // Validate that this position is not an LP repay.
+            require!(
+                record_user_type != UserType::LP,
+                OrbitError::UnauthorizedBorrower
+            );
 
             // Verify the position PDA
             let position_data = position_pda.data.borrow();
@@ -707,6 +709,7 @@ pub mod zynk_orbit {
 
             position_infos.push(PositionInfo {
                 user_type: record_user_type,
+                primary_account: record_primary_account,
                 remaining,
                 share: 0,
             });
@@ -772,18 +775,17 @@ pub mod zynk_orbit {
                 token_account.owner
             };
 
-            // Verify destination based on user type (using cached position info)
-            match pos.user_type {
+            // Verify destination based on user type (from cached record data in PositionInfo)
+            match info.user_type {
                 UserType::NCW => {
-                    require!(info.user_type == UserType::NCW, OrbitError::InvalidAccount);
                     // NCW: destination token account must be owned by the NCW's primary account
+                    // (primary_account is read from the record in remaining accounts)
                     require!(
-                        dst_token_authority == pos.lp_primary_account,
+                        dst_token_authority == info.primary_account,
                         OrbitError::InvalidAccount
                     );
                 }
                 UserType::ICV => {
-                    require!(info.user_type == UserType::ICV, OrbitError::InvalidAccount);
                     // ICV: destination token account must be owned by the Record PDA
                     require!(
                         dst_token_authority == record_account.key(),
