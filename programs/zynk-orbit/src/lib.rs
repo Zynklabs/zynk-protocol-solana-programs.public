@@ -389,9 +389,19 @@ pub mod zynk_orbit {
                         OrbitError::InvalidAccount
                     );
 
+                    // Deserialize the SPL token account data to read its authority (owner field).
+                    // AccountInfo.owner is the Token Program address, not the token account's authority.
+                    // The authority is stored inside the account data at bytes 32–64.
+                    let src_token_authority = {
+                        let data = source_token_account.try_borrow_data()?;
+                        let token_account = TokenAccount::try_deserialize_unchecked(&mut &data[..])
+                            .map_err(|_| OrbitError::InvalidAccount)?;
+                        token_account.owner
+                    };
+
                     // Verify the source token account is owned by this vault authority
                     require!(
-                        *source_token_account.owner == expected_authority,
+                        src_token_authority == expected_authority,
                         OrbitError::InvalidAccount
                     );
 
@@ -557,10 +567,16 @@ pub mod zynk_orbit {
         zov_id: [u8; 32],
         transient_order_id: [u8; 32],
         amount: u64,
-        positions: Vec<PositionOperation>,
         meta: Option<Vec<EventArg>>,
     ) -> Result<()> {
-        require!(!positions.is_empty(), OrbitError::EmptyPositions);
+        // Derive the number of positions from remaining_accounts (3 accounts per position:
+        // [destination_token_account, record, position_pda])
+        let num_positions = ctx.remaining_accounts.len() / 3;
+        require!(num_positions > 0, OrbitError::EmptyPositions);
+        require!(
+            ctx.remaining_accounts.len() % 3 == 0,
+            OrbitError::InvalidPositionOperation
+        );
         require!(amount > 0, OrbitError::ZeroAmount);
 
         // Validate manager against zynk-core config
@@ -592,6 +608,9 @@ pub mod zynk_orbit {
         let remaining_order = amount_out
             .checked_sub(amount_in)
             .ok_or(ProgramError::ArithmeticOverflow)?;
+
+        // Reject over-repayment — caller must not supply more than what is owed.
+        require!(amount <= remaining_order, OrbitError::ExcessiveRepay);
 
         // The prepared amount is capped by the remaining order amount
         let prepared_amount = amount.min(remaining_order);
@@ -649,14 +668,6 @@ pub mod zynk_orbit {
 
         // Step 3: Validate positions from remaining accounts
         let remaining_accounts = ctx.remaining_accounts;
-        let num_positions = positions.len();
-
-        // Each position requires 3 remaining accounts:
-        // [destination_token_account, record, position_pda]
-        require!(
-            remaining_accounts.len() >= num_positions * 3,
-            OrbitError::InvalidPositionOperation
-        );
 
         // First pass: validate all records and positions, cache user_type and remaining amount.
         // Second pass: distribute shares and execute transfers using cached data.
@@ -669,11 +680,11 @@ pub mod zynk_orbit {
         let mut position_infos = Vec::with_capacity(num_positions);
         let mut total_position_remaining: u64 = 0;
 
-        for (i, _pos) in positions.iter().enumerate() {
+        for i in 0..num_positions {
             let base_idx = i * 3;
-            let _dst_token_account = &remaining_accounts[base_idx];
-            let record_account = &remaining_accounts[base_idx + 1];
-            let position_pda = &remaining_accounts[base_idx + 2];
+            let _dst_token_account: &AccountInfo = &remaining_accounts[base_idx];
+            let record_account: &AccountInfo = &remaining_accounts[base_idx + 1];
+            let position_pda: &AccountInfo = &remaining_accounts[base_idx + 2];
 
             // Verify the record account
             let record_data = record_account.data.borrow();
@@ -754,11 +765,11 @@ pub mod zynk_orbit {
         let ovault_seeds: &[&[u8]] = &[VAULT_SEED, b"orbit", &[ctx.bumps.ovault]];
         let ovault_signer_seeds = &[&ovault_seeds[..]];
 
-        for (i, pos) in positions.iter().enumerate() {
+        for i in 0..num_positions {
             let base_idx = i * 3;
-            let dst_token_account = &remaining_accounts[base_idx];
-            let record_account = &remaining_accounts[base_idx + 1];
-            let position_pda = &remaining_accounts[base_idx + 2];
+            let dst_token_account: &AccountInfo = &remaining_accounts[base_idx];
+            let record_account: &AccountInfo = &remaining_accounts[base_idx + 1];
+            let position_pda: &AccountInfo = &remaining_accounts[base_idx + 2];
 
             let info = &position_infos[i];
             if info.share == 0 {
@@ -2046,4 +2057,6 @@ pub enum OrbitError {
     InvalidPartnerId,
     #[msg("Invalid zynk-core config account")]
     InvalidCoreConfig,
+    #[msg("Repay amount exceeds remaining order amount")]
+    ExcessiveRepay,
 }

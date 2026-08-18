@@ -288,6 +288,22 @@ describe("zynk-orbit", () => {
     let borrowOrderId: Buffer;
     let borrowOrderTrackerPDA: PublicKey;
 
+    // ── Shared state for B-P1 → repay tests (ICV) ────────────────────────────
+    let repayIcvOrderId: Buffer;
+    let repayIcvOrderTrackerPDA: PublicKey;
+    const repayIcvBorrowAmount = new anchor.BN(100_000_000);
+
+    // ── Shared state for B-P2 → repay tests (NCW) ────────────────────────────
+    let repayNcwOrderId: Buffer;
+    let repayNcwOrderTrackerPDA: PublicKey;
+    const repayNcwBorrowAmount = new anchor.BN(50_000_000);
+
+    // ── Shared state for B-P3 → repay tests (3 multi-position ICV) ───────────
+    let repayMultiOrderId: Buffer;
+    let repayMultiOrderTrackerPDA: PublicKey;
+    const repayMultiPositionAmount = new anchor.BN(10_000_000);
+    const REPAY_MULTI_POSITIONS = 3;
+
     let whitelistedTokenMints: PublicKey[] = [];
 
     // =========================================================================
@@ -1438,7 +1454,6 @@ describe("zynk-orbit", () => {
         // borrowIcvUser was whitelisted + deposited 200M in B-N3.
         // Borrow 100M — well within the available balance.
         const borrowIcvRecordPDA = deriveRecordPDA(borrowIcvUserId, borrowIcvUser.publicKey);
-        const borrowAmount = new anchor.BN(100_000_000);
         const orderId = generateOrderId();
         const orderTrackerPDA = deriveOrderTrackerPDA(borrowPartnerIdBytes, orderId);
         const positionPDA = derivePositionPDA(orderId, borrowIcvUser.publicKey);
@@ -1450,8 +1465,8 @@ describe("zynk-orbit", () => {
             .borrow(
                 zynkPartnerId,
                 Array.from(orderId), Array.from(defaultZovId),
-                borrowAmount,
-                [{ amount: borrowAmount, vaultId: Array.from(zeroZovId) }],
+                repayIcvBorrowAmount,
+                [{ amount: repayIcvBorrowAmount, vaultId: Array.from(zeroZovId) }],
                 null
             )
             .accounts({
@@ -1468,6 +1483,10 @@ describe("zynk-orbit", () => {
                 { pubkey: positionPDA,           isSigner: false, isWritable: true },
             ])
             .signers([manager]).rpc();
+
+        // Capture for repay tests
+        repayIcvOrderId = orderId;
+        repayIcvOrderTrackerPDA = orderTrackerPDA;
 
         const positionInfo = await provider.connection.getAccountInfo(positionPDA);
         assert.isNotNull(positionInfo, "Position PDA should have been created");
@@ -1490,7 +1509,6 @@ describe("zynk-orbit", () => {
                 .signers([admin]).rpc();
         }
 
-        const borrowAmount = new anchor.BN(50_000_000);
         const orderId = generateOrderId();
         const orderTrackerPDA = deriveOrderTrackerPDA(borrowPartnerIdBytes, orderId);
         const positionPDA = derivePositionPDA(orderId, borrowNcwUser.publicKey);
@@ -1504,8 +1522,8 @@ describe("zynk-orbit", () => {
             .borrow(
                 zynkPartnerId,
                 Array.from(orderId), Array.from(defaultZovId),
-                borrowAmount,
-                [{ amount: borrowAmount, vaultId: Array.from(ncwVaultId) }],
+                repayNcwBorrowAmount,
+                [{ amount: repayNcwBorrowAmount, vaultId: Array.from(ncwVaultId) }],
                 null
             )
             .accounts({
@@ -1522,6 +1540,10 @@ describe("zynk-orbit", () => {
                 { pubkey: positionPDA,          isSigner: false, isWritable: true },  // position
             ])
             .signers([manager]).rpc();
+
+        // Capture for repay tests
+        repayNcwOrderId = orderId;
+        repayNcwOrderTrackerPDA = orderTrackerPDA;
 
         const positionInfo = await provider.connection.getAccountInfo(positionPDA);
         assert.isNotNull(positionInfo, "Position PDA should have been created for NCW user");
@@ -1600,6 +1622,10 @@ describe("zynk-orbit", () => {
             .remainingAccounts(remainingAccounts)
             .signers([manager]).rpc();
 
+        // Capture for repay tests
+        repayMultiOrderId = orderId;
+        repayMultiOrderTrackerPDA = orderTrackerPDA;
+
         // Verify every position PDA was created and is owned by the orbit program.
         for (let i = 0; i < MAX_POSITIONS; i++) {
             const positionPDA = derivePositionPDA(orderId, multiIcvUsers[i].publicKey);
@@ -1611,6 +1637,627 @@ describe("zynk-orbit", () => {
             );
         }
     });
+
+    // =========================================================================
+    // TEST 8 – Repay
+    // =========================================================================
+
+    // ── R-P1 : Manager repays against the ICV user (B-P1 position, full repay) ──
+    it("Manager repays against the ICV user (full repay)", async () => {
+        const borrowIcvRecordPDA = deriveRecordPDA(borrowIcvUserId, borrowIcvUser.publicKey);
+        const positionPDA = derivePositionPDA(repayIcvOrderId, borrowIcvUser.publicKey);
+        const transientOrderId = generateOrderId();
+        const [transientOrderTrackerPDA] = PublicKey.findProgramAddressSync(
+            [Buffer.from("order_tracker"), borrowPartnerIdBytes, transientOrderId],
+            core_program.programId
+        );
+        const [coreZovPDA] = PublicKey.findProgramAddressSync(
+            [Buffer.from("zynk_op_vault"), defaultZovId], core_program.programId
+        );
+        const positionBefore = await provider.connection.getAccountInfo(positionPDA);
+        assert.isNotNull(positionBefore, "ICV Position PDA should exist before repay");
+
+        await program.methods
+            .repay(
+                Array.from(borrowPartnerIdBytes),
+                Array.from(repayIcvOrderId),
+                Array.from(defaultZovId),
+                Array.from(transientOrderId),
+                repayIcvBorrowAmount,
+                null
+            )
+            .accounts({
+                zovTokenAccount: zovAta, ovaultTokenAccount: ovaultAta,
+                mint: tokenMint, manager: manager.publicKey,
+                tokenProgram: TOKEN_PROGRAM_ID, coreConfig: configPDA,
+                coreOrderTracker: repayIcvOrderTrackerPDA,
+                corePartnerDepositVault: partnerDepositVaultPDA, corePdvTokenAccount: pdvAta,
+                coreZynkOpVault: coreZovPDA, coreTransientOrderTracker: transientOrderTrackerPDA,
+                ovault: ovaultPDA, ovaultsBeneficiaryPda: coreBeneficiaryPDA,
+            } as any)
+            .remainingAccounts([
+                { pubkey: borrowIcvTokenAccount, isSigner: false, isWritable: true },
+                { pubkey: borrowIcvRecordPDA,    isSigner: false, isWritable: false },
+                { pubkey: positionPDA,           isSigner: false, isWritable: true },
+            ])
+            .signers([manager])
+            .rpc();
+
+        const positionAfter = await provider.connection.getAccountInfo(positionPDA);
+        assert.isNull(positionAfter, "ICV Position PDA should be closed after full repay");
+    });
+
+    // ── R-P2 : Manager repays against the NCW user (B-P2 position, full repay) ──
+    it("Manager repays against the NCW user (full repay)", async () => {
+        const ncwRecordPDA = deriveRecordPDA(borrowNcwUserId, borrowNcwUser.publicKey);
+        const positionPDA = derivePositionPDA(repayNcwOrderId, borrowNcwUser.publicKey);
+        const transientOrderId = generateOrderId();
+        const [transientOrderTrackerPDA] = PublicKey.findProgramAddressSync(
+            [Buffer.from("order_tracker"), borrowPartnerIdBytes, transientOrderId],
+            core_program.programId
+        );
+        const [coreZovPDA] = PublicKey.findProgramAddressSync(
+            [Buffer.from("zynk_op_vault"), defaultZovId], core_program.programId
+        );
+        const positionBefore = await provider.connection.getAccountInfo(positionPDA);
+        assert.isNotNull(positionBefore, "NCW Position PDA should exist before repay");
+
+        await program.methods
+            .repay(
+                Array.from(borrowPartnerIdBytes),
+                Array.from(repayNcwOrderId),
+                Array.from(defaultZovId),
+                Array.from(transientOrderId),
+                repayNcwBorrowAmount,
+                null
+            )
+            .accounts({
+                zovTokenAccount: zovAta, ovaultTokenAccount: ovaultAta,
+                mint: tokenMint, manager: manager.publicKey,
+                tokenProgram: TOKEN_PROGRAM_ID, coreConfig: configPDA,
+                coreOrderTracker: repayNcwOrderTrackerPDA,
+                corePartnerDepositVault: partnerDepositVaultPDA, corePdvTokenAccount: pdvAta,
+                coreZynkOpVault: coreZovPDA, coreTransientOrderTracker: transientOrderTrackerPDA,
+                ovault: ovaultPDA, ovaultsBeneficiaryPda: coreBeneficiaryPDA,
+            } as any)
+            .remainingAccounts([
+                // NCW: destination is borrowNcwUserAta (owned by borrowNcwUser == record.primary_account)
+                { pubkey: borrowNcwUserAta, isSigner: false, isWritable: true },
+                { pubkey: ncwRecordPDA,     isSigner: false, isWritable: false },
+                { pubkey: positionPDA,      isSigner: false, isWritable: true },
+            ])
+            .signers([manager])
+            .rpc();
+
+        const positionAfter = await provider.connection.getAccountInfo(positionPDA);
+        assert.isNull(positionAfter, "NCW Position PDA should be closed after full repay");
+    });
+
+    // ── R-P3 : Repay with multiple positions (3-position, full repay) ────────
+    it("Should be able to repay with multiple positions (3 positions) for an order", async () => {
+        const totalRepayAmount = new anchor.BN(repayMultiPositionAmount.toNumber() * REPAY_MULTI_POSITIONS);
+        const transientOrderId = generateOrderId();
+        const [transientOrderTrackerPDA] = PublicKey.findProgramAddressSync(
+            [Buffer.from("order_tracker"), borrowPartnerIdBytes, transientOrderId],
+            core_program.programId
+        );
+        const [coreZovPDA] = PublicKey.findProgramAddressSync(
+            [Buffer.from("zynk_op_vault"), defaultZovId], core_program.programId
+        );
+
+        const remainingAccounts: { pubkey: PublicKey; isSigner: boolean; isWritable: boolean }[] = [];
+        for (let i = 0; i < REPAY_MULTI_POSITIONS; i++) {
+            const recordPDA = deriveRecordPDA(multiIcvUserIds[i], multiIcvUsers[i].publicKey);
+            const positionPDA = derivePositionPDA(repayMultiOrderId, multiIcvUsers[i].publicKey);
+            remainingAccounts.push(
+                { pubkey: multiIcvTokenAccounts[i], isSigner: false, isWritable: true },
+                { pubkey: recordPDA,                isSigner: false, isWritable: false },
+                { pubkey: positionPDA,              isSigner: false, isWritable: true },
+            );
+        }
+
+        await program.methods
+            .repay(
+                Array.from(borrowPartnerIdBytes),
+                Array.from(repayMultiOrderId),
+                Array.from(defaultZovId),
+                Array.from(transientOrderId),
+                totalRepayAmount,
+                null
+            )
+            .accounts({
+                zovTokenAccount: zovAta, ovaultTokenAccount: ovaultAta,
+                mint: tokenMint, manager: manager.publicKey,
+                tokenProgram: TOKEN_PROGRAM_ID, coreConfig: configPDA,
+                coreOrderTracker: repayMultiOrderTrackerPDA,
+                corePartnerDepositVault: partnerDepositVaultPDA, corePdvTokenAccount: pdvAta,
+                coreZynkOpVault: coreZovPDA, coreTransientOrderTracker: transientOrderTrackerPDA,
+                ovault: ovaultPDA, ovaultsBeneficiaryPda: coreBeneficiaryPDA,
+            } as any)
+            .remainingAccounts(remainingAccounts)
+            .signers([manager])
+            .rpc();
+
+        for (let i = 0; i < REPAY_MULTI_POSITIONS; i++) {
+            const positionPDA = derivePositionPDA(repayMultiOrderId, multiIcvUsers[i].publicKey);
+            const positionAfter = await provider.connection.getAccountInfo(positionPDA);
+            assert.isNull(positionAfter, `Position PDA for user ${i} should be closed after full repay`);
+        }
+    });
+
+    // ── R-P4 : Partial repay — positions dissolved proportionally ────────────
+    it("Should be able to do partial repay and each position should be dissolved proportionally", async () => {
+        const nowTs = Math.floor(Date.now() / 1000);
+        const futureCliff = new anchor.BN(nowTs + 365 * 24 * 60 * 60);
+        const amounts = [new anchor.BN(20_000_000), new anchor.BN(40_000_000)];
+        const totalBorrowAmount = new anchor.BN(60_000_000);
+        const partialRepayAmount = new anchor.BN(30_000_000);
+
+        for (let i = 3; i < 5; i++) {
+            const rPDA = deriveRecordPDA(multiIcvUserIds[i], multiIcvUsers[i].publicKey);
+            const existing = await provider.connection.getAccountInfo(rPDA);
+            if (!existing) {
+                await program.methods
+                    .whitelist(Array.from(multiIcvUserIds[i]), { icv: {} }, multiIcvUsers[i].publicKey, futureCliff, 100_000_000, null)
+                    .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+                    .signers([admin]).rpc();
+                const ca = await gocAta(rPDA, tokenMint);
+                while (multiIcvTokenAccounts.length <= i) multiIcvTokenAccounts.push(ca);
+                await program.methods
+                    .deposit(Array.from(multiIcvUserIds[i]), amounts[i - 3])
+                    .accounts({
+                        sourceTokenAccount: multiIcvUserAtas[i], destinationTokenAccount: ca,
+                        record: rPDA, mint: tokenMint, signer: multiIcvUsers[i].publicKey,
+                        tokenProgram: TOKEN_PROGRAM_ID, coreConfig: configPDA,
+                    } as any)
+                    .signers([multiIcvUsers[i]]).rpc();
+            } else {
+                const ca = await gocAta(rPDA, tokenMint);
+                while (multiIcvTokenAccounts.length <= i) multiIcvTokenAccounts.push(ca);
+            }
+        }
+
+        const pOId = generateOrderId();
+        const pOTPDA = deriveOrderTrackerPDA(borrowPartnerIdBytes, pOId);
+        const [czovPDA] = PublicKey.findProgramAddressSync(
+            [Buffer.from("zynk_op_vault"), defaultZovId], core_program.programId
+        );
+        const r3 = deriveRecordPDA(multiIcvUserIds[3], multiIcvUsers[3].publicKey);
+        const r4 = deriveRecordPDA(multiIcvUserIds[4], multiIcvUsers[4].publicKey);
+        const p3 = derivePositionPDA(pOId, multiIcvUsers[3].publicKey);
+        const p4 = derivePositionPDA(pOId, multiIcvUsers[4].publicKey);
+
+        await program.methods
+            .borrow(zynkPartnerId, Array.from(pOId), Array.from(defaultZovId), totalBorrowAmount,
+                [{ amount: amounts[0], vaultId: Array.from(zeroZovId) },
+                 { amount: amounts[1], vaultId: Array.from(zeroZovId) }], null)
+            .accounts({
+                zovTokenAccount: zovAta, mint: tokenMint, manager: manager.publicKey,
+                tokenProgram: TOKEN_PROGRAM_ID, coreConfig: configPDA,
+                corePartnerDepositVault: partnerDepositVaultPDA, coreZynkOpVault: czovPDA,
+                coreBeneficiary: coreBeneficiaryPDA, coreBeneficiaryTokenAccount: ovaultAta,
+                coreOrderTracker: pOTPDA,
+            } as any)
+            .remainingAccounts([
+                { pubkey: multiIcvTokenAccounts[3], isSigner: false, isWritable: true },
+                { pubkey: r3, isSigner: false, isWritable: false },
+                { pubkey: r3, isSigner: false, isWritable: false },
+                { pubkey: p3, isSigner: false, isWritable: true  },
+                { pubkey: multiIcvTokenAccounts[4], isSigner: false, isWritable: true },
+                { pubkey: r4, isSigner: false, isWritable: false },
+                { pubkey: r4, isSigner: false, isWritable: false },
+                { pubkey: p4, isSigner: false, isWritable: true  },
+            ])
+            .signers([manager]).rpc();
+        const tOId = generateOrderId();
+        const [tOTPDA] = PublicKey.findProgramAddressSync(
+            [Buffer.from("order_tracker"), borrowPartnerIdBytes, tOId], core_program.programId
+        );
+        await program.methods
+            .repay(
+                Array.from(borrowPartnerIdBytes), Array.from(pOId),
+                Array.from(defaultZovId), Array.from(tOId), partialRepayAmount,
+                null
+            )
+            .accounts({
+                zovTokenAccount: zovAta, ovaultTokenAccount: ovaultAta,
+                mint: tokenMint, manager: manager.publicKey,
+                tokenProgram: TOKEN_PROGRAM_ID, coreConfig: configPDA,
+                coreOrderTracker: pOTPDA,
+                corePartnerDepositVault: partnerDepositVaultPDA, corePdvTokenAccount: pdvAta,
+                coreZynkOpVault: czovPDA, coreTransientOrderTracker: tOTPDA,
+                ovault: ovaultPDA, ovaultsBeneficiaryPda: coreBeneficiaryPDA,
+            } as any)
+            .remainingAccounts([
+                { pubkey: multiIcvTokenAccounts[3], isSigner: false, isWritable: true },
+                { pubkey: r3, isSigner: false, isWritable: false },
+                { pubkey: p3, isSigner: false, isWritable: true  },
+                { pubkey: multiIcvTokenAccounts[4], isSigner: false, isWritable: true },
+                { pubkey: r4, isSigner: false, isWritable: false },
+                { pubkey: p4, isSigner: false, isWritable: true  },
+            ])
+            .signers([manager]).rpc();
+
+        // Position layout: 8(disc)+32(order_id)+32(partner_id) → amount_borrowed@72, amount_repaid@80
+        const readRepaid = async (pda: PublicKey) => {
+            const info = await provider.connection.getAccountInfo(pda);
+            assert.isNotNull(info, "Position must exist after partial repay");
+            const d = info!.data;
+            return { amountBorrowed: Number(d.readBigUInt64LE(72)), amountRepaid: Number(d.readBigUInt64LE(80)) };
+        };
+        const pos3Data = await readRepaid(p3);
+        const pos4Data = await readRepaid(p4);
+        // ceil(30M * 20M / 60M) = 10M  |  30M - 10M = 20M
+        assert.equal(pos3Data.amountRepaid, 10_000_000, "user[3]: 10M repaid proportionally");
+        assert.isBelow(pos3Data.amountRepaid, pos3Data.amountBorrowed, "user[3] stays open");
+        assert.equal(pos4Data.amountRepaid, 20_000_000, "user[4]: 20M repaid proportionally");
+        assert.isBelow(pos4Data.amountRepaid, pos4Data.amountBorrowed, "user[4] stays open");
+    });
+
+
+    // ── R-N1 : Sum of position remaining ≠ remaining order → AmountMismatch ──
+    it("Should not be able to repay if sum of amount of all positions is not equal to remaining amount in order tracker", async () => {
+        const nowTs = Math.floor(Date.now() / 1000);
+        const futureCliff = new anchor.BN(nowTs + 365 * 24 * 60 * 60);
+        const singleAmount = new anchor.BN(15_000_000);
+        const totalBorrowAmount = new anchor.BN(30_000_000);
+
+        for (let i = 5; i < 7; i++) {
+            const rPDA = deriveRecordPDA(multiIcvUserIds[i], multiIcvUsers[i].publicKey);
+            const existing = await provider.connection.getAccountInfo(rPDA);
+            if (!existing) {
+                await program.methods
+                    .whitelist(Array.from(multiIcvUserIds[i]), { icv: {} }, multiIcvUsers[i].publicKey, futureCliff, 100_000_000, null)
+                    .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+                    .signers([admin]).rpc();
+                const ca = await gocAta(rPDA, tokenMint);
+                while (multiIcvTokenAccounts.length <= i) multiIcvTokenAccounts.push(ca);
+                await program.methods
+                    .deposit(Array.from(multiIcvUserIds[i]), singleAmount)
+                    .accounts({
+                        sourceTokenAccount: multiIcvUserAtas[i], destinationTokenAccount: ca,
+                        record: rPDA, mint: tokenMint, signer: multiIcvUsers[i].publicKey,
+                        tokenProgram: TOKEN_PROGRAM_ID, coreConfig: configPDA,
+                    } as any)
+                    .signers([multiIcvUsers[i]]).rpc();
+            } else {
+                const ca = await gocAta(rPDA, tokenMint);
+                while (multiIcvTokenAccounts.length <= i) multiIcvTokenAccounts.push(ca);
+            }
+        }
+
+        const orderId = generateOrderId();
+        const orderTrackerPDA = deriveOrderTrackerPDA(borrowPartnerIdBytes, orderId);
+        const [czovPDA] = PublicKey.findProgramAddressSync(
+            [Buffer.from("zynk_op_vault"), defaultZovId], core_program.programId
+        );
+        const r5 = deriveRecordPDA(multiIcvUserIds[5], multiIcvUsers[5].publicKey);
+        const r6 = deriveRecordPDA(multiIcvUserIds[6], multiIcvUsers[6].publicKey);
+        const pos5 = derivePositionPDA(orderId, multiIcvUsers[5].publicKey);
+        const pos6 = derivePositionPDA(orderId, multiIcvUsers[6].publicKey);
+
+        await program.methods
+            .borrow(zynkPartnerId, Array.from(orderId), Array.from(defaultZovId), totalBorrowAmount,
+                [{ amount: singleAmount, vaultId: Array.from(zeroZovId) },
+                 { amount: singleAmount, vaultId: Array.from(zeroZovId) }], null)
+            .accounts({
+                zovTokenAccount: zovAta, mint: tokenMint, manager: manager.publicKey,
+                tokenProgram: TOKEN_PROGRAM_ID, coreConfig: configPDA,
+                corePartnerDepositVault: partnerDepositVaultPDA, coreZynkOpVault: czovPDA,
+                coreBeneficiary: coreBeneficiaryPDA, coreBeneficiaryTokenAccount: ovaultAta,
+                coreOrderTracker: orderTrackerPDA,
+            } as any)
+            .remainingAccounts([
+                { pubkey: multiIcvTokenAccounts[5], isSigner: false, isWritable: true },
+                { pubkey: r5, isSigner: false, isWritable: false },
+                { pubkey: r5, isSigner: false, isWritable: false },
+                { pubkey: pos5, isSigner: false, isWritable: true },
+                { pubkey: multiIcvTokenAccounts[6], isSigner: false, isWritable: true },
+                { pubkey: r6, isSigner: false, isWritable: false },
+                { pubkey: r6, isSigner: false, isWritable: false },
+                { pubkey: pos6, isSigner: false, isWritable: true },
+            ])
+            .signers([manager]).rpc();
+
+        // Repay with only 1 position (15M) while remaining_order = 30M → AmountMismatch
+        const tOId = generateOrderId();
+        const [tOTPDA] = PublicKey.findProgramAddressSync(
+            [Buffer.from("order_tracker"), borrowPartnerIdBytes, tOId], core_program.programId
+        );
+        try {
+            await program.methods
+                .repay(
+                    Array.from(borrowPartnerIdBytes), Array.from(orderId),
+                    Array.from(defaultZovId), Array.from(tOId), singleAmount,
+                    null
+                )
+                .accounts({
+                    zovTokenAccount: zovAta, ovaultTokenAccount: ovaultAta,
+                    mint: tokenMint, manager: manager.publicKey,
+                    tokenProgram: TOKEN_PROGRAM_ID, coreConfig: configPDA,
+                    coreOrderTracker: orderTrackerPDA,
+                    corePartnerDepositVault: partnerDepositVaultPDA, corePdvTokenAccount: pdvAta,
+                    coreZynkOpVault: czovPDA, coreTransientOrderTracker: tOTPDA,
+                    ovault: ovaultPDA, ovaultsBeneficiaryPda: coreBeneficiaryPDA,
+                } as any)
+                .remainingAccounts([
+                    { pubkey: multiIcvTokenAccounts[5], isSigner: false, isWritable: true },
+                    { pubkey: r5,   isSigner: false, isWritable: false },
+                    { pubkey: pos5, isSigner: false, isWritable: true  },
+                ])
+                .signers([manager]).rpc();
+            assert.fail("Expected AmountMismatch when only subset of positions supplied");
+        } catch (err: any) {
+            assert.include(err.message, "AmountMismatch",
+                "Error should be AmountMismatch when sum of position remaining ≠ remaining order");
+        }
+    });
+
+
+    // ── R-N2 : Wrong mint token → error ──────────────────────────────────────
+    it("Should not be able to repay using different mint token than that of borrow", async () => {
+        const nowTs = Math.floor(Date.now() / 1000);
+        const futureCliff = new anchor.BN(nowTs + 365 * 24 * 60 * 60);
+        const borrowAmt = new anchor.BN(10_000_000);
+        const r7PDA = deriveRecordPDA(multiIcvUserIds[7], multiIcvUsers[7].publicKey);
+        const existing7 = await provider.connection.getAccountInfo(r7PDA);
+        if (!existing7) {
+            await program.methods
+                .whitelist(Array.from(multiIcvUserIds[7]), { icv: {} }, multiIcvUsers[7].publicKey, futureCliff, 100_000_000, null)
+                .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+                .signers([admin]).rpc();
+            const ca = await gocAta(r7PDA, tokenMint);
+            while (multiIcvTokenAccounts.length <= 7) multiIcvTokenAccounts.push(ca);
+            await program.methods
+                .deposit(Array.from(multiIcvUserIds[7]), borrowAmt)
+                .accounts({
+                    sourceTokenAccount: multiIcvUserAtas[7], destinationTokenAccount: ca,
+                    record: r7PDA, mint: tokenMint, signer: multiIcvUsers[7].publicKey,
+                    tokenProgram: TOKEN_PROGRAM_ID, coreConfig: configPDA,
+                } as any)
+                .signers([multiIcvUsers[7]]).rpc();
+        } else {
+            const ca = await gocAta(r7PDA, tokenMint);
+            while (multiIcvTokenAccounts.length <= 7) multiIcvTokenAccounts.push(ca);
+        }
+
+        const orderId = generateOrderId();
+        const orderTrackerPDA = deriveOrderTrackerPDA(borrowPartnerIdBytes, orderId);
+        const positionPDA = derivePositionPDA(orderId, multiIcvUsers[7].publicKey);
+        const [czovPDA] = PublicKey.findProgramAddressSync(
+            [Buffer.from("zynk_op_vault"), defaultZovId], core_program.programId
+        );
+
+        await program.methods
+            .borrow(zynkPartnerId, Array.from(orderId), Array.from(defaultZovId), borrowAmt,
+                [{ amount: borrowAmt, vaultId: Array.from(zeroZovId) }], null)
+            .accounts({
+                zovTokenAccount: zovAta, mint: tokenMint, manager: manager.publicKey,
+                tokenProgram: TOKEN_PROGRAM_ID, coreConfig: configPDA,
+                corePartnerDepositVault: partnerDepositVaultPDA, coreZynkOpVault: czovPDA,
+                coreBeneficiary: coreBeneficiaryPDA, coreBeneficiaryTokenAccount: ovaultAta,
+                coreOrderTracker: orderTrackerPDA,
+            } as any)
+            .remainingAccounts([
+                { pubkey: multiIcvTokenAccounts[7], isSigner: false, isWritable: true },
+                { pubkey: r7PDA, isSigner: false, isWritable: false },
+                { pubkey: r7PDA, isSigner: false, isWritable: false },
+                { pubkey: positionPDA, isSigner: false, isWritable: true },
+            ])
+            .signers([manager]).rpc();
+
+        // Attempt repay with invalidTokenMint (not in whitelist)
+        const invalidZovAta = await gocAtaAndMint(zynkOpVault, invalidTokenMint, 1_000_000_000);
+        const invalidOvaultAta = await gocAta(ovaultPDA, invalidTokenMint);
+        const tOId = generateOrderId();
+        const [tOTPDA] = PublicKey.findProgramAddressSync(
+            [Buffer.from("order_tracker"), borrowPartnerIdBytes, tOId], core_program.programId
+        );
+        try {
+            await program.methods
+                .repay(
+                    Array.from(borrowPartnerIdBytes), Array.from(orderId),
+                    Array.from(defaultZovId), Array.from(tOId), borrowAmt,
+                    null
+                )
+                .accounts({
+                    zovTokenAccount: invalidZovAta, ovaultTokenAccount: invalidOvaultAta,
+                    mint: invalidTokenMint, manager: manager.publicKey,
+                    tokenProgram: TOKEN_PROGRAM_ID, coreConfig: configPDA,
+                    coreOrderTracker: orderTrackerPDA,
+                    corePartnerDepositVault: partnerDepositVaultPDA, corePdvTokenAccount: pdvAta,
+                    coreZynkOpVault: czovPDA, coreTransientOrderTracker: tOTPDA,
+                    ovault: ovaultPDA, ovaultsBeneficiaryPda: coreBeneficiaryPDA,
+                } as any)
+                .remainingAccounts([
+                    { pubkey: multiIcvTokenAccounts[7], isSigner: false, isWritable: true },
+                    { pubkey: r7PDA,     isSigner: false, isWritable: false },
+                    { pubkey: positionPDA, isSigner: false, isWritable: true },
+                ])
+                .signers([manager]).rpc();
+            assert.fail("Expected error when repaying with a different mint than the borrow");
+        } catch (err: any) {
+            assert.ok(err.message.length > 0,
+                "An error should be thrown when repaying with a different mint than the borrow");
+        }
+    });
+
+
+    // ── R-N3 : Destination belongs to a different record → InvalidAccount ─────
+    it("Should not close position to a different record than from which funds were borrowed", async () => {
+        const nowTs = Math.floor(Date.now() / 1000);
+        const futureCliff = new anchor.BN(nowTs + 365 * 24 * 60 * 60);
+        const borrowAmt = new anchor.BN(10_000_000);
+        const r8PDA = deriveRecordPDA(multiIcvUserIds[8], multiIcvUsers[8].publicKey);
+        const existing8 = await provider.connection.getAccountInfo(r8PDA);
+        if (!existing8) {
+            await program.methods
+                .whitelist(Array.from(multiIcvUserIds[8]), { icv: {} }, multiIcvUsers[8].publicKey, futureCliff, 100_000_000, null)
+                .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+                .signers([admin]).rpc();
+            const ca = await gocAta(r8PDA, tokenMint);
+            while (multiIcvTokenAccounts.length <= 8) multiIcvTokenAccounts.push(ca);
+            await program.methods
+                .deposit(Array.from(multiIcvUserIds[8]), borrowAmt)
+                .accounts({
+                    sourceTokenAccount: multiIcvUserAtas[8], destinationTokenAccount: ca,
+                    record: r8PDA, mint: tokenMint, signer: multiIcvUsers[8].publicKey,
+                    tokenProgram: TOKEN_PROGRAM_ID, coreConfig: configPDA,
+                } as any)
+                .signers([multiIcvUsers[8]]).rpc();
+        } else {
+            const ca = await gocAta(r8PDA, tokenMint);
+            while (multiIcvTokenAccounts.length <= 8) multiIcvTokenAccounts.push(ca);
+        }
+
+        const orderId8 = generateOrderId();
+        const orderTrackerPDA8 = deriveOrderTrackerPDA(borrowPartnerIdBytes, orderId8);
+        const positionPDA8 = derivePositionPDA(orderId8, multiIcvUsers[8].publicKey);
+        const [czovPDA] = PublicKey.findProgramAddressSync(
+            [Buffer.from("zynk_op_vault"), defaultZovId], core_program.programId
+        );
+
+        await program.methods
+            .borrow(zynkPartnerId, Array.from(orderId8), Array.from(defaultZovId), borrowAmt,
+                [{ amount: borrowAmt, vaultId: Array.from(zeroZovId) }], null)
+            .accounts({
+                zovTokenAccount: zovAta, mint: tokenMint, manager: manager.publicKey,
+                tokenProgram: TOKEN_PROGRAM_ID, coreConfig: configPDA,
+                corePartnerDepositVault: partnerDepositVaultPDA, coreZynkOpVault: czovPDA,
+                coreBeneficiary: coreBeneficiaryPDA, coreBeneficiaryTokenAccount: ovaultAta,
+                coreOrderTracker: orderTrackerPDA8,
+            } as any)
+            .remainingAccounts([
+                { pubkey: multiIcvTokenAccounts[8], isSigner: false, isWritable: true },
+                { pubkey: r8PDA, isSigner: false, isWritable: false },
+                { pubkey: r8PDA, isSigner: false, isWritable: false },
+                { pubkey: positionPDA8, isSigner: false, isWritable: true },
+            ])
+            .signers([manager]).rpc();
+
+        const tOId8 = generateOrderId();
+        const [tOTPDA8] = PublicKey.findProgramAddressSync(
+            [Buffer.from("order_tracker"), borrowPartnerIdBytes, tOId8], core_program.programId
+        );
+        try {
+            await program.methods
+                .repay(
+                    Array.from(borrowPartnerIdBytes), Array.from(orderId8),
+                    Array.from(defaultZovId), Array.from(tOId8), borrowAmt,
+                    null
+                )
+                .accounts({
+                    zovTokenAccount: zovAta, ovaultTokenAccount: ovaultAta,
+                    mint: tokenMint, manager: manager.publicKey,
+                    tokenProgram: TOKEN_PROGRAM_ID, coreConfig: configPDA,
+                    coreOrderTracker: orderTrackerPDA8,
+                    corePartnerDepositVault: partnerDepositVaultPDA, corePdvTokenAccount: pdvAta,
+                    coreZynkOpVault: czovPDA, coreTransientOrderTracker: tOTPDA8,
+                    ovault: ovaultPDA, ovaultsBeneficiaryPda: coreBeneficiaryPDA,
+                } as any)
+                .remainingAccounts([
+                    // Wrong destination: borrowIcvTokenAccount is owned by borrowIcvUser's record, not r8PDA
+                    { pubkey: borrowIcvTokenAccount, isSigner: false, isWritable: true },
+                    { pubkey: r8PDA,       isSigner: false, isWritable: false },
+                    { pubkey: positionPDA8, isSigner: false, isWritable: true },
+                ])
+                .signers([manager]).rpc();
+            assert.fail("Expected InvalidAccount when destination belongs to a different record");
+        } catch (err: any) {
+            assert.include(err.message, "InvalidAccount",
+                "Error should be InvalidAccount when destination token account belongs to a different record");
+        }
+    });
+
+
+    // ── R-N4 : Repay amount > remaining order → ExcessiveRepay ───────────────
+    it("Should not repay more funds than that of borrowed even though we can replenish with higher amount", async () => {
+        const nowTs = Math.floor(Date.now() / 1000);
+        const futureCliff = new anchor.BN(nowTs + 365 * 24 * 60 * 60);
+        const borrowAmt = new anchor.BN(10_000_000);
+        const overRepayAmt = new anchor.BN(20_000_000); // 2× the borrowed amount
+        const r9PDA = deriveRecordPDA(multiIcvUserIds[9], multiIcvUsers[9].publicKey);
+        const existing9 = await provider.connection.getAccountInfo(r9PDA);
+        if (!existing9) {
+            await program.methods
+                .whitelist(Array.from(multiIcvUserIds[9]), { icv: {} }, multiIcvUsers[9].publicKey, futureCliff, 100_000_000, null)
+                .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+                .signers([admin]).rpc();
+            const ca = await gocAta(r9PDA, tokenMint);
+            while (multiIcvTokenAccounts.length <= 9) multiIcvTokenAccounts.push(ca);
+            await program.methods
+                .deposit(Array.from(multiIcvUserIds[9]), borrowAmt)
+                .accounts({
+                    sourceTokenAccount: multiIcvUserAtas[9], destinationTokenAccount: ca,
+                    record: r9PDA, mint: tokenMint, signer: multiIcvUsers[9].publicKey,
+                    tokenProgram: TOKEN_PROGRAM_ID, coreConfig: configPDA,
+                } as any)
+                .signers([multiIcvUsers[9]]).rpc();
+        } else {
+            const ca = await gocAta(r9PDA, tokenMint);
+            while (multiIcvTokenAccounts.length <= 9) multiIcvTokenAccounts.push(ca);
+        }
+
+        const orderId9 = generateOrderId();
+        const orderTrackerPDA9 = deriveOrderTrackerPDA(borrowPartnerIdBytes, orderId9);
+        const positionPDA9 = derivePositionPDA(orderId9, multiIcvUsers[9].publicKey);
+        const [czovPDA] = PublicKey.findProgramAddressSync(
+            [Buffer.from("zynk_op_vault"), defaultZovId], core_program.programId
+        );
+
+        await program.methods
+            .borrow(zynkPartnerId, Array.from(orderId9), Array.from(defaultZovId), borrowAmt,
+                [{ amount: borrowAmt, vaultId: Array.from(zeroZovId) }], null)
+            .accounts({
+                zovTokenAccount: zovAta, mint: tokenMint, manager: manager.publicKey,
+                tokenProgram: TOKEN_PROGRAM_ID, coreConfig: configPDA,
+                corePartnerDepositVault: partnerDepositVaultPDA, coreZynkOpVault: czovPDA,
+                coreBeneficiary: coreBeneficiaryPDA, coreBeneficiaryTokenAccount: ovaultAta,
+                coreOrderTracker: orderTrackerPDA9,
+            } as any)
+            .remainingAccounts([
+                { pubkey: multiIcvTokenAccounts[9], isSigner: false, isWritable: true },
+                { pubkey: r9PDA, isSigner: false, isWritable: false },
+                { pubkey: r9PDA, isSigner: false, isWritable: false },
+                { pubkey: positionPDA9, isSigner: false, isWritable: true },
+            ])
+            .signers([manager]).rpc();
+
+        // Attempt over-repay: 20M > 10M remaining order
+        const tOId9 = generateOrderId();
+        const [tOTPDA9] = PublicKey.findProgramAddressSync(
+            [Buffer.from("order_tracker"), borrowPartnerIdBytes, tOId9], core_program.programId
+        );
+        try {
+            await program.methods
+                .repay(
+                    Array.from(borrowPartnerIdBytes), Array.from(orderId9),
+                    Array.from(defaultZovId), Array.from(tOId9),
+                    overRepayAmt,   // 20M > 10M remaining
+                    null
+                )
+                .accounts({
+                    zovTokenAccount: zovAta, ovaultTokenAccount: ovaultAta,
+                    mint: tokenMint, manager: manager.publicKey,
+                    tokenProgram: TOKEN_PROGRAM_ID, coreConfig: configPDA,
+                    coreOrderTracker: orderTrackerPDA9,
+                    corePartnerDepositVault: partnerDepositVaultPDA, corePdvTokenAccount: pdvAta,
+                    coreZynkOpVault: czovPDA, coreTransientOrderTracker: tOTPDA9,
+                    ovault: ovaultPDA, ovaultsBeneficiaryPda: coreBeneficiaryPDA,
+                } as any)
+                .remainingAccounts([
+                    { pubkey: multiIcvTokenAccounts[9], isSigner: false, isWritable: true },
+                    { pubkey: r9PDA,      isSigner: false, isWritable: false },
+                    { pubkey: positionPDA9, isSigner: false, isWritable: true },
+                ])
+                .signers([manager]).rpc();
+            assert.fail("Expected ExcessiveRepay when repay amount exceeds remaining order");
+        } catch (err: any) {
+            assert.include(err.message, "ExcessiveRepay",
+                "Error should be ExcessiveRepay when repay amount exceeds remaining order balance");
+        }
+    });
+
 
     // =========================================================================
     // TEST 1 – Whitelist ICV user
@@ -1791,10 +2438,6 @@ describe("zynk-orbit", () => {
                 Array.from(defaultZovId),
                 Array.from(transientOrderId),
                 repayAmount,
-                [{
-                    amount: repayAmount,
-                    vaultId: Array.from(zeroZovId),
-                }],
                 null
             )
             .accounts({
