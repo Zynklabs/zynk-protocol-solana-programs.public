@@ -147,12 +147,50 @@ describe("zynk-orbit", () => {
         return buf;
     });
 
+    // ── Claim test users ──────────────────────────────────────────────────────
+    // claimUser – ICV user used for C-P1 (positive claim after cliff) and
+    // C-N1 (claim before cliff) and C-N2 (zero-balance claim).
+    const claimUser = Keypair.generate();
+    const claimUserId = Buffer.alloc(32);
+    claimUserId.write("clm_icv_user_1", 0, "utf-8");
+
+    // claimZeroBalUser – ICV user with no deposit; used for C-N2 (ZeroAmount).
+    const claimZeroBalUser = Keypair.generate();
+    const claimZeroBalUserId = Buffer.alloc(32);
+    claimZeroBalUserId.write("clm_zero_bal_1", 0, "utf-8");
+
+    // ── Revoke whitelist test users ───────────────────────────────────────────
+    // Fresh NCW user whitelisted inside the revoke NCW test.
+    const revokeNcwUser = Keypair.generate();
+    const revokeNcwUserId = Buffer.alloc(32);
+    revokeNcwUserId.write("rev_ncw_user_1", 0, "utf-8");
+
+    // Fresh LP user whitelisted inside the revoke LP test.
+    const revokeLpUser = Keypair.generate();
+    const revokeLpUserId = Buffer.alloc(32);
+    revokeLpUserId.write("rev_lp_user_1", 0, "utf-8");
+
+    // Fresh NCW user for the non-admin revoke negative test.
+    const revokeNonAdminUser = Keypair.generate();
+    const revokeNonAdminUserId = Buffer.alloc(32);
+    revokeNonAdminUserId.write("rev_nadm_user1", 0, "utf-8");
+
+    // ICV user for the rewhitelist-after-revoke test (stuck-funds recovery).
+    const revokeRewlUser = Keypair.generate();
+    const revokeRewlUserId = Buffer.alloc(32);
+    revokeRewlUserId.write("rev_rewl_user1", 0, "utf-8");
+
     let umdUserAta: PublicKey;       // umdUser's source ATA (funded in before-hook)
     let umdTokenAccount: PublicKey;  // Record-PDA-owned ICV custody account
 
     // ── Deposit test ATA handles ──────────────────────────────────────────────
     let depositIcvUserAta: PublicKey;   // depositIcvUser source token account
     let depositLpUserAta: PublicKey;    // depositLpUser source token account
+
+    // ── Claim test ATA handles ────────────────────────────────────────────────
+    let claimUserAta: PublicKey;            // claimUser source ATA (funded in before-hook)
+    let claimZeroBalUserAta: PublicKey;     // claimZeroBalUser source ATA (funded in before-hook)
+    let revokeRewlUserAta: PublicKey;       // revokeRewlUser source ATA (funded in before-hook)
 
     // ── Borrow test ATA / account handles ────────────────────────────────────
     let borrowIcvUserAta: PublicKey;         // borrowIcvUser source ATA
@@ -317,6 +355,8 @@ describe("zynk-orbit", () => {
             umdUser, depositIcvUser, depositLpUser, nonWlUser,
             borrowIcvUser, borrowNcwUser, borrowLpUser, borrowIcvRestrictedUser,
             ...multiIcvUsers,
+            claimUser, claimZeroBalUser,
+            revokeNcwUser, revokeLpUser, revokeNonAdminUser, revokeRewlUser,
         ]) {
             try {
                 const tx = await provider.connection.requestAirdrop(
@@ -380,6 +420,16 @@ describe("zynk-orbit", () => {
 
         // depositLpUser ATA – funded for deposit section tests
         depositLpUserAta = await gocAtaAndMint(depositLpUser.publicKey, tokenMint, 1_000_000_000);
+
+        // ── Claim test accounts ───────────────────────────────────────────────
+        // claimUser source ATA – funded so it can deposit before claiming
+        claimUserAta = await gocAtaAndMint(claimUser.publicKey, tokenMint, 500_000_000);
+
+        // claimZeroBalUser source ATA – funded for SOL fees only; no deposit needed
+        claimZeroBalUserAta = await gocAta(claimZeroBalUser.publicKey, tokenMint);
+
+        // revokeRewlUser source ATA – funded so it can deposit before revoke+rewhitelist test
+        revokeRewlUserAta = await gocAtaAndMint(revokeRewlUser.publicKey, tokenMint, 200_000_000);
 
         // ── Borrow test accounts ──────────────────────────────────────────────
         // borrowIcvUser source ATA
@@ -3441,6 +3491,458 @@ describe("zynk-orbit", () => {
         const accountInfo = await provider.connection.getAccountInfo(recordPDA);
         assert.isNull(accountInfo, "Record PDA should be closed after revoke");
 
+    });
+
+    // =========================================================================
+    // TEST 12 – Claim
+    // =========================================================================
+
+    // ── C-N2 : Cannot claim before the cliff period is over ───────────────────
+    it("Should not be able to claim before the cliff period is over", async () => {
+        const claimRecordPDA = deriveRecordPDA(claimUserId, claimUser.publicKey);
+        const now = Math.floor(Date.now() / 1000);
+        const farFutureCliff = new anchor.BN(now + 2 * 365 * 24 * 60 * 60);
+
+        await program.methods
+            .whitelist(
+                Array.from(claimUserId),
+                { icv: {} },
+                claimUser.publicKey,
+                farFutureCliff,
+                500_000_000,
+                null
+            )
+            .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+            .signers([admin])
+            .rpc();
+
+        // Deposit 100M while cliff is still in the future.
+        const claimTokenAccount = await gocAta(claimRecordPDA, tokenMint);
+        await program.methods
+            .deposit(Array.from(claimUserId), new anchor.BN(100_000_000))
+            .accounts({
+                sourceTokenAccount: claimUserAta,
+                destinationTokenAccount: claimTokenAccount,
+                record: claimRecordPDA,
+                mint: tokenMint,
+                signer: claimUser.publicKey,
+                tokenProgram: TOKEN_PROGRAM_ID,
+                coreConfig: configPDA,
+            } as any)
+            .signers([claimUser])
+            .rpc();
+
+        // Attempt to claim immediately — cliff has not yet passed → must fail.
+        const claimDestAta = await gocAta(claimUser.publicKey, tokenMint);
+        try {
+            await program.methods
+                .claim(Array.from(claimUserId))
+                .accounts({
+                    icvTokenAccount: claimTokenAccount,
+                    destinationTokenAccount: claimDestAta,
+                    mint: tokenMint,
+                    signer: claimUser.publicKey,
+                    tokenProgram: TOKEN_PROGRAM_ID,
+                    coreConfig: configPDA,
+                } as any)
+                .signers([claimUser])
+                .rpc();
+            assert.fail("Expected transaction to fail with CliffPeriodNotOver");
+        } catch (err: any) {
+            assert.include(err.message, "CliffPeriodNotOver",
+                "Error should be CliffPeriodNotOver when claiming before the cliff");
+        }
+    });
+
+    // ── C-N3 : Non-ICV user cannot call claim ─────────────────────────────────
+    it("Should not be able to claim if user type is not ICV", async () => {
+        // ncwUser is already whitelisted as NCW from WL-P1.
+        const ncwTokenAccount = await gocAta(ncwUser.publicKey, tokenMint);
+        try {
+            await program.methods
+                .claim(Array.from(ncwUserId))
+                .accounts({
+                    icvTokenAccount: ncwTokenAccount,
+                    destinationTokenAccount: ncwTokenAccount,
+                    mint: tokenMint,
+                    signer: ncwUser.publicKey,
+                    tokenProgram: TOKEN_PROGRAM_ID,
+                    coreConfig: configPDA,
+                } as any)
+                .signers([ncwUser])
+                .rpc();
+            assert.fail("Expected transaction to fail with InvalidOperation for non-ICV user");
+        } catch (err: any) {
+            assert.include(err.message, "InvalidOperation",
+                "Error should be InvalidOperation when a non-ICV user attempts to claim");
+        }
+    });
+
+    // ── C-N4 : Cannot claim when ICV token account has zero balance ───────────
+    it("Should not be able to claim amount more than that of the current balance", async () => {
+        const czrRecordPDA = deriveRecordPDA(claimZeroBalUserId, claimZeroBalUser.publicKey);
+        const now2         = Math.floor(Date.now() / 1000);
+        const nearCliff    = new anchor.BN(now2 + 2);
+
+        await program.methods
+            .whitelist(
+                Array.from(claimZeroBalUserId),
+                { icv: {} },
+                claimZeroBalUser.publicKey,
+                nearCliff,
+                500_000_000,
+                null
+            )
+            .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+            .signers([admin])
+            .rpc();
+
+        const czrCustodyAta = await gocAta(czrRecordPDA, tokenMint);
+        const czrDestAta    = await gocAta(claimZeroBalUser.publicKey, tokenMint);
+
+        // Wait for the short cliff to pass.
+        await new Promise(r => setTimeout(r, 4_000));
+
+        try {
+            await program.methods
+                .claim(Array.from(claimZeroBalUserId))
+                .accounts({
+                    icvTokenAccount: czrCustodyAta,
+                    destinationTokenAccount: czrDestAta,
+                    mint: tokenMint,
+                    signer: claimZeroBalUser.publicKey,
+                    tokenProgram: TOKEN_PROGRAM_ID,
+                    coreConfig: configPDA,
+                } as any)
+                .signers([claimZeroBalUser])
+                .rpc();
+            assert.fail("Expected transaction to fail with ZeroAmount when balance is zero");
+        } catch (err: any) {
+            assert.include(err.message, "ZeroAmount",
+                "Error should be ZeroAmount when the ICV token account has no balance to claim");
+        }
+    });
+
+    // ── C-P1 : ICV user claims after the cliff period has passed ─────────────
+    it("Should be able to claim after the cliff period is over", async () => {
+        // claimUser was whitelisted + deposited 100M in C-N2 with a far-future cliff.
+        // Update the cliff to (now + 2s), approve it, sleep 3s, then claim.
+        const claimRecordPDA    = deriveRecordPDA(claimUserId, claimUser.publicKey);
+        const claimTokenAccount = await gocAta(claimRecordPDA, tokenMint);
+        const claimDestAta      = await gocAta(claimUser.publicKey, tokenMint);
+
+        const [updateCliffRequestPDA] = PublicKey.findProgramAddressSync(
+            [Buffer.from("record_update_request"), claimUserId, claimUser.publicKey.toBuffer()],
+            program.programId
+        );
+
+        const nowTs    = Math.floor(Date.now() / 1000);
+        const shortCliff = new anchor.BN(nowTs + 2);
+
+        await program.methods
+            .updateCliffPeriod(Array.from(claimUserId), claimUser.publicKey, shortCliff)
+            .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+            .signers([admin])
+            .rpc();
+
+        await program.methods
+            .approveCliffPeriod()
+            .accounts({
+                request: updateCliffRequestPDA,
+                record: claimRecordPDA,
+                primaryAccount: claimUser.publicKey,
+                primaryAccountSigner: claimUser.publicKey,
+            } as any)
+            .signers([claimUser])
+            .rpc();
+
+        const recordAfterUpdate = await program.account.record.fetch(claimRecordPDA);
+        assert.equal(
+            recordAfterUpdate.cliffPeriod.toNumber(),
+            shortCliff.toNumber(),
+            "Cliff should have been updated to the short cliff"
+        );
+
+        // Wait 3 seconds so the cliff is now in the past.
+        await new Promise(r => setTimeout(r, 3_000));
+
+        const recordBeforeClaim = await program.account.record.fetch(claimRecordPDA);
+        const balanceBefore = recordBeforeClaim.principleIn.toNumber() - recordBeforeClaim.principleOut.toNumber();
+        assert.isAbove(balanceBefore, 0, "claimUser should have a non-zero net balance");
+
+        await program.methods
+            .claim(Array.from(claimUserId))
+            .accounts({
+                icvTokenAccount: claimTokenAccount,
+                destinationTokenAccount: claimDestAta,
+                mint: tokenMint,
+                signer: claimUser.publicKey,
+                tokenProgram: TOKEN_PROGRAM_ID,
+                coreConfig: configPDA,
+            } as any)
+            .signers([claimUser])
+            .rpc();
+
+        const recordAfterClaim = await program.account.record.fetch(claimRecordPDA);
+        assert.equal(
+            recordAfterClaim.principleOut.toNumber(),
+            recordBeforeClaim.principleIn.toNumber(),
+            "principleOut should equal principleIn (full balance claimed)"
+        );
+    });
+
+    // =========================================================================
+    // TEST 13 – Revoke Whitelist
+    // =========================================================================
+
+    // ── RV-P1 : Admin can revoke an NCW user ─────────────────────────────────
+    it("Should be able to revoke whitelist for NCW user", async () => {
+        const revokeNcwRecordPDA = deriveRecordPDA(revokeNcwUserId, revokeNcwUser.publicKey);
+
+        await program.methods
+            .whitelist(
+                Array.from(revokeNcwUserId),
+                { ncw: {} },
+                revokeNcwUser.publicKey,
+                null,
+                null,
+                null
+            )
+            .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+            .signers([admin])
+            .rpc();
+
+        const recordBefore = await program.account.record.fetch(revokeNcwRecordPDA);
+        assert.ok(recordBefore.primaryAccount.equals(revokeNcwUser.publicKey),
+            "NCW record should exist before revoke");
+
+        await program.methods
+            .revoke()
+            .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+            .remainingAccounts([
+                { pubkey: revokeNcwRecordPDA, isSigner: false, isWritable: true },
+            ])
+            .signers([admin])
+            .rpc();
+
+        assert.isNull(
+            await provider.connection.getAccountInfo(revokeNcwRecordPDA),
+            "NCW Record PDA should be closed after revoke"
+        );
+    });
+
+    // ── RV-P2 : Admin can revoke an LP user ──────────────────────────────────
+    it("Should be able to revoke whitelist for LP user", async () => {
+        const revokeLpRecordPDA = deriveRecordPDA(revokeLpUserId, revokeLpUser.publicKey);
+        const now = Math.floor(Date.now() / 1000);
+        const futureCliff = new anchor.BN(now + 365 * 24 * 60 * 60);
+
+        await program.methods
+            .whitelist(
+                Array.from(revokeLpUserId),
+                { lp: {} },
+                revokeLpUser.publicKey,
+                futureCliff,
+                1_000_000_000,
+                null
+            )
+            .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+            .signers([admin])
+            .rpc();
+
+        const recordBefore = await program.account.record.fetch(revokeLpRecordPDA);
+        assert.ok(recordBefore.primaryAccount.equals(revokeLpUser.publicKey),
+            "LP record should exist before revoke");
+
+        await program.methods
+            .revoke()
+            .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+            .remainingAccounts([
+                { pubkey: revokeLpRecordPDA, isSigner: false, isWritable: true },
+            ])
+            .signers([admin])
+            .rpc();
+
+        assert.isNull(
+            await provider.connection.getAccountInfo(revokeLpRecordPDA),
+            "LP Record PDA should be closed after revoke"
+        );
+    });
+
+    // ── RV-N1 : Non-admin wallet cannot revoke ────────────────────────────────
+    it("Should not be able to revoke by non admin wallet", async () => {
+        const revokeNonAdminRecordPDA = deriveRecordPDA(revokeNonAdminUserId, revokeNonAdminUser.publicKey);
+
+        await program.methods
+            .whitelist(
+                Array.from(revokeNonAdminUserId),
+                { ncw: {} },
+                revokeNonAdminUser.publicKey,
+                null,
+                null,
+                null
+            )
+            .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+            .signers([admin])
+            .rpc();
+
+        try {
+            await program.methods
+                .revoke()
+                .accounts({
+                    admin: manager.publicKey,
+                    coreConfig: configPDA,
+                } as any)
+                .remainingAccounts([
+                    { pubkey: revokeNonAdminRecordPDA, isSigner: false, isWritable: true },
+                ])
+                .signers([manager])
+                .rpc();
+            assert.fail("Expected transaction to fail with UnauthorizedAdmin");
+        } catch (err: any) {
+            assert.include(err.message, "UnauthorizedAdmin",
+                "Error should be UnauthorizedAdmin when a non-admin calls revoke");
+        }
+
+        // Cleanup: admin closes the PDA.
+        await program.methods
+            .revoke()
+            .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+            .remainingAccounts([
+                { pubkey: revokeNonAdminRecordPDA, isSigner: false, isWritable: true },
+            ])
+            .signers([admin])
+            .rpc();
+
+        assert.isNull(
+            await provider.connection.getAccountInfo(revokeNonAdminRecordPDA),
+            "Record PDA should be closed after cleanup revoke"
+        );
+    });
+
+    // ── RV-P4 : Rewhitelist ICV user to recover stuck funds ───────────────────
+    it("Should be able to rewhitelist an icv user to disburse funds out of its wallet if the funds are stuck in its wallet", async () => {
+        const rewlRecordPDA  = deriveRecordPDA(revokeRewlUserId, revokeRewlUser.publicKey);
+        const now            = Math.floor(Date.now() / 1000);
+        const farFutureCliff = new anchor.BN(now + 2 * 365 * 24 * 60 * 60);
+
+        // Step 1 – Whitelist revokeRewlUser as ICV with a far-future cliff.
+        await program.methods
+            .whitelist(
+                Array.from(revokeRewlUserId),
+                { icv: {} },
+                revokeRewlUser.publicKey,
+                farFutureCliff,
+                200_000_000,
+                null
+            )
+            .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+            .signers([admin])
+            .rpc();
+
+        // Step 2 – Deposit 50M into the custody ATA.
+        const rewlCustodyAta = await gocAta(rewlRecordPDA, tokenMint);
+        const depositAmt     = new anchor.BN(50_000_000);
+
+        await program.methods
+            .deposit(Array.from(revokeRewlUserId), depositAmt)
+            .accounts({
+                sourceTokenAccount:      revokeRewlUserAta,
+                destinationTokenAccount: rewlCustodyAta,
+                record:                  rewlRecordPDA,
+                mint:                    tokenMint,
+                signer:                  revokeRewlUser.publicKey,
+                tokenProgram:            TOKEN_PROGRAM_ID,
+                coreConfig:              configPDA,
+            } as any)
+            .signers([revokeRewlUser])
+            .rpc();
+
+        const balBefore = (await provider.connection.getTokenAccountBalance(rewlCustodyAta)).value.amount;
+        assert.equal(balBefore, "50000000", "50M should be in custody before revoke");
+
+        // Step 3 – Admin revokes → Record PDA closed; tokens remain in the ATA.
+        await program.methods
+            .revoke()
+            .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+            .remainingAccounts([
+                { pubkey: rewlRecordPDA, isSigner: false, isWritable: true },
+            ])
+            .signers([admin])
+            .rpc();
+
+        assert.isNull(
+            await provider.connection.getAccountInfo(rewlRecordPDA),
+            "Record PDA should be closed after revoke"
+        );
+
+        const balAfterRevoke = (await provider.connection.getTokenAccountBalance(rewlCustodyAta)).value.amount;
+        assert.equal(balAfterRevoke, "50000000", "Tokens should still be in custody ATA after revoke");
+
+        // Step 4 – Rewhitelist with the same userId + publicKey (same PDA seeds).
+        //          Use a short cliff so we can claim immediately after.
+        const nowTs2     = Math.floor(Date.now() / 1000);
+        const shortCliff = new anchor.BN(nowTs2 + 2);
+
+        await program.methods
+            .whitelist(
+                Array.from(revokeRewlUserId),
+                { icv: {} },
+                revokeRewlUser.publicKey,
+                shortCliff,
+                200_000_000,
+                null
+            )
+            .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+            .signers([admin])
+            .rpc();
+
+        const recordAfterRewl = await program.account.record.fetch(rewlRecordPDA);
+        assert.ok(recordAfterRewl.primaryAccount.equals(revokeRewlUser.publicKey),
+            "Record PDA should be recreated at the same address after rewhitelist");
+        assert.deepEqual(recordAfterRewl.userType, { icv: {} }, "User type should be ICV after rewhitelist");
+
+        const balAfterRewl = (await provider.connection.getTokenAccountBalance(rewlCustodyAta)).value.amount;
+        assert.equal(balAfterRewl, "50000000", "Tokens should still be in custody ATA after rewhitelist");
+
+        // Step 5 – Wait for the short cliff to pass.
+        await new Promise(r => setTimeout(r, 4_000));
+
+        // Step 6 – Claim to recover the stuck funds.
+        // rewlDestAta is the same wallet as revokeRewlUserAta (the user's own ATA),
+        // which may already hold tokens from the before-hook funding.  Snapshot the
+        // balance *before* the claim so we can assert the exact delta (50M) rather
+        // than an absolute value.
+        const rewlDestAta = await gocAta(revokeRewlUser.publicKey, tokenMint);
+        const destBalBefore = BigInt(
+            (await provider.connection.getTokenAccountBalance(rewlDestAta)).value.amount
+        );
+
+        await program.methods
+            .claim(Array.from(revokeRewlUserId))
+            .accounts({
+                icvTokenAccount:         rewlCustodyAta,
+                destinationTokenAccount: rewlDestAta,
+                mint:                    tokenMint,
+                signer:                  revokeRewlUser.publicKey,
+                tokenProgram:            TOKEN_PROGRAM_ID,
+                coreConfig:              configPDA,
+            } as any)
+            .signers([revokeRewlUser])
+            .rpc();
+
+        const destBalAfter = BigInt(
+            (await provider.connection.getTokenAccountBalance(rewlDestAta)).value.amount
+        );
+        const claimedDelta = destBalAfter - destBalBefore;
+        assert.equal(
+            claimedDelta.toString(),
+            depositAmt.toString(),
+            "Destination ATA should have received exactly the 50M stuck tokens"
+        );
+
+        const custodyBal = (await provider.connection.getTokenAccountBalance(rewlCustodyAta)).value.amount;
+        assert.equal(custodyBal, "0", "Custody ATA should be empty after claim");
     });
 });
 
