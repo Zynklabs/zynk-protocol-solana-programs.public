@@ -16,7 +16,7 @@ import {
     getOrCreateAssociatedTokenAccount,
     createAssociatedTokenAccount,
 } from "@solana/spl-token";
-import { ZynkCore } from "../target/types/zynk_core";
+import { ZynkCore } from "../../target/types/zynk_core";
 import { assert, expect } from "chai";
 import { createHash, randomUUID } from "crypto";
 import { TextEncoder } from "util";
@@ -36,7 +36,7 @@ import {
     INITIAL_MANAGER_KEYPAIR,
     INITIAL_MANAGER,
 } from "./addresses";
-import { ZynkOrbit } from "../target/types/zynk_orbit";
+import { ZynkOrbit } from "../../target/types/zynk_orbit";
 
 // ─── Module-level helpers ─────────────────────────────────────────────────────
 const zynkPartnerId = `zp_321420`; // 6-digit numeric suffix required by extract_partner_number

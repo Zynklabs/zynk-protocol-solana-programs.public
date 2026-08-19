@@ -16,7 +16,7 @@ import {
   getOrCreateAssociatedTokenAccount,
   createAssociatedTokenAccount,
 } from "@solana/spl-token";
-import { ZynkCore } from "../target/types/zynk_core";
+import { ZynkCore } from "../../target/types/zynk_core";
 import { assert, expect } from "chai";
 import { createHash, randomUUID } from "crypto";
 import { TextEncoder } from "util";
