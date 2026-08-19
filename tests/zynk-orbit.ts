@@ -2999,8 +2999,10 @@ describe("zynk-orbit", () => {
     });
 
     // =========================================================================
-    // TEST 8 – Admin raises a cliff period update request
+    // TEST 9 – Update Cliff Period
     // =========================================================================
+
+    // ── UCP-P1: Admin raises a cliff period update request for an ICV user ────
     it("Admin should raise a cliff period update request", async () => {
         const recordPDA = deriveRecordPDA(icvUserId, icvUser.publicKey);
 
@@ -3029,18 +3031,75 @@ describe("zynk-orbit", () => {
         assert.equal(request.cliffPeriod.toNumber(), newCliffPeriod.toNumber(), "Request cliff period should match");
         assert.ok(request.primaryAccount.equals(icvUser.publicKey), "primaryAccount should match ICV user");
 
+        // Cleanup – approve the open request so the PDA slot is freed for subsequent tests
+        await program.methods
+            .approveCliffPeriod()
+            .accounts({
+                request: updateCliffRequestPDA,
+                record: recordPDA,
+                primaryAccount: icvUser.publicKey,
+                primaryAccountSigner: icvUser.publicKey,
+            } as any)
+            .signers([icvUser])
+            .rpc();
+        const cleanupInfo = await provider.connection.getAccountInfo(updateCliffRequestPDA);
+        assert.isNull(cleanupInfo, "UpdateCliffPeriodRequest PDA should be closed after cleanup approval");
     });
 
+    // ── UCP-N1: Admin should NOT be able to raise a request with a past cliff ─
+    it("Should not be able to raise a cliff period update request with a cliff period in the past", async () => {
+        const now = Math.floor(Date.now() / 1000);
+        const pastCliffPeriod = new anchor.BN(now - 60); // 1 minute in the past
+
+        try {
+            await program.methods
+                .updateCliffPeriod(
+                    Array.from(icvUserId),
+                    icvUser.publicKey,
+                    pastCliffPeriod
+                )
+                .accounts({
+                    admin: admin.publicKey,
+                    coreConfig: configPDA,
+                } as any)
+                .signers([admin])
+                .rpc();
+            assert.fail("Expected transaction to fail — cliff period is in the past");
+        } catch (err: any) {
+            assert.include(
+                err.message,
+                "CliffPeriodInPast",
+                "Error should be CliffPeriodInPast when new cliff is a past timestamp"
+            );
+        }
+    });
+
+
     // =========================================================================
-    // TEST 9 – ICV user (LP / primary account holder) approves cliff update
+    // TEST 10 – Approve Cliff Period
     // =========================================================================
-    it("ICV user (primary account) should approve the cliff period update", async () => {
+
+    // ── ACP-P1: Primary account holder (ICV user) approves the cliff period update
+    it("LP concerned with the cliff period should approve the cliff period update", async () => {
         const recordPDA = deriveRecordPDA(icvUserId, icvUser.publicKey);
 
         const [updateCliffRequestPDA] = PublicKey.findProgramAddressSync(
             [Buffer.from("record_update_request"), icvUserId, icvUser.publicKey.toBuffer()],
             program.programId
         );
+
+        // Raise a fresh cliff period update request
+        const now = Math.floor(Date.now() / 1000);
+        const newCliffPeriod = new anchor.BN(now + 4 * 365 * 24 * 60 * 60);
+        await program.methods
+            .updateCliffPeriod(
+                Array.from(icvUserId),
+                icvUser.publicKey,
+                newCliffPeriod
+            )
+            .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+            .signers([admin])
+            .rpc();
 
         const requestBefore = await program.account.updateCliffPeriodRequest.fetch(updateCliffRequestPDA);
         const expectedNewCliff = requestBefore.cliffPeriod.toNumber();
@@ -3057,15 +3116,140 @@ describe("zynk-orbit", () => {
             .rpc();
 
         const record = await program.account.record.fetch(recordPDA);
-        assert.equal(record.cliffPeriod.toNumber(), expectedNewCliff, "Record cliff period should be updated");
-
+        assert.equal(record.cliffPeriod.toNumber(), expectedNewCliff, "Record cliff period should be updated after approval");
         const reqInfo = await provider.connection.getAccountInfo(updateCliffRequestPDA);
         assert.isNull(reqInfo, "UpdateCliffPeriodRequest PDA should be closed after approval");
+    });
 
+    // ── ACP-N1: A user other than the primary account holder should NOT approve
+    it("Should not be approved by a user other than the primary account holder concerned with the cliff period", async () => {
+        const recordPDA = deriveRecordPDA(icvUserId, icvUser.publicKey);
+        const [updateCliffRequestPDA] = PublicKey.findProgramAddressSync(
+            [Buffer.from("record_update_request"), icvUserId, icvUser.publicKey.toBuffer()],
+            program.programId
+        );
+
+        // Raise a new cliff period update request
+        const now = Math.floor(Date.now() / 1000);
+        await program.methods
+            .updateCliffPeriod(Array.from(icvUserId), icvUser.publicKey, new anchor.BN(now + 5 * 365 * 24 * 60 * 60))
+            .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+            .signers([admin]).rpc();
+
+        // Attempt to approve with lpUser as both primary_account and signer
+        // (lpUser is not the actual primary account registered in the record)
+        try {
+            await program.methods
+                .approveCliffPeriod()
+                .accounts({
+                    request: updateCliffRequestPDA,
+                    record: recordPDA,
+                    primaryAccount: lpUser.publicKey,       // wrong primary account
+                    primaryAccountSigner: lpUser.publicKey, // wrong signer
+                } as any)
+                .signers([lpUser])
+                .rpc();
+            assert.fail("Expected transaction to fail — signer is not the primary account holder");
+        } catch (err: any) {
+            assert.include(err.message, "UnauthorizedAdmin",
+                "Error should be UnauthorizedAdmin when a different user attempts to approve");
+        }
+
+        // Cleanup – reject the open request as the legitimate owner
+        await program.methods
+            .rejectCliffPeriod()
+            .accounts({ request: updateCliffRequestPDA, primaryAccount: icvUser.publicKey, signer: icvUser.publicKey } as any)
+            .signers([icvUser]).rpc();
+        assert.isNull(
+            await provider.connection.getAccountInfo(updateCliffRequestPDA),
+            "UpdateCliffPeriodRequest PDA should be closed after cleanup rejection"
+        );
     });
 
     // =========================================================================
-    // TEST 10a – Add first partner (realloc: BASE_SIZE → BASE_SIZE + 4)
+    // TEST 11 – Reject Cliff Period
+    // =========================================================================
+
+    // ── RCP-P1: Primary account holder rejects a pending cliff period update request
+    it("Primary account holder should be able to reject the cliff period update", async () => {
+        const [updateCliffRequestPDA] = PublicKey.findProgramAddressSync(
+            [Buffer.from("record_update_request"), icvUserId, icvUser.publicKey.toBuffer()],
+            program.programId
+        );
+
+        // Raise a cliff period update request first
+        const now = Math.floor(Date.now() / 1000);
+        await program.methods
+            .updateCliffPeriod(Array.from(icvUserId), icvUser.publicKey, new anchor.BN(now + 6 * 365 * 24 * 60 * 60))
+            .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+            .signers([admin]).rpc();
+
+        const reqInfoBefore = await provider.connection.getAccountInfo(updateCliffRequestPDA);
+        assert.isNotNull(reqInfoBefore, "UpdateCliffPeriodRequest PDA should exist before rejection");
+
+        // ICV user (primary account holder) rejects the request
+        await program.methods
+            .rejectCliffPeriod()
+            .accounts({
+                request: updateCliffRequestPDA,
+                primaryAccount: icvUser.publicKey,
+                signer: icvUser.publicKey,
+            } as any)
+            .signers([icvUser])
+            .rpc();
+
+        const reqInfoAfter = await provider.connection.getAccountInfo(updateCliffRequestPDA);
+        assert.isNull(reqInfoAfter, "UpdateCliffPeriodRequest PDA should be closed after rejection");
+    });
+
+    // ── RCP-N1: A user other than the primary account holder should NOT reject
+    it("Should not be able to reject the cliff period update by any user other than the primary account holder", async () => {
+        const [updateCliffRequestPDA] = PublicKey.findProgramAddressSync(
+            [Buffer.from("record_update_request"), icvUserId, icvUser.publicKey.toBuffer()],
+            program.programId
+        );
+
+        // Raise a cliff period update request first
+        const now = Math.floor(Date.now() / 1000);
+        await program.methods
+            .updateCliffPeriod(Array.from(icvUserId), icvUser.publicKey, new anchor.BN(now + 7 * 365 * 24 * 60 * 60))
+            .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+            .signers([admin]).rpc();
+
+        // Attempt to reject as lpUser (not the primary account holder)
+        try {
+            await program.methods
+                .rejectCliffPeriod()
+                .accounts({
+                    request: updateCliffRequestPDA,
+                    primaryAccount: icvUser.publicKey,
+                    signer: lpUser.publicKey,
+                } as any)
+                .signers([lpUser])
+                .rpc();
+            assert.fail("Expected transaction to fail — signer is not the primary account holder");
+        } catch (err: any) {
+            assert.include(
+                err.message,
+                "InvalidAccount",
+                "Error should be InvalidAccount when a non-primary-account tries to reject"
+            );
+        }
+
+        // Cleanup – the actual owner rejects the open request
+        await program.methods
+            .rejectCliffPeriod()
+            .accounts({ request: updateCliffRequestPDA, primaryAccount: icvUser.publicKey, signer: icvUser.publicKey } as any)
+            .signers([icvUser]).rpc();
+        assert.isNull(
+            await provider.connection.getAccountInfo(updateCliffRequestPDA),
+            "UpdateCliffPeriodRequest PDA should be closed after cleanup rejection"
+        );
+    });
+
+
+    // =========================================================================
+    // TEST 12a – Add first partner (realloc: BASE_SIZE → BASE_SIZE + 4)
     // =========================================================================
     it("Admin should add a partner to the whitelist (realloc grows account)", async () => {
         const recordPDA = deriveRecordPDA(icvUserId, icvUser.publicKey);

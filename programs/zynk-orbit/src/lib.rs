@@ -1463,6 +1463,46 @@ pub mod zynk_orbit {
         Ok(())
     }
 
+    /// Reject (cancel) a pending cliff period update request.
+    ///
+    /// Only the primary account holder (i.e. the ICV user who owns the record)
+    /// may reject it.  The UpdateCliffPeriodRequest PDA is closed and its
+    /// rent-exempt lamports are returned to the primary account.
+    pub fn reject_cliff_period(ctx: Context<RejectCliffPeriod>) -> Result<()> {
+        // Deserialize the request inside its own block so the immutable borrow
+        // of the data RefCell is dropped before close_account() mutably borrows it.
+        let update_request = {
+            let request_data = ctx.accounts.request.try_borrow_data()?;
+            UpdateCliffPeriodRequest::try_deserialize(&mut &request_data[..])
+                .map_err(|_| OrbitError::InvalidRequestAccount)?
+            // `request_data` (Ref<[u8]>) is dropped here
+        };
+
+        // Verify the signer is the primary account registered in the request
+        require!(
+            ctx.accounts.primary_account.key() == update_request.primary_account,
+            OrbitError::InvalidAccount
+        );
+
+        let user_id = update_request.user_id;
+
+        // Close the UpdateCliffPeriodRequest PDA — return lamports to the primary account
+        close_account(
+            ctx.accounts.request.to_account_info(),
+            ctx.accounts.primary_account.to_account_info(),
+        )?;
+
+        emit!(AxEvent {
+            event_name: "CliffPeriodRejected".to_string(),
+            user_id,
+            public_key: ctx.accounts.primary_account.key(),
+            domain_separator: DOMAIN_SEPARATOR,
+            partners: Vec::new(),
+        });
+
+        Ok(())
+    }
+
     // Pledge: deposit yield back into the system. Same validations as deposit.
     // For LP: moves funds from ovault to ZOV (ovault PDA is the authority).
     // For ICV: moves funds from ovault to ICV's ATA (token account owned by Record PDA).
@@ -1999,6 +2039,27 @@ pub struct ApproveCliffPeriod<'info> {
 
     #[account(mut, constraint = primary_account.key() == record.primary_account @ OrbitError::UnauthorizedAdmin)]
     pub primary_account_signer: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct RejectCliffPeriod<'info> {
+    /// CHECK: UpdateCliffPeriodRequest PDA - validated in handler
+    #[account(mut)]
+    pub request: UncheckedAccount<'info>,
+
+    /// CHECK: primary wallet — must match update_request.primary_account.
+    /// Receives rent lamports when the request PDA is closed.
+    #[account(mut)]
+    pub primary_account: UncheckedAccount<'info>,
+
+    /// The primary account holder who originally raised the request; must be the primary account.
+    #[account(
+        mut,
+        constraint = signer.key() == primary_account.key() @ OrbitError::InvalidAccount
+    )]
+    pub signer: Signer<'info>,
 
     pub system_program: Program<'info, System>,
 }
