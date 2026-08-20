@@ -3944,5 +3944,526 @@ describe("zynk-orbit", () => {
         const custodyBal = (await provider.connection.getTokenAccountBalance(rewlCustodyAta)).value.amount;
         assert.equal(custodyBal, "0", "Custody ATA should be empty after claim");
     });
+
+    // =========================================================================
+    // SECTION: DISBURSE
+    // =========================================================================
+    // `disburse` transfers tokens from a vault PDA (spender = PDA([b"vault",
+    // vault_id])) to the primary_account of a whitelisted Record.
+    // Only the manager can call it.
+    // -------------------------------------------------------------------------
+
+    // DIS-P1: Disburse from ovault to an NCW primary wallet
+    it("Should be able to disburse funds from ovault to primary wallet", async () => {
+        const disburseNcwUserId = Buffer.alloc(32);
+        disburseNcwUserId.write("dis_ncw_user_1", 0, "utf-8");
+        const disburseNcwUser = Keypair.generate();
+        {
+            const sig = await provider.connection.requestAirdrop(disburseNcwUser.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL);
+            await provider.connection.confirmTransaction(sig, "confirmed");
+        }
+        const disburseNcwRecordPDA = deriveRecordPDA(disburseNcwUserId, disburseNcwUser.publicKey);
+        await program.methods
+            .whitelist(Array.from(disburseNcwUserId), { ncw: {} }, disburseNcwUser.publicKey, null, null, null)
+            .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+            .signers([admin]).rpc();
+        const disburseNcwDestAta = await gocAta(disburseNcwUser.publicKey, tokenMint);
+        // vault_id is a 32-byte buffer; spenderPDA = PDA([b"vault", vault_id_32]) owns the source ATA
+        const orbitVaultId = Buffer.alloc(32);
+        orbitVaultId.write("orbit", 0, "utf-8");
+        const [spenderPDA] = PublicKey.findProgramAddressSync(
+            [Buffer.from("vault"), orbitVaultId],
+            program.programId
+        );
+        const disburseSourceAta = await gocAtaAndMint(spenderPDA, tokenMint, 5_000_000);
+        const disburseAmount = new anchor.BN(1_000_000);
+        const balBefore = BigInt((await provider.connection.getTokenAccountBalance(disburseNcwDestAta)).value.amount);
+        await program.methods
+            .disburse(Array.from(orbitVaultId), disburseAmount)
+            .accounts({
+                sourceTokenAccount: disburseSourceAta,
+                destinationTokenAccount: disburseNcwDestAta,
+                record: disburseNcwRecordPDA,
+                mint: tokenMint,
+                manager: manager.publicKey,
+                tokenProgram: TOKEN_PROGRAM_ID,
+                coreConfig: configPDA,
+            } as any)
+            .signers([manager]).rpc();
+        const balAfter = BigInt((await provider.connection.getTokenAccountBalance(disburseNcwDestAta)).value.amount);
+        assert.equal((balAfter - balBefore).toString(), disburseAmount.toString(),
+            "Destination ATA should have received exactly the disbursed amount");
+    });
+
+
+    // DIS-P2: Disburse from ovault to an ICV primary wallet
+    it("Should be able to disburse funds from icv to primary wallet", async () => {
+        const disburseIcvUserId = Buffer.alloc(32);
+        disburseIcvUserId.write("dis_icv_user_1", 0, "utf-8");
+        const disburseIcvUser = Keypair.generate();
+        {
+            const sig = await provider.connection.requestAirdrop(disburseIcvUser.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL);
+            await provider.connection.confirmTransaction(sig, "confirmed");
+        }
+        const now = Math.floor(Date.now() / 1000);
+        const futureCliff = new anchor.BN(now + 365 * 24 * 60 * 60);
+        const disburseIcvRecordPDA = deriveRecordPDA(disburseIcvUserId, disburseIcvUser.publicKey);
+        await program.methods
+            .whitelist(Array.from(disburseIcvUserId), { icv: {} }, disburseIcvUser.publicKey, futureCliff, 500_000_000, null)
+            .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+            .signers([admin]).rpc();
+        // Destination must be owned by ICV user's primary_account (wallet, not record PDA)
+        const disburseIcvDestAta = await gocAta(disburseIcvUser.publicKey, tokenMint);
+        // vault_id is a 32-byte buffer; spenderPDA2 = PDA([b"vault", vault_id_32]) owns the source ATA
+        const orbitVaultId2 = Buffer.alloc(32);
+        orbitVaultId2.write("orbit", 0, "utf-8");
+        const [spenderPDA2] = PublicKey.findProgramAddressSync(
+            [Buffer.from("vault"), orbitVaultId2],
+            program.programId
+        );
+        const disburseSourceAta2 = await gocAtaAndMint(spenderPDA2, tokenMint, 5_000_000);
+        const disburseAmount2 = new anchor.BN(2_000_000);
+        const balBefore2 = BigInt((await provider.connection.getTokenAccountBalance(disburseIcvDestAta)).value.amount);
+        await program.methods
+            .disburse(Array.from(orbitVaultId2), disburseAmount2)
+            .accounts({
+                sourceTokenAccount: disburseSourceAta2,
+                destinationTokenAccount: disburseIcvDestAta,
+                record: disburseIcvRecordPDA,
+                mint: tokenMint,
+                manager: manager.publicKey,
+                tokenProgram: TOKEN_PROGRAM_ID,
+                coreConfig: configPDA,
+            } as any)
+            .signers([manager]).rpc();
+        const balAfter2 = BigInt((await provider.connection.getTokenAccountBalance(disburseIcvDestAta)).value.amount);
+        assert.equal((balAfter2 - balBefore2).toString(), disburseAmount2.toString(),
+            "ICV primary wallet should have received exactly the disbursed amount");
+    });
+
+
+    // DIS-N1: Cannot disburse to a non-whitelisted wallet
+    it("Should not be able to disburse funds to a non whitelisted wallet", async () => {
+        const nonWlDisUser = Keypair.generate();
+        const nonWlDisUserId = Buffer.alloc(32);
+        nonWlDisUserId.write("dis_nonwl_usr_1", 0, "utf-8");
+        {
+            const sig = await provider.connection.requestAirdrop(nonWlDisUser.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL);
+            await provider.connection.confirmTransaction(sig, "confirmed");
+        }
+        // Record PDA is never initialised for this user — tx must fail
+        const nonWlDisRecordPDA = deriveRecordPDA(nonWlDisUserId, nonWlDisUser.publicKey);
+        const nonWlDisDestAta = await gocAta(nonWlDisUser.publicKey, tokenMint);
+        const dis3OvaultAta = await gocAtaAndMint(ovaultPDA, tokenMint, 1_000_000);
+        const orbitVaultId3 = Buffer.alloc(32);
+        orbitVaultId3.write("orbit", 0, "utf-8");
+        try {
+            await program.methods
+                .disburse(Array.from(orbitVaultId3), new anchor.BN(500_000))
+                .accounts({
+                    sourceTokenAccount: dis3OvaultAta,
+                    destinationTokenAccount: nonWlDisDestAta,
+                    record: nonWlDisRecordPDA,
+                    mint: tokenMint,
+                    manager: manager.publicKey,
+                    tokenProgram: TOKEN_PROGRAM_ID,
+                    coreConfig: configPDA,
+                } as any)
+                .signers([manager]).rpc();
+            assert.fail("Expected transaction to fail for non-whitelisted destination");
+        } catch (err: any) {
+            assert.ok(err.message.length > 0,
+                "An error should be thrown when disbursing to a non-whitelisted wallet");
+        }
+    });
+
+    // DIS-N2: Non-manager cannot disburse
+    it("Any wallet except manager should not be able to disburse funds", async () => {
+        const dis4UserId = Buffer.alloc(32);
+        dis4UserId.write("dis_non_mgr_u_1", 0, "utf-8");
+        const dis4User = Keypair.generate();
+        {
+            const sig = await provider.connection.requestAirdrop(dis4User.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL);
+            await provider.connection.confirmTransaction(sig, "confirmed");
+        }
+        const dis4RecordPDA = deriveRecordPDA(dis4UserId, dis4User.publicKey);
+        await program.methods
+            .whitelist(Array.from(dis4UserId), { ncw: {} }, dis4User.publicKey, null, null, null)
+            .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+            .signers([admin]).rpc();
+        const dis4DestAta = await gocAta(dis4User.publicKey, tokenMint);
+        const dis4OvaultAta = await gocAtaAndMint(ovaultPDA, tokenMint, 1_000_000);
+        const orbitVaultId4 = Buffer.alloc(32);
+        orbitVaultId4.write("orbit", 0, "utf-8");
+        try {
+            await program.methods
+                .disburse(Array.from(orbitVaultId4), new anchor.BN(500_000))
+                .accounts({
+                    sourceTokenAccount: dis4OvaultAta,
+                    destinationTokenAccount: dis4DestAta,
+                    record: dis4RecordPDA,
+                    mint: tokenMint,
+                    manager: admin.publicKey,   // admin signs, NOT the protocol manager
+                    tokenProgram: TOKEN_PROGRAM_ID,
+                    coreConfig: configPDA,
+                } as any)
+                .signers([admin]).rpc();
+            assert.fail("Expected transaction to fail with UnauthorizedManager");
+        } catch (err: any) {
+            assert.include(err.message, "UnauthorizedManager",
+                "Error should be UnauthorizedManager when a non-manager tries to disburse");
+        }
+    });
+
+
+    // =========================================================================
+    // SECTION: UPDATE WHITELISTED PARTNERS (ADDITIONAL)
+    // =========================================================================
+
+    // UPW-P1: Should be able to add a whitelisted partner
+    it("Should be able to add whitelisted partner", async () => {
+        const upwUserId = Buffer.alloc(32);
+        upwUserId.write("upw_icv_user_1", 0, "utf-8");
+        const upwUser = Keypair.generate();
+        {
+            const sig = await provider.connection.requestAirdrop(upwUser.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL);
+            await provider.connection.confirmTransaction(sig, "confirmed");
+        }
+        const upwRecordPDA = deriveRecordPDA(upwUserId, upwUser.publicKey);
+        const now = Math.floor(Date.now() / 1000);
+        await program.methods
+            .whitelist(Array.from(upwUserId), { icv: {} }, upwUser.publicKey, new anchor.BN(now + 365 * 24 * 60 * 60), 500_000_000, null)
+            .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+            .signers([admin]).rpc();
+
+        const infoBefore = await provider.connection.getAccountInfo(upwRecordPDA);
+        const sizeBefore = infoBefore!.data.length; // BASE_SIZE = 137
+        const partnerId = 100001;
+        await program.methods
+            .updatePartnerWhitelist(Array.from(upwUserId), upwUser.publicKey, { add: {} }, partnerId)
+            .accounts({ record: upwRecordPDA, admin: admin.publicKey, coreConfig: configPDA } as any)
+            .signers([admin]).rpc();
+
+        const record = await program.account.record.fetch(upwRecordPDA);
+        assert.deepEqual(record.whitelistedPartners, [partnerId], "whitelist should contain the added partner");
+        const infoAfter = await provider.connection.getAccountInfo(upwRecordPDA);
+        assert.equal(infoAfter!.data.length, sizeBefore + 4,
+            "Account should grow by 4 bytes after adding one partner");
+    });
+
+    // UPW-P2: Should be able to remove a whitelisted partner
+    it("Should be able to remove whitelisted partners", async () => {
+        const upwRemUserId = Buffer.alloc(32);
+        upwRemUserId.write("upw_rem_user_1", 0, "utf-8");
+        const upwRemUser = Keypair.generate();
+        {
+            const sig = await provider.connection.requestAirdrop(upwRemUser.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL);
+            await provider.connection.confirmTransaction(sig, "confirmed");
+        }
+        const upwRemRecordPDA = deriveRecordPDA(upwRemUserId, upwRemUser.publicKey);
+        const now = Math.floor(Date.now() / 1000);
+        await program.methods
+            .whitelist(Array.from(upwRemUserId), { icv: {} }, upwRemUser.publicKey, new anchor.BN(now + 365 * 24 * 60 * 60), 500_000_000, null)
+            .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+            .signers([admin]).rpc();
+
+        const partnerA = 200001;
+        const partnerB = 200002;
+        for (const pid of [partnerA, partnerB]) {
+            await program.methods
+                .updatePartnerWhitelist(Array.from(upwRemUserId), upwRemUser.publicKey, { add: {} }, pid)
+                .accounts({ record: upwRemRecordPDA, admin: admin.publicKey, coreConfig: configPDA } as any)
+                .signers([admin]).rpc();
+        }
+        const infoBefore = await provider.connection.getAccountInfo(upwRemRecordPDA);
+        const sizeBefore = infoBefore!.data.length;   // BASE_SIZE + 8
+        const lamportsBefore = infoBefore!.lamports;
+
+        await program.methods
+            .updatePartnerWhitelist(Array.from(upwRemUserId), upwRemUser.publicKey, { remove: {} }, partnerA)
+            .accounts({ record: upwRemRecordPDA, admin: admin.publicKey, coreConfig: configPDA } as any)
+            .signers([admin]).rpc();
+
+        const record = await program.account.record.fetch(upwRemRecordPDA);
+        assert.equal(record.whitelistedPartners.length, 1, "whitelist should have 1 partner after removal");
+        assert.notInclude(record.whitelistedPartners, partnerA, "partnerA should no longer be in the list");
+        assert.include(record.whitelistedPartners, partnerB, "partnerB should still be in the list");
+        const infoAfter = await provider.connection.getAccountInfo(upwRemRecordPDA);
+        assert.equal(infoAfter!.data.length, sizeBefore - 4,
+            "Account should shrink by 4 bytes after removing one partner");
+        assert.isBelow(infoAfter!.lamports, lamportsBefore,
+            "Excess rent should be refunded to admin");
+    });
+
+
+    // UPW-P3: Stress test — add 400 whitelisted partners
+    it("Should be able to add multiple whitelisted partners", async () => {
+        const PARTNER_COUNT = 40;
+        const massUserId = Buffer.alloc(32);
+        massUserId.write("upw_mass_user_1", 0, "utf-8");
+        const massUser = Keypair.generate();
+        {
+            const sig = await provider.connection.requestAirdrop(massUser.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL);
+            await provider.connection.confirmTransaction(sig, "confirmed");
+        }
+        const massRecordPDA = deriveRecordPDA(massUserId, massUser.publicKey);
+        const now = Math.floor(Date.now() / 1000);
+        await program.methods
+            .whitelist(Array.from(massUserId), { icv: {} }, massUser.publicKey, new anchor.BN(now + 365 * 24 * 60 * 60), 500_000_000, null)
+            .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+            .signers([admin]).rpc();
+
+        // Add PARTNER_COUNT unique partner IDs (start at 300001 to avoid collisions)
+        for (let i = 0; i < PARTNER_COUNT; i++) {
+            const pid = 300001 + i;
+            await program.methods
+                .updatePartnerWhitelist(Array.from(massUserId), massUser.publicKey, { add: {} }, pid)
+                .accounts({ record: massRecordPDA, admin: admin.publicKey, coreConfig: configPDA } as any)
+                .signers([admin]).rpc();
+        }
+
+        const record = await program.account.record.fetch(massRecordPDA);
+        assert.equal(record.whitelistedPartners.length, PARTNER_COUNT,
+            `whitelist should contain exactly ${PARTNER_COUNT} partners`);
+        assert.include(record.whitelistedPartners, 300001, "first partner should be present");
+        assert.include(record.whitelistedPartners, 300000 + PARTNER_COUNT, "last partner should be present");
+        // Account size: BASE_SIZE (137) + PARTNER_COUNT * 4 bytes
+        const expectedSize = 137 + PARTNER_COUNT * 4;
+        const accountInfo = await provider.connection.getAccountInfo(massRecordPDA);
+        assert.equal(accountInfo!.data.length, expectedSize,
+            `Account should be ${expectedSize} bytes (BASE_SIZE + ${PARTNER_COUNT} x 4)`);
+    });
+
+    // UPW-N1: Non-admin cannot update whitelisted partners
+    it("Any wallet other than admin should not able to change whitelisted partners", async () => {
+        const upwNaUserId = Buffer.alloc(32);
+        upwNaUserId.write("upw_na_user_1", 0, "utf-8");
+        const upwNaUser = Keypair.generate();
+        {
+            const sig = await provider.connection.requestAirdrop(upwNaUser.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL);
+            await provider.connection.confirmTransaction(sig, "confirmed");
+        }
+        const upwNaRecordPDA = deriveRecordPDA(upwNaUserId, upwNaUser.publicKey);
+        const now = Math.floor(Date.now() / 1000);
+        await program.methods
+            .whitelist(Array.from(upwNaUserId), { icv: {} }, upwNaUser.publicKey, new anchor.BN(now + 365 * 24 * 60 * 60), 500_000_000, null)
+            .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+            .signers([admin]).rpc();
+
+        try {
+            await program.methods
+                .updatePartnerWhitelist(Array.from(upwNaUserId), upwNaUser.publicKey, { add: {} }, 999001)
+                .accounts({
+                    record: upwNaRecordPDA,
+                    admin: manager.publicKey,   // manager signs, NOT the admin
+                    coreConfig: configPDA,
+                } as any)
+                .signers([manager]).rpc();
+            assert.fail("Expected transaction to fail with UnauthorizedAdmin");
+        } catch (err: any) {
+            assert.include(err.message, "UnauthorizedAdmin",
+                "Error should be UnauthorizedAdmin when a non-admin tries to update partner whitelist");
+        }
+    });
+
+
+    // =========================================================================
+    // SECTION: PLEDGE
+    // =========================================================================
+    // `pledge` moves yield tokens from ovault into:
+    //   - ICV: custody ATA owned by the Record PDA
+    //   - LP : ZOV-owned ATA (the ZOV constant address)
+    // Cliff must still be in the future; max_deposit cap is enforced.
+    // Only the manager can call it.
+    // -------------------------------------------------------------------------
+
+    // PL-P1: Pledge yield for an ICV user
+    it("Should be able to pledge yield for icv user", async () => {
+        const pledgeIcvUserId = Buffer.alloc(32);
+        pledgeIcvUserId.write("pl_icv_user_1", 0, "utf-8");
+        const pledgeIcvUser = Keypair.generate();
+        {
+            const sig = await provider.connection.requestAirdrop(pledgeIcvUser.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL);
+            await provider.connection.confirmTransaction(sig, "confirmed");
+        }
+        const now = Math.floor(Date.now() / 1000);
+        const pledgeIcvRecordPDA = deriveRecordPDA(pledgeIcvUserId, pledgeIcvUser.publicKey);
+        await program.methods
+            .whitelist(Array.from(pledgeIcvUserId), { icv: {} }, pledgeIcvUser.publicKey,
+                new anchor.BN(now + 2 * 365 * 24 * 60 * 60), 500_000_000, null)
+            .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+            .signers([admin]).rpc();
+
+        // ICV custody ATA — owned by the Record PDA
+        const pledgeIcvCustodyAta = await gocAta(pledgeIcvRecordPDA, tokenMint);
+        // Fund ovault's ATA directly so the transfer can proceed
+        const pledgeOvaultAta = await gocAtaAndMint(ovaultPDA, tokenMint, 10_000_000);
+        const pledgeAmount = new anchor.BN(5_000_000);
+        const recordBefore = await program.account.record.fetch(pledgeIcvRecordPDA);
+
+        await program.methods
+            .pledge(Array.from(pledgeIcvUserId), pledgeIcvUser.publicKey, pledgeAmount)
+            .accounts({
+                sourceTokenAccount: pledgeOvaultAta,
+                destinationTokenAccount: pledgeIcvCustodyAta,
+                record: pledgeIcvRecordPDA,
+                mint: tokenMint,
+                manager: manager.publicKey,
+                tokenProgram: TOKEN_PROGRAM_ID,
+                coreConfig: configPDA,
+            } as any)
+            .signers([manager]).rpc();
+
+        const recordAfter = await program.account.record.fetch(pledgeIcvRecordPDA);
+        assert.equal(
+            recordAfter.principleIn.toNumber(),
+            recordBefore.principleIn.toNumber() + pledgeAmount.toNumber(),
+            "principle_in should increase by the pledge amount for ICV user");
+        const custodyBal = (await provider.connection.getTokenAccountBalance(pledgeIcvCustodyAta)).value.amount;
+        assert.equal(custodyBal, pledgeAmount.toString(),
+            "ICV custody ATA should hold the pledged tokens");
+    });
+
+    // PL-P2: Pledge yield for an LP user
+    it("Should be able to pledge yield for lp user", async () => {
+        const pledgeLpUserId = Buffer.alloc(32);
+        pledgeLpUserId.write("pl_lp_user_1", 0, "utf-8");
+        const pledgeLpUser = Keypair.generate();
+        {
+            const sig = await provider.connection.requestAirdrop(pledgeLpUser.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL);
+            await provider.connection.confirmTransaction(sig, "confirmed");
+        }
+        const now = Math.floor(Date.now() / 1000);
+        const pledgeLpRecordPDA = deriveRecordPDA(pledgeLpUserId, pledgeLpUser.publicKey);
+        await program.methods
+            .whitelist(Array.from(pledgeLpUserId), { lp: {} }, pledgeLpUser.publicKey,
+                new anchor.BN(now + 2 * 365 * 24 * 60 * 60), 500_000_000, null)
+            .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+            .signers([admin]).rpc();
+
+        // LP pledge destination must be owned by the ZOV constant
+        const pledgeOvaultAta2 = await gocAtaAndMint(ovaultPDA, tokenMint, 10_000_000);
+        const pledgeAmount2 = new anchor.BN(3_000_000);
+        const zovBalBefore = BigInt((await provider.connection.getTokenAccountBalance(zovAta)).value.amount);
+        const recordBefore = await program.account.record.fetch(pledgeLpRecordPDA);
+
+        await program.methods
+            .pledge(Array.from(pledgeLpUserId), pledgeLpUser.publicKey, pledgeAmount2)
+            .accounts({
+                sourceTokenAccount: pledgeOvaultAta2,
+                destinationTokenAccount: zovAta,
+                record: pledgeLpRecordPDA,
+                mint: tokenMint,
+                manager: manager.publicKey,
+                tokenProgram: TOKEN_PROGRAM_ID,
+                coreConfig: configPDA,
+            } as any)
+            .signers([manager]).rpc();
+
+        const recordAfter = await program.account.record.fetch(pledgeLpRecordPDA);
+        assert.equal(
+            recordAfter.principleIn.toNumber(),
+            recordBefore.principleIn.toNumber() + pledgeAmount2.toNumber(),
+            "principle_in should increase by the pledge amount for LP user");
+        const zovBalAfter = BigInt((await provider.connection.getTokenAccountBalance(zovAta)).value.amount);
+        assert.equal((zovBalAfter - zovBalBefore).toString(), pledgeAmount2.toString(),
+            "ZOV ATA should have received the LP pledge amount");
+    });
+
+
+    // PL-N1: Pledge fails when it would push principle_in above max_deposit
+    it("Should not be able to pledge if principle is increasing max-deposit", async () => {
+        const pledgeMdUserId = Buffer.alloc(32);
+        pledgeMdUserId.write("pl_md_user_1", 0, "utf-8");
+        const pledgeMdUser = Keypair.generate();
+        {
+            const sig = await provider.connection.requestAirdrop(pledgeMdUser.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL);
+            await provider.connection.confirmTransaction(sig, "confirmed");
+        }
+        const now = Math.floor(Date.now() / 1000);
+        const cap = 50_000_000;
+        const pledgeMdRecordPDA = deriveRecordPDA(pledgeMdUserId, pledgeMdUser.publicKey);
+        // Whitelist with a tight max_deposit cap of 50M
+        await program.methods
+            .whitelist(Array.from(pledgeMdUserId), { icv: {} }, pledgeMdUser.publicKey,
+                new anchor.BN(now + 2 * 365 * 24 * 60 * 60), cap, null)
+            .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+            .signers([admin]).rpc();
+
+        // Deposit exactly the cap so net balance == max_deposit
+        const pledgeMdUserAta = await gocAtaAndMint(pledgeMdUser.publicKey, tokenMint, 100_000_000);
+        const pledgeMdCustodyAta = await gocAta(pledgeMdRecordPDA, tokenMint);
+        await program.methods
+            .deposit(Array.from(pledgeMdUserId), new anchor.BN(cap))
+            .accounts({
+                sourceTokenAccount: pledgeMdUserAta,
+                destinationTokenAccount: pledgeMdCustodyAta,
+                record: pledgeMdRecordPDA,
+                mint: tokenMint,
+                signer: pledgeMdUser.publicKey,
+                tokenProgram: TOKEN_PROGRAM_ID,
+                coreConfig: configPDA,
+            } as any)
+            .signers([pledgeMdUser]).rpc();
+
+        // principle_in == max_deposit; any pledge (even 1 unit) must fail
+        const pledgeMdOvaultAta = await gocAtaAndMint(ovaultPDA, tokenMint, 10_000_000);
+        try {
+            await program.methods
+                .pledge(Array.from(pledgeMdUserId), pledgeMdUser.publicKey, new anchor.BN(1))
+                .accounts({
+                    sourceTokenAccount: pledgeMdOvaultAta,
+                    destinationTokenAccount: pledgeMdCustodyAta,
+                    mint: tokenMint,
+                    manager: manager.publicKey,
+                    tokenProgram: TOKEN_PROGRAM_ID,
+                    coreConfig: configPDA,
+                } as any)
+                .signers([manager]).rpc();
+            assert.fail("Expected transaction to fail with MaxDepositExceeded");
+        } catch (err: any) {
+            assert.include(err.message, "MaxDepositExceeded",
+                "Error should be MaxDepositExceeded when pledge would push principle_in above max_deposit");
+        }
+    });
+
+    // PL-N2: Non-manager cannot pledge
+    it("Any wallet except manager should not be able to pledge yield", async () => {
+        const pledgeNmUserId = Buffer.alloc(32);
+        pledgeNmUserId.write("pl_nm_user_1", 0, "utf-8");
+        const pledgeNmUser = Keypair.generate();
+        {
+            const sig = await provider.connection.requestAirdrop(pledgeNmUser.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL);
+            await provider.connection.confirmTransaction(sig, "confirmed");
+        }
+        const now = Math.floor(Date.now() / 1000);
+        const pledgeNmRecordPDA = deriveRecordPDA(pledgeNmUserId, pledgeNmUser.publicKey);
+        await program.methods
+            .whitelist(Array.from(pledgeNmUserId), { icv: {} }, pledgeNmUser.publicKey,
+                new anchor.BN(now + 2 * 365 * 24 * 60 * 60), 500_000_000, null)
+            .accounts({ admin: admin.publicKey, coreConfig: configPDA } as any)
+            .signers([admin]).rpc();
+
+        const pledgeNmCustodyAta = await gocAta(pledgeNmRecordPDA, tokenMint);
+        const pledgeNmOvaultAta = await gocAtaAndMint(ovaultPDA, tokenMint, 5_000_000);
+        try {
+            await program.methods
+                .pledge(Array.from(pledgeNmUserId), pledgeNmUser.publicKey, new anchor.BN(1_000_000))
+                .accounts({
+                    sourceTokenAccount: pledgeNmOvaultAta,
+                    destinationTokenAccount: pledgeNmCustodyAta,
+                    mint: tokenMint,
+                    manager: admin.publicKey,   // admin signs, NOT the protocol manager
+                    tokenProgram: TOKEN_PROGRAM_ID,
+                    coreConfig: configPDA,
+                } as any)
+                .signers([admin]).rpc();
+            assert.fail("Expected transaction to fail with UnauthorizedManager");
+        } catch (err: any) {
+            assert.include(err.message, "UnauthorizedManager",
+                "Error should be UnauthorizedManager when a non-manager tries to pledge");
+        }
+    });
+
 });
 

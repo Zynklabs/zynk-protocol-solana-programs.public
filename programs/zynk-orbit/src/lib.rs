@@ -2111,6 +2111,7 @@ pub struct Pledge<'info> {
     pub destination_token_account: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
+        mut,
         seeds = [RECORD_SEED, user_id.as_ref(), primary_account.as_ref()],
         bump,
     )]
