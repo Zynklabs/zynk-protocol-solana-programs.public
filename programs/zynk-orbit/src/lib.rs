@@ -308,7 +308,6 @@ pub mod zynk_orbit {
         positions: Vec<PositionOperation>,
         meta: Option<Vec<EventArg>>,
     ) -> Result<()> {
-        require!(!positions.is_empty(), OrbitError::EmptyPositions);
         require!(amount > 0, OrbitError::ZeroAmount);
 
         // Validate manager against zynk-core config
@@ -341,8 +340,8 @@ pub mod zynk_orbit {
                 .ok_or(ProgramError::ArithmeticOverflow)?;
         }
 
-        // Verify the total of all position amounts equals the borrow amount
-        require!(total_position_amount == amount, OrbitError::AmountMismatch);
+        // Verify the total of all position amounts is less than or equal to the borrow amount
+        require!(total_position_amount <= amount, OrbitError::AmountMismatch);
 
         let remaining_accounts = ctx.remaining_accounts;
 
@@ -614,8 +613,6 @@ pub mod zynk_orbit {
             .checked_sub(amount_in)
             .ok_or(ProgramError::ArithmeticOverflow)?;
 
-        // Reject over-repayment — caller must not supply more than what is owed.
-        require!(amount <= remaining_order, OrbitError::ExcessiveRepay);
 
         // The prepared amount is capped by the remaining order amount
         let prepared_amount = amount.min(remaining_order);
@@ -683,7 +680,6 @@ pub mod zynk_orbit {
             share: u64,
         }
         let mut position_infos = Vec::with_capacity(num_positions);
-        let mut total_position_remaining: u64 = 0;
 
         for i in 0..num_positions {
             let base_idx = i * 3;
@@ -719,10 +715,6 @@ pub mod zynk_orbit {
                 .ok_or(ProgramError::ArithmeticOverflow)?;
             drop(position_data);
 
-            total_position_remaining = total_position_remaining
-                .checked_add(remaining)
-                .ok_or(ProgramError::ArithmeticOverflow)?;
-
             position_infos.push(PositionInfo {
                 user_type: record_user_type,
                 record_key,
@@ -731,37 +723,23 @@ pub mod zynk_orbit {
             });
         }
 
-        // Verify total remaining across all positions matches the order's remaining amount
-        require!(
-            total_position_remaining == remaining_order,
-            OrbitError::AmountMismatch
-        );
-
         // Step 4: Distribute prepared_amount across positions using ceiling-based algorithm.
-        // share = ceil(remaining_repay * position.remaining / remaining_order)
-        // This ensures no position is overpaid and the last position absorbs rounding dust.
-        let mut remaining_repay = prepared_amount;
-        let mut remaining_order_amount = remaining_order;
-
+        // share = ceil(amount * position.remaining / remaining_total)
+        let mut remaining_amount = prepared_amount;
         for info in position_infos.iter_mut() {
-            let share = if remaining_order_amount > 0 {
-                let numerator = remaining_repay
+            //Ceiling division
+            let share = if prepared_amount > 0 {
+                let numerator = prepared_amount
                     .checked_mul(info.remaining)
                     .ok_or(ProgramError::ArithmeticOverflow)?;
-                let raw_share = (numerator + remaining_order_amount - 1)
-                    .checked_div(remaining_order_amount)
+                let raw_share = (numerator + remaining_order - 1)
+                    .checked_div(remaining_order)
                     .ok_or(ProgramError::ArithmeticOverflow)?;
-                raw_share.min(info.remaining).min(remaining_repay)
+                raw_share.min(info.remaining).min(remaining_amount)
             } else {
                 0
             };
-
-            remaining_repay = remaining_repay
-                .checked_sub(share)
-                .ok_or(ProgramError::ArithmeticOverflow)?;
-            remaining_order_amount = remaining_order_amount
-                .checked_sub(info.remaining)
-                .ok_or(ProgramError::ArithmeticOverflow)?;
+            remaining_amount = remaining_amount.checked_sub(share).ok_or(ProgramError::ArithmeticOverflow)?;
 
             info.share = share;
         }
