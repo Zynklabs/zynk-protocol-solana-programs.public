@@ -32,31 +32,29 @@ pub enum WhitelistAction {
 
 #[account]
 pub struct Record {
-    pub primary_account: Pubkey,   // 32 bytes
-    pub user_id: [u8; 32],         // 32 bytes
-    pub user_type: UserType,       // 1  byte  (repr u8)
-    pub cliff_period: i64,         // 8  bytes
-    pub principle_in: u64,         // 8  bytes
-    pub principle_out: u64,        // 8  bytes
-    pub max_deposit: u32,          // 4  bytes
-    pub aux_account: Pubkey,       // 32 bytes
+    pub wallets: [Pubkey; 3],          // 96 bytes (3 × 32)
+    pub user_id: [u8; 32],             // 32 bytes
+    pub user_type: UserType,           // 1  byte  (repr u8)
+    pub cliff_period: i64,             // 8  bytes
+    pub principle_in: u64,             // 8  bytes
+    pub principle_out: u64,            // 8  bytes
+    pub max_deposit: u32,              // 4  bytes
     pub whitelisted_partners: Vec<u32>, // 4-byte length prefix + (len × 4) bytes
 }
 
 impl Record {
     /// Fixed byte cost of every field except the vector's element storage:
     ///   8   discriminator
-    /// + 32  primary_account
+    /// + 96  wallets ([Pubkey; 3])
     /// + 32  user_id
     /// + 1   user_type
     /// + 8   cliff_period
     /// + 8   principle_in
     /// + 8   principle_out
     /// + 4   max_deposit
-    /// + 32  aux_account
     /// + 4   Vec<u32> length prefix
-    /// = 137 bytes
-    pub const BASE_SIZE: usize = 8 + 32 + 32 + 1 + 8 + 8 + 8 + 4 + 32 + 4;
+    /// = 169 bytes
+    pub const BASE_SIZE: usize = 8 + 96 + 32 + 1 + 8 + 8 + 8 + 4 + 4;
 
     /// Total account space required to hold exactly `len` partner IDs.
     /// Each `u32` partner ID occupies 4 bytes.
@@ -69,7 +67,6 @@ impl Record {
 #[account]
 #[derive(InitSpace)]
 pub struct WithdrawRequest {
-    pub primary_account: Pubkey,
     pub user_id: [u8; 32],
     pub amount: u32,
     pub destination: Pubkey,
@@ -78,7 +75,6 @@ pub struct WithdrawRequest {
 #[account]
 #[derive(InitSpace)]
 pub struct UpdateCliffPeriodRequest {
-    pub primary_account: Pubkey,
     pub user_id: [u8; 32],
     pub cliff_period: i64,
 }
@@ -90,7 +86,7 @@ pub struct Position {
     pub partner_id: [u8; 32],
     pub amount_borrowed: u64,
     pub amount_repaid: u64,
-    pub public_key: Pubkey,
+    pub user_id: [u8; 32],
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
@@ -135,6 +131,11 @@ pub fn close_account<'a, 'b>(
 
     from.assign(&SYSTEM_PROGRAM_ID);
     from.realloc(0, false).map_err(Into::into)
+}
+
+/// Returns true if `wallet` is present in `record.wallets`.
+fn is_whitelisted_wallet(record: &Record, wallet: &Pubkey) -> bool {
+    record.wallets.contains(wallet)
 }
 
 /// Extracts the 6-digit numeric partner ID from a partner_id string.
@@ -213,6 +214,12 @@ pub mod zynk_orbit {
         );
 
         let record = &ctx.accounts.record;
+
+        // Verify the signer is one of the whitelisted wallets on this record
+        require!(
+            is_whitelisted_wallet(record, &ctx.accounts.signer.key()),
+            OrbitError::InvalidAccount
+        );
 
         // Only LPs and ICVs can deposit. NCWs cannot.
         require!(
@@ -354,7 +361,7 @@ pub mod zynk_orbit {
             let position_pda = &remaining_accounts[base_idx + 3];
 
             // Deserialise record and capture all fields needed later before dropping the borrow.
-            let (primary_account, record_user_id, record_user_type) = {
+            let (record_user_id, record_user_type) = {
                 let record_data = record_account.data.borrow();
                 let record = Record::try_deserialize(&mut &record_data[..])
                     .map_err(|_| OrbitError::InvalidAccount)?;
@@ -368,7 +375,7 @@ pub mod zynk_orbit {
                     );
                 }
 
-                (record.primary_account, record.user_id, record.user_type)
+                (record.user_id, record.user_type)
                 // record_data Ref is dropped here
             };
 
@@ -421,7 +428,6 @@ pub mod zynk_orbit {
                     let seeds: &[&[u8]] = &[
                         RECORD_SEED,
                         record_user_id.as_ref(),
-                        primary_account.as_ref(),
                     ];
                     let (expected_authority, bump) =
                         Pubkey::find_program_address(seeds, ctx.program_id);
@@ -433,7 +439,6 @@ pub mod zynk_orbit {
                     let seeds_with_bump: &[&[u8]] = &[
                         RECORD_SEED,
                         record_user_id.as_ref(),
-                        primary_account.as_ref(),
                         &[bump],
                     ];
                     let signer_seeds = &[&seeds_with_bump[..]];
@@ -452,11 +457,11 @@ pub mod zynk_orbit {
                 }
             };
 
-            // Create the Position PDA
+            // Create the Position PDA using [POSITION_SEED, order_id, user_id]
             let position_seeds: &[&[u8]] = &[
                 POSITION_SEED,
                 order_id.as_ref(),
-                primary_account.as_ref(),
+                record_user_id.as_ref(),
             ];
             let (expected_position_key, position_bump) =
                 Pubkey::find_program_address(position_seeds, ctx.program_id);
@@ -468,7 +473,7 @@ pub mod zynk_orbit {
             let position_seeds_with_bump: &[&[u8]] = &[
                 POSITION_SEED,
                 order_id.as_ref(),
-                primary_account.as_ref(),
+                record_user_id.as_ref(),
                 &[position_bump],
             ];
             let position_signer_seeds = &[&position_seeds_with_bump[..]];
@@ -502,7 +507,7 @@ pub mod zynk_orbit {
                 partner_id: partner_id_bytes,
                 amount_borrowed: pos.amount,
                 amount_repaid: 0,
-                public_key: primary_account,
+                user_id: record_user_id,
             };
             position_account.try_serialize(&mut &mut position_data[..])?;
             drop(position_data);
@@ -673,7 +678,7 @@ pub mod zynk_orbit {
         // Second pass: distribute shares and execute transfers using cached data.
         struct PositionInfo {
             user_type: UserType,
-            primary_account: Pubkey,
+            record_key: Pubkey,
             remaining: u64,
             share: u64,
         }
@@ -691,7 +696,7 @@ pub mod zynk_orbit {
             let record = Record::try_deserialize(&mut &record_data[..])
                 .map_err(|_| OrbitError::InvalidAccount)?;
             let record_user_type = record.user_type;
-            let record_primary_account = record.primary_account;
+            let record_key = record_account.key();
             drop(record_data);
 
             // Validate that this position is not an LP repay.
@@ -720,7 +725,7 @@ pub mod zynk_orbit {
 
             position_infos.push(PositionInfo {
                 user_type: record_user_type,
-                primary_account: record_primary_account,
+                record_key,
                 remaining,
                 share: 0,
             });
@@ -768,7 +773,6 @@ pub mod zynk_orbit {
         for i in 0..num_positions {
             let base_idx = i * 3;
             let dst_token_account: &AccountInfo = &remaining_accounts[base_idx];
-            let record_account: &AccountInfo = &remaining_accounts[base_idx + 1];
             let position_pda: &AccountInfo = &remaining_accounts[base_idx + 2];
 
             let info = &position_infos[i];
@@ -789,17 +793,21 @@ pub mod zynk_orbit {
             // Verify destination based on user type (from cached record data in PositionInfo)
             match info.user_type {
                 UserType::NCW => {
-                    // NCW: destination token account must be owned by the NCW's primary account
-                    // (primary_account is read from the record in remaining accounts)
+                    // NCW: destination token account must be owned by one of the record's
+                    // whitelisted wallets. Read wallets from the record account.
+                    let record_account: &AccountInfo = &remaining_accounts[base_idx + 1];
+                    let record_data = record_account.data.borrow();
+                    let record = Record::try_deserialize(&mut &record_data[..])
+                        .map_err(|_| OrbitError::InvalidAccount)?;
                     require!(
-                        dst_token_authority == info.primary_account,
+                        is_whitelisted_wallet(&record, &dst_token_authority),
                         OrbitError::InvalidAccount
                     );
                 }
                 UserType::ICV => {
                     // ICV: destination token account must be owned by the Record PDA
                     require!(
-                        dst_token_authority == record_account.key(),
+                        dst_token_authority == info.record_key,
                         OrbitError::InvalidAccount
                     );
                 }
@@ -865,7 +873,7 @@ pub mod zynk_orbit {
 
     // ICV users claim their deposited funds after the cliff period is over.
     // Transfers all funds from the ICV token account (owned by Record PDA) to the
-    // destination token account (owned by record.primary_account or record.aux_account).
+    // destination token account (owned by one of record.wallets).
     //
     // TODO: In a future iteration, incorporate pull+repay to settle outstanding
     // borrowed positions before transferring ICV funds to destination. This will
@@ -884,6 +892,12 @@ pub mod zynk_orbit {
             OrbitError::InvalidTokenMint
         );
 
+        // Verify the signer is one of the whitelisted wallets on this record
+        require!(
+            is_whitelisted_wallet(record, &ctx.accounts.signer.key()),
+            OrbitError::InvalidAccount
+        );
+
         // Verify cliff period is over
         let now = Clock::get()?.unix_timestamp;
         require!(now >= record.cliff_period, OrbitError::CliffPeriodNotOver);
@@ -894,21 +908,19 @@ pub mod zynk_orbit {
             OrbitError::InvalidAccount
         );
 
-        // Verify destination token account belongs to record.primary_account or record.aux_account
+        // Verify destination token account belongs to one of record.wallets
         require!(
-            ctx.accounts.destination_token_account.owner == record.primary_account
-                || ctx.accounts.destination_token_account.owner == record.aux_account,
+            is_whitelisted_wallet(record, &ctx.accounts.destination_token_account.owner),
             OrbitError::InvalidAccount
         );
 
-        // Transfer ALL funds from ICV token account to aux account
+        // Transfer ALL funds from ICV token account to destination
         let icv_balance = ctx.accounts.icv_token_account.amount;
         require!(icv_balance > 0, OrbitError::ZeroAmount);
 
         let seeds: &[&[u8]] = &[
             RECORD_SEED,
             user_id.as_ref(),
-            record.primary_account.as_ref(),
             &[ctx.bumps.record],
         ];
         let signer_seeds = &[&seeds[..]];
@@ -949,7 +961,7 @@ pub mod zynk_orbit {
         Ok(())
     }
 
-    // Disburse funds from any PDA vault to a whitelisted record's primary account.
+    // Disburse funds from any PDA vault to a whitelisted record wallet.
     // The vault PDA is derived from [VAULT_SEED, vault_id] and acts as the transfer authority.
     pub fn disburse(ctx: Context<Disburse>, vault_id: [u8; 32], amount: u64) -> Result<()> {
         let record = &mut ctx.accounts.record;
@@ -965,6 +977,12 @@ pub mod zynk_orbit {
         require!(
             config.whitelisted_token_mints.contains(&ctx.accounts.mint.key()),
             OrbitError::InvalidTokenMint
+        );
+
+        // Verify destination token account is owned by one of the record's whitelisted wallets
+        require!(
+            is_whitelisted_wallet(record, &ctx.accounts.destination_token_account.owner),
+            OrbitError::InvalidAccount
         );
 
         let seeds: &[&[u8]] = &[VAULT_SEED, vault_id.as_ref(), &[ctx.bumps.spender]];
@@ -1004,10 +1022,9 @@ pub mod zynk_orbit {
         ctx: Context<Whitelist>,
         user_id: [u8; 32],
         user_type: UserType,
-        primary_account: Pubkey,
+        wallets: [Pubkey; 3],
         cliff_period: Option<i64>,
         max_deposit: Option<u32>,
-        aux_account: Option<Pubkey>,
     ) -> Result<()> {
         // Validate admin signer against zynk-core config.
         let config = read_core_config(&ctx.accounts.core_config, &ctx.accounts.zynk_core_program.key())?;
@@ -1024,14 +1041,13 @@ pub mod zynk_orbit {
             require!(cp > now, OrbitError::CliffPeriodInPast);
         }
 
-        record.primary_account = primary_account;
+        record.wallets = wallets;
         record.user_id = user_id;
         record.user_type = user_type;
         record.cliff_period = cliff_period.unwrap_or(i64::MAX);
         record.principle_in = 0;
         record.principle_out = 0;
         record.max_deposit = max_deposit.unwrap_or(u32::MAX);
-        record.aux_account = aux_account.unwrap_or(primary_account);
         // Always start with an empty whitelist; add partners via
         // update_partner_whitelist, which reallocs the account on demand.
         record.whitelisted_partners = Vec::new();
@@ -1039,7 +1055,35 @@ pub mod zynk_orbit {
         emit!(AxEvent {
             event_name: "Whitelist".to_string(),
             user_id,
-            public_key: primary_account,
+            public_key: wallets[0],
+            domain_separator: DOMAIN_SEPARATOR,
+            partners: Vec::new(),
+        });
+
+        Ok(())
+    }
+
+    /// Update the whitelisted wallets array for a user's record.
+    /// Only the admin can call this.
+    pub fn update_wallets(
+        ctx: Context<UpdateWallets>,
+        user_id: [u8; 32],
+        wallets: [Pubkey; 3],
+    ) -> Result<()> {
+        // Validate admin signer against zynk-core config.
+        let config = read_core_config(&ctx.accounts.core_config, &ctx.accounts.zynk_core_program.key())?;
+        require!(
+            ctx.accounts.admin.key() == config.admin,
+            OrbitError::UnauthorizedAdmin
+        );
+
+        let record = &mut ctx.accounts.record;
+        record.wallets = wallets;
+
+        emit!(AxEvent {
+            event_name: "WalletsUpdated".to_string(),
+            user_id,
+            public_key: wallets[0],
             domain_separator: DOMAIN_SEPARATOR,
             partners: Vec::new(),
         });
@@ -1050,7 +1094,6 @@ pub mod zynk_orbit {
     pub fn update_partner_whitelist(
         ctx: Context<UpdatePartnerWhitelist>,
         user_id: [u8; 32],
-        primary_account: Pubkey,
         action: WhitelistAction,
         partner_id: u32,
     ) -> Result<()> {
@@ -1088,7 +1131,7 @@ pub mod zynk_orbit {
         emit!(AxEvent {
             event_name: "UpdatePartnerWhitelist".to_string(),
             user_id,
-            public_key: primary_account,
+            public_key: record.wallets[0],
             domain_separator: DOMAIN_SEPARATOR,
             partners: record.whitelisted_partners.clone(),
         });
@@ -1156,7 +1199,6 @@ pub mod zynk_orbit {
     pub fn update_cliff_period(
         ctx: Context<UpdateCliffPeriod>,
         user_id: [u8; 32],
-        primary_account: Pubkey,
         cliff_period: Option<i64>,
     ) -> Result<()> {
         // Validate admin signer against zynk-core config
@@ -1171,14 +1213,13 @@ pub mod zynk_orbit {
         require!(resolved_cliff > now, OrbitError::CliffPeriodInPast);
 
         let request_record = &mut ctx.accounts.request_record;
-        request_record.primary_account = primary_account;
         request_record.user_id = user_id;
         request_record.cliff_period = resolved_cliff;
 
         emit!(AxEvent {
             event_name: "CliffPeriodUpdated".to_string(),
             user_id,
-            public_key: primary_account,
+            public_key: ctx.accounts.user_record.wallets[0],
             domain_separator: DOMAIN_SEPARATOR,
             partners: Vec::new(),
         });
@@ -1188,7 +1229,6 @@ pub mod zynk_orbit {
     pub fn update_max_deposit(
         ctx: Context<UpdateMaxDeposit>,
         user_id: [u8; 32],
-        primary_account: Pubkey,
         max_deposit: u32,
     ) -> Result<()> {
         // Validate admin signer against zynk-core config
@@ -1215,7 +1255,7 @@ pub mod zynk_orbit {
         emit!(AxEvent {
             event_name: "MaxDepositUpdated".to_string(),
             user_id,
-            public_key: primary_account,
+            public_key: record.wallets[0],
             domain_separator: DOMAIN_SEPARATOR,
             partners: Vec::new(),
         });
@@ -1225,25 +1265,27 @@ pub mod zynk_orbit {
     pub fn request_withdraw(
         ctx: Context<RequestWithdraw>,
         user_id: [u8; 32],
-        primary_account: Pubkey,
         destination: Pubkey,
         amount: u32,
     ) -> Result<()> {
         require!(amount != 0, OrbitError::ZeroAmount);
 
         let signer_record = &ctx.accounts.signer_record;
-        let destination_record = &ctx.accounts.destination_record;
-
         // NCW users are not permitted to raise withdraw requests
         require!(
             signer_record.user_type != UserType::NCW,
             OrbitError::InvalidOperation
         );
 
-        // Verify both records belong to the same user_id
+        // Verify signer is one of the whitelisted wallets on the signer record
         require!(
-            signer_record.user_id == user_id && destination_record.user_id == user_id,
-            OrbitError::UserIdMismatch
+            is_whitelisted_wallet(signer_record, &ctx.accounts.signer.key()),
+            OrbitError::InvalidAccount
+        );
+        // Make sure that destination is whitelisted
+        require!(
+            is_whitelisted_wallet(signer_record, &destination),
+            OrbitError::InvalidAccount
         );
 
         require!(
@@ -1256,7 +1298,6 @@ pub mod zynk_orbit {
         );
 
         let withdraw_request = &mut ctx.accounts.withdraw_request;
-        withdraw_request.primary_account = primary_account;
         withdraw_request.user_id = user_id;
         withdraw_request.amount = amount;
         withdraw_request.destination = destination;
@@ -1264,7 +1305,7 @@ pub mod zynk_orbit {
         emit!(AxEvent {
             event_name: "WithdrawRequested".to_string(),
             user_id,
-            public_key: primary_account,
+            public_key: ctx.accounts.signer.key(),
             domain_separator: DOMAIN_SEPARATOR,
             partners: Vec::new(),
         });
@@ -1274,7 +1315,6 @@ pub mod zynk_orbit {
     pub fn approve_withdraw(
         ctx: Context<ApproveWithdraw>,
         user_id: [u8; 32],
-        primary_account_pk: Pubkey,
     ) -> Result<()> {
         // Validate admin signer against zynk-core config
         let config = read_core_config(&ctx.accounts.core_config, &ctx.accounts.zynk_core_program.key())?;
@@ -1321,7 +1361,6 @@ pub mod zynk_orbit {
                 let seeds: &[&[u8]] = &[
                     RECORD_SEED,
                     user_id.as_ref(),
-                    primary_account_pk.as_ref(),
                     &[ctx.bumps.record],
                 ];
                 let signer_seeds = &[&seeds[..]];
@@ -1360,10 +1399,10 @@ pub mod zynk_orbit {
             }
         }
 
-        // Close the withdraw request account, move lamports to primary wallet
+        // Close the withdraw request account, move lamports to admin
         close_account(
             ctx.accounts.request.to_account_info(),
-            ctx.accounts.primary_account.to_account_info(),
+            ctx.accounts.admin.to_account_info(),
         )?;
 
         emit!(TxEvent {
@@ -1383,38 +1422,25 @@ pub mod zynk_orbit {
     }
 
     /// Reject (cancel) a pending withdraw request.
-    ///
-    /// Only the user who raised the request (the primary account holder) may
-    /// reject it.  The WithdrawRequest PDA is closed and its rent-exempt
-    /// lamports are returned to the primary account.
-    pub fn reject_withdraw(ctx: Context<RejectWithdraw>) -> Result<()> {
-        // Deserialize the request inside its own block so the immutable borrow
-        // of the data RefCell is dropped before close_account() mutably borrows it.
-        let withdraw_request = {
-            let request_data = ctx.accounts.request.try_borrow_data()?;
-            WithdrawRequest::try_deserialize(&mut &request_data[..])
-                .map_err(|_| OrbitError::InvalidRequestAccount)?
-            // `request_data` (Ref<[u8]>) is dropped here
-        };
-
-        // Verify the signer is the primary account registered in the request
+    /// Only the admin can reject a withdraw request.
+    pub fn reject_withdraw(ctx: Context<RejectWithdraw>, user_id: [u8; 32]) -> Result<()> {
+        // Validate admin signer against zynk-core config
+        let config = read_core_config(&ctx.accounts.core_config, &ctx.accounts.zynk_core_program.key())?;
         require!(
-            ctx.accounts.primary_account.key() == withdraw_request.primary_account,
-            OrbitError::InvalidAccount
+            ctx.accounts.admin.key() == config.admin,
+            OrbitError::UnauthorizedAdmin
         );
 
-        let user_id = withdraw_request.user_id;
-
-        // Close the WithdrawRequest PDA — return lamports to the primary account
+        // Close the WithdrawRequest PDA and return lamports to the admin
         close_account(
             ctx.accounts.request.to_account_info(),
-            ctx.accounts.primary_account.to_account_info(),
+            ctx.accounts.admin.to_account_info(),
         )?;
 
         emit!(AxEvent {
             event_name: "WithdrawRejected".to_string(),
             user_id,
-            public_key: ctx.accounts.primary_account.key(),
+            public_key: ctx.accounts.admin.key(),
             domain_separator: DOMAIN_SEPARATOR,
             partners: Vec::new(),
         });
@@ -1422,40 +1448,33 @@ pub mod zynk_orbit {
         Ok(())
     }
 
-    pub fn approve_cliff_period(ctx: Context<ApproveCliffPeriod>) -> Result<()> {
-        // Deserialize the request inside its own block so the immutable borrow
-        // of `request`'s data RefCell is dropped before close_account() needs
-        // a mutable borrow of the same account (assign + realloc).
-        let update_request = {
-            let request_data = ctx.accounts.request.try_borrow_data()?;
-            UpdateCliffPeriodRequest::try_deserialize(&mut &request_data[..])
-                .map_err(|_| OrbitError::InvalidRequestAccount)?
-            // `request_data` (Ref<[u8]>) is dropped here — RefCell is fully released
-        };
+    pub fn approve_cliff_period(ctx: Context<ApproveCliffPeriod>, user_id: [u8; 32]) -> Result<()> {
+        // Validate that the request belongs to this user.
 
         let record = &mut ctx.accounts.record;
 
-        // Verify the record matches the update request
+        // Verify signer is one of the whitelisted wallets on the record
         require!(
-            record.user_id == update_request.user_id
-                && record.primary_account == update_request.primary_account,
+            is_whitelisted_wallet(record, &ctx.accounts.signer.key()),
             OrbitError::InvalidAccount
         );
 
-        // Update the cliff period on the record
-        record.cliff_period = update_request.cliff_period;
+        // Capture the new cliff period before the borrow ends
+        let new_cliff_period = ctx.accounts.request.cliff_period;
 
-        // Close the update request account, move lamports to primary wallet.
-        // Safe now — no live borrows on `request`'s data RefCell remain.
+        // Update the cliff period on the record
+        record.cliff_period = new_cliff_period;
+
+        // Close the update request account, move lamports to signer.
         close_account(
             ctx.accounts.request.to_account_info(),
-            ctx.accounts.primary_account.to_account_info(),
+            ctx.accounts.signer.to_account_info(),
         )?;
 
         emit!(AxEvent {
             event_name: "CliffPeriodApproved".to_string(),
-            user_id: update_request.user_id,
-            public_key: update_request.primary_account,
+            user_id: user_id,
+            public_key: ctx.accounts.signer.key(),
             domain_separator: DOMAIN_SEPARATOR,
             partners: Vec::new(),
         });
@@ -1465,37 +1484,26 @@ pub mod zynk_orbit {
 
     /// Reject (cancel) a pending cliff period update request.
     ///
-    /// Only the primary account holder (i.e. the ICV user who owns the record)
-    /// may reject it.  The UpdateCliffPeriodRequest PDA is closed and its
-    /// rent-exempt lamports are returned to the primary account.
-    pub fn reject_cliff_period(ctx: Context<RejectCliffPeriod>) -> Result<()> {
-        // Deserialize the request inside its own block so the immutable borrow
-        // of the data RefCell is dropped before close_account() mutably borrows it.
-        let update_request = {
-            let request_data = ctx.accounts.request.try_borrow_data()?;
-            UpdateCliffPeriodRequest::try_deserialize(&mut &request_data[..])
-                .map_err(|_| OrbitError::InvalidRequestAccount)?
-            // `request_data` (Ref<[u8]>) is dropped here
-        };
-
-        // Verify the signer is the primary account registered in the request
+    /// Any whitelisted wallet of the associated record may reject it.
+    /// The UpdateCliffPeriodRequest PDA is closed and its rent-exempt
+    /// lamports are returned to the signer.
+    pub fn reject_cliff_period(ctx: Context<RejectCliffPeriod>, user_id: [u8; 32]) -> Result<()> {
+        // Verify the signer is one of the whitelisted wallets on the record
         require!(
-            ctx.accounts.primary_account.key() == update_request.primary_account,
+            is_whitelisted_wallet(&ctx.accounts.record, &ctx.accounts.signer.key()),
             OrbitError::InvalidAccount
         );
 
-        let user_id = update_request.user_id;
-
-        // Close the UpdateCliffPeriodRequest PDA — return lamports to the primary account
+        // Close the UpdateCliffPeriodRequest PDA — return lamports to the signer
         close_account(
             ctx.accounts.request.to_account_info(),
-            ctx.accounts.primary_account.to_account_info(),
+            ctx.accounts.signer.to_account_info(),
         )?;
 
         emit!(AxEvent {
             event_name: "CliffPeriodRejected".to_string(),
             user_id,
-            public_key: ctx.accounts.primary_account.key(),
+            public_key: ctx.accounts.signer.key(),
             domain_separator: DOMAIN_SEPARATOR,
             partners: Vec::new(),
         });
@@ -1509,7 +1517,6 @@ pub mod zynk_orbit {
     pub fn pledge(
         ctx: Context<Pledge>,
         user_id: [u8; 32],
-        _primary_account: Pubkey,
         amount: u64,
     ) -> Result<()> {
         require!(amount != 0, OrbitError::ZeroAmount);
@@ -1621,7 +1628,7 @@ pub struct Deposit<'info> {
 
     #[account(
         mut,
-        seeds = [RECORD_SEED, user_id.as_ref(), signer.key().as_ref()],
+        seeds = [RECORD_SEED, user_id.as_ref()],
         bump,
     )]
     pub record: Account<'info, Record>,
@@ -1763,7 +1770,7 @@ pub struct Disburse<'info> {
     #[account(mut)]
     pub source_token_account: InterfaceAccount<'info, TokenAccount>,
 
-    #[account(mut, constraint = destination_token_account.owner == record.primary_account @ OrbitError::InvalidAccount)]
+    #[account(mut)]
     pub destination_token_account: InterfaceAccount<'info, TokenAccount>,
 
     /// CHECK: Vault PDA - verified by seeds, acts as the transfer authority
@@ -1796,7 +1803,7 @@ pub struct Disburse<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(user_id: [u8; 32], user_type: UserType, primary_account: Pubkey)]
+#[instruction(user_id: [u8; 32])]
 pub struct Whitelist<'info> {
     #[account(
         init,
@@ -1804,8 +1811,30 @@ pub struct Whitelist<'info> {
         // Allocate only baseline space (empty whitelist). Partners are added
         // later via update_partner_whitelist, which reallocs on demand.
         space = Record::space_for_len(0),
-        seeds = [RECORD_SEED, user_id.as_ref(), primary_account.as_ref()],
+        seeds = [RECORD_SEED, user_id.as_ref()],
         bump
+    )]
+    pub record: Account<'info, Record>,
+
+    #[account(mut)]
+    pub admin: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+
+    /// CHECK: zynk-core config PDA — validated via read_core_config()
+    pub core_config: UncheckedAccount<'info>,
+
+    /// CHECK: zynk-core program for PDA derivation
+    pub zynk_core_program: Program<'info, ZynkCore>,
+}
+
+#[derive(Accounts)]
+#[instruction(user_id: [u8; 32])]
+pub struct UpdateWallets<'info> {
+    #[account(
+        mut,
+        seeds = [RECORD_SEED, user_id.as_ref()],
+        bump,
     )]
     pub record: Account<'info, Record>,
 
@@ -1836,21 +1865,20 @@ pub struct Revoke<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(user_id: [u8; 32], primary_account: Pubkey)]
+#[instruction(user_id: [u8; 32])]
 pub struct UpdateCliffPeriod<'info> {
     #[account(
         init,
         payer = admin,
         space = 8 + UpdateCliffPeriodRequest::INIT_SPACE,
-        seeds = [RECORD_UPDATE_REQUEST_SEED, user_id.as_ref(), primary_account.as_ref()],
+        seeds = [RECORD_UPDATE_REQUEST_SEED, user_id.as_ref()],
         bump
     )]
     pub request_record: Account<'info, UpdateCliffPeriodRequest>,
 
     #[account(
-        seeds = [RECORD_SEED, user_id.as_ref(), primary_account.as_ref()],
+        seeds = [RECORD_SEED, user_id.as_ref()],
         bump,
-        constraint = user_record.primary_account == primary_account @ OrbitError::InvalidAccount,
     )]
     pub user_record: Account<'info, Record>,
 
@@ -1867,11 +1895,11 @@ pub struct UpdateCliffPeriod<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(user_id: [u8; 32], primary_account: Pubkey)]
+#[instruction(user_id: [u8; 32])]
 pub struct UpdateMaxDeposit<'info> {
     #[account(
         mut,
-        seeds = [RECORD_SEED, user_id.as_ref(), primary_account.as_ref()],
+        seeds = [RECORD_SEED, user_id.as_ref()],
         bump,
     )]
     pub record: Account<'info, Record>,
@@ -1890,11 +1918,11 @@ pub struct UpdateMaxDeposit<'info> {
 
 #[derive(Accounts)]
 // `action` is bound here so the realloc expression below can reference it.
-#[instruction(user_id: [u8; 32], primary_account: Pubkey, action: WhitelistAction)]
+#[instruction(user_id: [u8; 32], action: WhitelistAction)]
 pub struct UpdatePartnerWhitelist<'info> {
     #[account(
         mut,
-        seeds = [RECORD_SEED, user_id.as_ref(), primary_account.as_ref()],
+        seeds = [RECORD_SEED, user_id.as_ref()],
         bump,
         // Dynamically resize the account buffer before the handler runs:
         //   • Add    → grow by one u32 slot (4 bytes)
@@ -1926,37 +1954,31 @@ pub struct UpdatePartnerWhitelist<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(user_id: [u8; 32], primary_account: Pubkey, destination: Pubkey)]
+#[instruction(user_id: [u8; 32])]
 pub struct RequestWithdraw<'info> {
     #[account(
-        seeds = [RECORD_SEED, user_id.as_ref(), primary_account.as_ref()],
+        seeds = [RECORD_SEED, user_id.as_ref()],
         bump,
     )]
     pub signer_record: Account<'info, Record>,
 
     #[account(
-        seeds = [RECORD_SEED, user_id.as_ref(), destination.as_ref()],
-        bump,
-    )]
-    pub destination_record: Account<'info, Record>,
-
-    #[account(
         init,
         payer = signer,
         space = 8 + WithdrawRequest::INIT_SPACE,
-        seeds = [WITHDRAW_REQUEST_SEED, user_id.as_ref(), primary_account.as_ref()],
+        seeds = [WITHDRAW_REQUEST_SEED, user_id.as_ref()],
         bump
     )]
     pub withdraw_request: Account<'info, WithdrawRequest>,
 
-    #[account(mut, constraint = signer.key() == primary_account @ OrbitError::InvalidAccount)]
+    #[account(mut)]
     pub signer: Signer<'info>,
 
     pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
-#[instruction(user_id: [u8; 32], primary_account_pk: Pubkey)]
+#[instruction(user_id: [u8; 32])]
 pub struct ApproveWithdraw<'info> {
     /// CHECK: WithdrawRequest PDA - validated in handler
     #[account(mut)]
@@ -1964,14 +1986,10 @@ pub struct ApproveWithdraw<'info> {
 
     #[account(
         mut,
-        seeds = [RECORD_SEED, user_id.as_ref(), primary_account_pk.as_ref()],
+        seeds = [RECORD_SEED, user_id.as_ref()],
         bump,
     )]
     pub record: Account<'info, Record>,
-
-    /// CHECK: primary wallet from the request - receives lamports from closed account
-    #[account(mut)]
-    pub primary_account: UncheckedAccount<'info>,
 
     #[account(mut)]
     pub admin: Signer<'info>,
@@ -2009,56 +2027,64 @@ pub struct RejectWithdraw<'info> {
     #[account(mut)]
     pub request: UncheckedAccount<'info>,
 
-    /// CHECK: primary wallet — must match withdraw_request.primary_account.
-    /// Receives rent lamports when the request PDA is closed.
     #[account(mut)]
-    pub primary_account: UncheckedAccount<'info>,
+    pub admin: Signer<'info>,
 
-    /// The user who originally raised the request; must be the primary account.
+    pub system_program: Program<'info, System>,
+
+    /// CHECK: zynk-core config PDA — validated via read_core_config()
+    pub core_config: UncheckedAccount<'info>,
+
+    /// CHECK: zynk-core program for PDA derivation
+    pub zynk_core_program: Program<'info, ZynkCore>,
+}
+
+#[derive(Accounts)]
+#[instruction(user_id: [u8; 32])]
+pub struct ApproveCliffPeriod<'info> {
+    /// UpdateCliffPeriodRequest PDA.
+    /// user_id ownership and record PDA derivation are validated in the handler
+    /// after converting the String user_id to its 32-byte on-chain representation.
     #[account(
         mut,
-        constraint = signer.key() == primary_account.key() @ OrbitError::InvalidAccount
+        constraint = request.user_id == user_id @ OrbitError::UserIdMismatch
     )]
+    pub request: Account<'info, UpdateCliffPeriodRequest >,
+
+    #[account(
+        mut,
+        seeds = [RECORD_SEED, user_id.as_ref()],
+        bump,
+    )]
+    pub record: Account<'info, Record>,
+
+
+    /// A whitelisted wallet that is approving the cliff period update
+    #[account(mut)]
     pub signer: Signer<'info>,
 
     pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
-pub struct ApproveCliffPeriod<'info> {
-    /// CHECK: UpdateCliffPeriodRequest PDA - validated in handler
-    #[account(mut)]
-    pub request: UncheckedAccount<'info>,
-
-    #[account(mut)]
-    pub record: Account<'info, Record>,
-
-    /// CHECK: primary wallet from the request - receives lamports from closed account
-    #[account(mut)]
-    pub primary_account: UncheckedAccount<'info>,
-
-    #[account(mut, constraint = primary_account.key() == record.primary_account @ OrbitError::UnauthorizedAdmin)]
-    pub primary_account_signer: Signer<'info>,
-
-    pub system_program: Program<'info, System>,
-}
-
-#[derive(Accounts)]
+#[instruction(user_id: [u8; 32])]
 pub struct RejectCliffPeriod<'info> {
     /// CHECK: UpdateCliffPeriodRequest PDA - validated in handler
-    #[account(mut)]
-    pub request: UncheckedAccount<'info>,
-
-    /// CHECK: primary wallet — must match update_request.primary_account.
-    /// Receives rent lamports when the request PDA is closed.
-    #[account(mut)]
-    pub primary_account: UncheckedAccount<'info>,
-
-    /// The primary account holder who originally raised the request; must be the primary account.
     #[account(
         mut,
-        constraint = signer.key() == primary_account.key() @ OrbitError::InvalidAccount
+        constraint = request.user_id == user_id @ OrbitError::UserIdMismatch
     )]
+    pub request: Account<'info, UpdateCliffPeriodRequest >,
+
+    /// Record PDA for wallet membership verification
+    #[account(
+        seeds = [RECORD_SEED, user_id.as_ref()],
+        bump,
+    )]
+    pub record: Account<'info, Record>,
+
+    /// A whitelisted wallet that is rejecting the cliff period update
+    #[account(mut)]
     pub signer: Signer<'info>,
 
     pub system_program: Program<'info, System>,
@@ -2069,7 +2095,7 @@ pub struct RejectCliffPeriod<'info> {
 pub struct Claim<'info> {
     #[account(
         mut,
-        seeds = [RECORD_SEED, user_id.as_ref(), signer.key().as_ref()],
+        seeds = [RECORD_SEED, user_id.as_ref()],
         bump,
         constraint = record.user_type == UserType::ICV @ OrbitError::InvalidOperation,
     )]
@@ -2102,7 +2128,7 @@ pub struct Claim<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(user_id: [u8; 32], primary_account: Pubkey)]
+#[instruction(user_id: [u8; 32])]
 pub struct Pledge<'info> {
     #[account(mut)]
     pub source_token_account: InterfaceAccount<'info, TokenAccount>,
@@ -2112,7 +2138,7 @@ pub struct Pledge<'info> {
 
     #[account(
         mut,
-        seeds = [RECORD_SEED, user_id.as_ref(), primary_account.as_ref()],
+        seeds = [RECORD_SEED, user_id.as_ref()],
         bump,
     )]
     pub record: Account<'info, Record>,
