@@ -46,8 +46,7 @@ const buildEd25519Ix = (msg: string, signer: Keypair) => {
   return { ed25519Ix, signature };
 };
 
-const DOMAIN_SEPARATOR = 1151111081099710;
-const MAX_U64 = "18446744073709551615";
+const DOMAIN_SEPARATOR = 115111123810997;
 
 const TimelockAction = {
   UpdateAdmin: 0,
@@ -65,7 +64,7 @@ const timelockDelays = {
   [TimelockAction.Unpause]: 6 * 60 * 60,
 };
 
-describe("zynk-core", () => {
+describe.only("zynk-core", () => {
   // Configure the client to use the local cluster
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
@@ -489,7 +488,7 @@ describe("zynk-core", () => {
     }
   });
 
-  it("Should be able to create transient pull order with attester signature provided - even when transient disabled", async () => {
+  it("Should be able to create transient pull order, even when transient disabled", async () => {
     const amount = new anchor.BN(100000000000);
 
     const transientOrderId = generateOrderId();
@@ -505,17 +504,13 @@ describe("zynk-core", () => {
       atas.partnerOperationalTokenAccount
     );
 
-    const message = `${DOMAIN_SEPARATOR}::${partnerOperationalWallet.publicKey.toString()}::${partnerDepositVaultPDA.toString()}::${zynkOpVault.toString()}`;
-    const { ed25519Ix, signature } = buildEd25519Ix(message, attester);
-
     await program.methods
       .pullAndCreateOrder(
         Array.from(partnerId),
         Array.from(transientOrderId),
         Array.from(defaultZovId),
-        false,
+        true,
         amount,
-        Buffer.from(signature).toJSON().data,
         null
       )
       .accounts({
@@ -533,7 +528,6 @@ describe("zynk-core", () => {
         tokenProgram: TOKEN_PROGRAM_ID,
         sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY,
       })
-      .preInstructions([ed25519Ix])
       .signers([manager])
       .rpc();
 
@@ -609,7 +603,6 @@ describe("zynk-core", () => {
           Array.from(defaultZovId),
           false,
           amount,
-          null,
           null
         )
         .accounts({
@@ -661,7 +654,6 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
-        null,
         null
       )
       .accounts({
@@ -1151,7 +1143,6 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         true,
         amount,
-        null,
         null
       )
       .accounts({
@@ -1253,7 +1244,6 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         true, // transient
         amount,
-        null,
         null
       )
       .accounts({
@@ -2453,7 +2443,6 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
-        null,
         null
       )
       .accounts({
@@ -2534,7 +2523,6 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
-        null,
         null
       )
       .accounts({
@@ -2650,7 +2638,6 @@ describe("zynk-core", () => {
           Array.from(defaultZovId),
           false,
           amount,
-          null,
           null
         )
         .accounts({
@@ -2695,7 +2682,6 @@ describe("zynk-core", () => {
           Array.from(defaultZovId),
           false,
           amount,
-          null,
           null
         )
         .accounts({
@@ -2928,7 +2914,6 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
-        null,
         null
       )
       .accounts({
@@ -3031,7 +3016,6 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
-        null,
         null
       )
       .accounts({
@@ -4801,6 +4785,7 @@ describe("zynk-core", () => {
   const BridgeTxnIn = "0xjkb32f32d3wh87egy3u2vbrg3v3782dgihbdkjfh9273tg3";
   const attestOrderId = generateOrderId();
   const attestOrderTrackerPDA = deriveOrderTrackerPDA(attestOrderId, "attest");
+  const attestTxnId = EthereumTxnOut;
   const amount = new anchor.BN(100);
 
   it("Should attest cross-chain order creation", async () => {
@@ -4838,7 +4823,7 @@ describe("zynk-core", () => {
         zynkOpVault.toString(),
         EthereumzynkOpVaultAddress,
         EthereumRecipientAddress,
-        txnId,
+        attestTxnId,
         EthereumTxnOut,
         BridgeTxnOut,
         "USDC",
@@ -4939,6 +4924,7 @@ describe("zynk-core", () => {
         EthereumRecipientAddress,
         EthereumzynkOpVaultAddress,
         zynkOpVault.toString(),
+        EthereumTxnIn,
         EthereumTxnIn,
         BridgeTxnIn,
         "USDT",

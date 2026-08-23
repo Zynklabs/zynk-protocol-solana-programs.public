@@ -400,7 +400,6 @@ pub mod zynk_core {
         zov_id: [u8; 32],
         transient: bool,
         amount: u64,
-        signature: Option<[u8; 64]>,
         meta: Option<Vec<EventArg>>
     ) -> Result<()> {
         // Check if program is paused.
@@ -415,18 +414,6 @@ pub mod zynk_core {
 
         require!(pdv_token_account.owner == partner_deposit_vault.key(), CustomError::InvalidAccount);
         require!(pdv_token_account.mint == ctx.accounts.zov_token_account.mint, CustomError::InvalidTokenMint);
-
-        let mut is_transient = transient;
-        if let Some(signature) = signature {
-            let message = format!("{}::{}::{}::{}", DOMAIN_SEPARATOR, beneficiary_wallet, partner_deposit_vault.key(), zynk_op_vault.key());
-            verify_signature_syscall(
-                ctx.accounts.sysvar_instructions.as_ref().ok_or(ProgramError::MissingRequiredSignature)?,
-                &config.attester,
-                message,
-                signature
-            )?;
-            is_transient = true;
-        }
 
         // Perform token transfer from pdv_token_account to zov_token_account.
         let cpi_accounts = TransferChecked {
@@ -471,7 +458,7 @@ pub mod zynk_core {
         token_interface::transfer_checked(cpi_ctx, amount, ctx.accounts.mint.decimals)?;
 
         let order_tracker = &mut ctx.accounts.order_tracker;
-        if is_transient {
+        if transient {
             close_account(order_tracker, &ctx.accounts.manager)?;
         } else {
             order_tracker.partner_id = partner_id;
@@ -490,7 +477,7 @@ pub mod zynk_core {
             token: ctx.accounts.mint.key(),
             partner_deposit_vault: partner_deposit_vault.key(),
             amount,
-            transient: is_transient,
+            transient,
             domain_separator: DOMAIN_SEPARATOR,
             meta
         });
@@ -533,6 +520,10 @@ pub mod zynk_core {
         // Check if program is paused.
         let config = &ctx.accounts.config;
         require!(!config.paused, CustomError::ContractPaused);
+        require!(
+            ctx.accounts.beneficiary.allow_transient || !transient,
+            CustomError::InvalidBeneficiary
+        );
 
         let beneficiary_wallet = ctx.accounts.beneficiary_token_account.owner.key();
         let partner_deposit_vault = ctx.accounts.partner_deposit_vault.key();
@@ -1217,7 +1208,6 @@ pub struct CreateOrder<'info> {
         seeds = [BENEFICIARY_SEED, partner_id.as_ref(), beneficiary_token_account.owner.as_ref()],
         bump,
         constraint = beneficiary.is_active @ CustomError::InvalidBeneficiary,
-        constraint = beneficiary.allow_transient || !transient @ CustomError::InvalidBeneficiary,
         constraint = beneficiary.public_key == beneficiary_token_account.owner @ CustomError::InvalidBeneficiary,
     )]
     pub beneficiary: Account<'info, Beneficiary>,

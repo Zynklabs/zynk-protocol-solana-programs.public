@@ -3,8 +3,8 @@ seeds = false
 skip-lint = false
 
 [programs.localnet]
-zynk_core = "CDhMbu6bYMLPxCEDv4V7AXBvgx4gqaMfLit4JTZFtd6y"
-zynk_orbit = "BeaxD6e6Gut7b7UanFDoKZ5ndY77aSz8tAAVPKHF9PNx"
+zynk_core = "ZYNKctWoaYeAdN9szq1joeu6rRPf7LK72pUurkcBpBY"
+zynk_orbit = "ZYNKopsYjG6gaGqdwz8HLAgvCAEFwCET56kRQKkjxfc"
 
 [programs.devnet]
 zynk_core = "ZynkcJyxiBTs9ePTQzHh7ckDDnwrLjuNVUbisF6hC7K"
