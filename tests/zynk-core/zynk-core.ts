@@ -1751,6 +1751,35 @@ describe.only("zynk-core", () => {
 
   it("Replenishes tokens from partner_deposit_vault to zynk_op_wallet - Token2022", async () => {
     const amount = new anchor.BN(100000000000);
+    const orderIdToken2022 = generateOrderId();
+    const orderTrackerPDA_Token2022 = deriveOrderTrackerPDA(orderIdToken2022);
+
+    await program.methods
+      .createOrder(
+        Array.from(partnerId),
+        Array.from(orderIdToken2022),
+        Array.from(defaultZovId),
+        false,
+        amount.muln(2),
+        null
+      )
+      .accounts({
+        config: configPDA,
+        manager: manager.publicKey,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: null,
+        zynkOpVault: zynkOpVault,
+        zovTokenAccount: atas.zovTokenAccount3,
+        beneficiary: defaultBeneficiaryPDA,
+        beneficiaryTokenAccount: atas.partnerOperationalTokenAccount3,
+        orderTracker: orderTrackerPDA_Token2022,
+        systemProgram: SystemProgram.programId,
+        mint: tokenMint3,
+        tokenProgram: TOKEN_2022_PROGRAM_ID,
+        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY,
+      })
+      .signers([manager])
+      .rpc();
 
     const sourceBalance_preTx =
       await provider.connection.getTokenAccountBalance(
@@ -1763,7 +1792,7 @@ describe.only("zynk-core", () => {
     );
 
     let orderTrackerAccount = await program.account.orderTracker.fetch(
-      currentOrderTrackerPDA
+      orderTrackerPDA_Token2022
     );
     const orderAmountIn_preTx = orderTrackerAccount.amountIn;
     await program.methods
@@ -1773,7 +1802,7 @@ describe.only("zynk-core", () => {
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: atas.partnerDepositTokenAccount3,
         zovTokenAccount: atas.zovTokenAccount3,
-        orderTracker: currentOrderTrackerPDA,
+        orderTracker: orderTrackerPDA_Token2022,
         manager: manager.publicKey,
         mint: tokenMint3,
         tokenProgram: TOKEN_2022_PROGRAM_ID,
@@ -1803,7 +1832,7 @@ describe.only("zynk-core", () => {
 
     // Verify that orderTracker is still active
     const orderTrackerInfo = await provider.connection.getAccountInfo(
-      currentOrderTrackerPDA
+      orderTrackerPDA_Token2022
     );
     assert.isNotNull(
       orderTrackerInfo,
@@ -1811,7 +1840,7 @@ describe.only("zynk-core", () => {
     );
 
     orderTrackerAccount = await program.account.orderTracker.fetch(
-      currentOrderTrackerPDA
+      orderTrackerPDA_Token2022
     );
 
     const orderAmountIn_postTx = orderTrackerAccount.amountIn;
@@ -2296,7 +2325,7 @@ describe.only("zynk-core", () => {
     }
   });
 
-  it("User can create order with first token and close order with second token", async () => {
+  it("Should fail to close order created with first token using second token mint", async () => {
     const amount = new anchor.BN(100000000000);
     const orderId = generateOrderId();
     const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
@@ -2353,36 +2382,33 @@ describe.only("zynk-core", () => {
       );
     }
 
-    // Close order with tokenMint2 (second token)
-    await program.methods
-      .replenish(
-        amount,
-        true, // close_order = true
-        null
-      )
-      .accounts({
-        config: configPDA,
-        partnerDepositVault: partnerDepositVaultPDA,
-        pdvTokenAccount: atas.partnerDepositTokenAccount2, // Using tokenMint2
-        zovTokenAccount: atas.zovTokenAccount2, // Using tokenMint2
-        orderTracker: orderTrackerPDA,
-        manager: manager.publicKey,
-        mint: tokenMint2,
-        tokenProgram: TOKEN_PROGRAM_ID,
-        systemProgram: SystemProgram.programId,
-      })
-      .signers([manager])
-      .rpc();
-
-    // Verify order is closed
+    // Try to close order with tokenMint2 (second token) - should fail
     try {
-      await program.account.orderTracker.fetch(orderTrackerPDA);
-      assert.fail("Expected order to be closed");
+      await program.methods
+        .replenish(
+          amount,
+          true, // close_order = true
+          null
+        )
+        .accounts({
+          config: configPDA,
+          partnerDepositVault: partnerDepositVaultPDA,
+          pdvTokenAccount: atas.partnerDepositTokenAccount2, // Using tokenMint2
+          zovTokenAccount: atas.zovTokenAccount2, // Using tokenMint2
+          orderTracker: orderTrackerPDA,
+          manager: manager.publicKey,
+          mint: tokenMint2,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([manager])
+        .rpc();
+      assert.fail("Expected replenish to fail when using a different token mint");
     } catch (error) {
       assert.include(
         error.message,
-        "Account does not exist",
-        "Expected account to be closed"
+        "InvalidTokenMint",
+        "Expected InvalidTokenMint error when replenishing with a different mint"
       );
     }
   });
@@ -2467,7 +2493,7 @@ describe.only("zynk-core", () => {
     }
   });
 
-  it("User is able to pull and create order with one mint token and close order with different mint token (Both valid)", async () => {
+  it("Should fail to close pull order with a different mint token than the order was created with", async () => {
     const amount = new anchor.BN(100000000000);
     const orderId = generateOrderId();
     const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
@@ -2513,36 +2539,33 @@ describe.only("zynk-core", () => {
     assert.equal(orderTrackerAccount.amountOut.toNumber(), amount.toNumber());
     assert.equal(orderTrackerAccount.amountIn.toNumber(), amount.toNumber()); // amount_in equals amount_out after pull
 
-    // Close order with tokenMint2 (different mint token)
-    await program.methods
-      .replenish(
-        new anchor.BN(0), // No additional amount needed since amount_in already equals amount_out
-        true, // close_order = true
-        null
-      )
-      .accounts({
-        config: configPDA,
-        partnerDepositVault: partnerDepositVaultPDA,
-        pdvTokenAccount: atas.partnerDepositTokenAccount2, // Using tokenMint2
-        zovTokenAccount: atas.zovTokenAccount2, // Using tokenMint2
-        orderTracker: orderTrackerPDA,
-        manager: manager.publicKey,
-        mint: tokenMint2,
-        tokenProgram: TOKEN_PROGRAM_ID,
-        systemProgram: SystemProgram.programId,
-      })
-      .signers([manager])
-      .rpc();
-
-    // Verify order is closed
+    // Close order with tokenMint2 (different mint token) - should fail
     try {
-      await program.account.orderTracker.fetch(orderTrackerPDA);
-      assert.fail("Expected order to be closed");
+      await program.methods
+        .replenish(
+          new anchor.BN(0), // No additional amount needed since amount_in already equals amount_out
+          true, // close_order = true
+          null
+        )
+        .accounts({
+          config: configPDA,
+          partnerDepositVault: partnerDepositVaultPDA,
+          pdvTokenAccount: atas.partnerDepositTokenAccount2, // Using tokenMint2
+          zovTokenAccount: atas.zovTokenAccount2, // Using tokenMint2
+          orderTracker: orderTrackerPDA,
+          manager: manager.publicKey,
+          mint: tokenMint2,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([manager])
+        .rpc();
+      assert.fail("Expected close order to fail when using a different mint token");
     } catch (error) {
       assert.include(
         error.message,
-        "Account does not exist",
-        "Expected account to be closed"
+        "InvalidTokenMint",
+        "Expected InvalidTokenMint error when closing order with a different mint token"
       );
     }
   });
@@ -3054,7 +3077,7 @@ describe.only("zynk-core", () => {
     }
   });
 
-  it("Should be able to partially replenish order with different mint token that one order is created with", async () => {
+  it("Should fail to partially replenish order with different mint token than the order was created with", async () => {
     const amount = new anchor.BN(100000000000);
     const replenishAmount = new anchor.BN(50000000000); // Partial replenish
     const orderId = generateOrderId();
@@ -3110,59 +3133,35 @@ describe.only("zynk-core", () => {
       );
     }
 
-    const zovBalance2_preTx = await provider.connection.getTokenAccountBalance(
-      atas.zovTokenAccount2
-    );
-
-    // Partially replenish with tokenMint2 (different mint token, but both valid)
-    await program.methods
-      .replenish(
-        replenishAmount,
-        false, // close_order = false (partial replenish)
-        null
-      )
-      .accounts({
-        config: configPDA,
-        partnerDepositVault: partnerDepositVaultPDA,
-        pdvTokenAccount: atas.partnerDepositTokenAccount2, // Using tokenMint2
-        zovTokenAccount: atas.zovTokenAccount2, // Using tokenMint2
-        orderTracker: orderTrackerPDA,
-        manager: manager.publicKey,
-        mint: tokenMint2,
-        tokenProgram: TOKEN_PROGRAM_ID,
-        systemProgram: SystemProgram.programId,
-      })
-      .signers([manager])
-      .rpc();
-
-    // Verify order tracker is still active
-    const orderTrackerInfo = await provider.connection.getAccountInfo(
-      orderTrackerPDA
-    );
-    assert.isNotNull(
-      orderTrackerInfo,
-      "OrderTracker should still be active after partial replenish"
-    );
-
-    // Verify amount_in increased
-    orderTrackerAccount = await program.account.orderTracker.fetch(
-      orderTrackerPDA
-    );
-    assert.equal(
-      orderTrackerAccount.amountIn.toNumber(),
-      replenishAmount.toNumber(),
-      "amount_in should equal replenish amount"
-    );
-
-    // Verify token transfer occurred
-    const zovBalance2_postTx = await provider.connection.getTokenAccountBalance(
-      atas.zovTokenAccount2
-    );
-    assert.equal(
-      +zovBalance2_postTx.value.amount - +zovBalance2_preTx.value.amount,
-      +replenishAmount,
-      "Tokens should be transferred to zovTokenAccount2"
-    );
+    // Try to partially replenish with tokenMint2 - should fail
+    try {
+      await program.methods
+        .replenish(
+          replenishAmount,
+          false, // close_order = false (partial replenish)
+          null
+        )
+        .accounts({
+          config: configPDA,
+          partnerDepositVault: partnerDepositVaultPDA,
+          pdvTokenAccount: atas.partnerDepositTokenAccount2, // Using tokenMint2
+          zovTokenAccount: atas.zovTokenAccount2, // Using tokenMint2
+          orderTracker: orderTrackerPDA,
+          manager: manager.publicKey,
+          mint: tokenMint2,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([manager])
+        .rpc();
+      assert.fail("Expected replenish to fail when using a different mint token");
+    } catch (error) {
+      assert.include(
+        error.message,
+        "InvalidTokenMint",
+        "Expected InvalidTokenMint error when replenishing with a different mint token"
+      );
+    }
   });
 
   it("Should not be able to partially replenish order with valid mint token but pdv and zov mint tokens are different", async () => {

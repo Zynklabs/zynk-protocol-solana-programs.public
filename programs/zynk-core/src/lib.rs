@@ -70,6 +70,7 @@ pub struct OrderTracker {
     pub zynk_op_vault: Pubkey,
     pub beneficiary_wallet: Pubkey,
     pub partner_deposit_vault: Pubkey,
+    pub mint: Pubkey,
 }
 
 #[account]
@@ -373,6 +374,7 @@ pub mod zynk_core {
             order_tracker.zynk_op_vault = zynk_op_vault.key();
             order_tracker.beneficiary_wallet = beneficiary_wallet;
             order_tracker.partner_deposit_vault = partner_deposit_vault.key();
+            order_tracker.mint = ctx.accounts.mint.key();
         }
 
         emit!(OrderCreated {
@@ -467,6 +469,7 @@ pub mod zynk_core {
             order_tracker.zynk_op_vault = zynk_op_vault;
             order_tracker.beneficiary_wallet = beneficiary_wallet;
             order_tracker.partner_deposit_vault = partner_deposit_vault;
+            order_tracker.mint = ctx.accounts.mint.key();
         }
 
         emit!(OrderCreated {
@@ -1100,6 +1103,7 @@ pub struct Replenish<'info> {
 
     #[account(
         constraint = config.whitelisted_token_mints.contains(&mint.key()) @ CustomError::InvalidTokenMint,
+        constraint = mint.key() == order_tracker.mint @ CustomError::InvalidTokenMint,
     )]
     pub mint: InterfaceAccount<'info, Mint>,
     pub token_program: Interface<'info, TokenInterface>,

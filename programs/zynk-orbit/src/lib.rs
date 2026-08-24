@@ -603,6 +603,10 @@ pub mod zynk_orbit {
         // Skip 8-byte discriminator
         let order_tracker = zynk_core::OrderTracker::try_deserialize(&mut &order_tracker_data[..])
             .map_err(|_| OrbitError::InvalidAccount)?;
+        require!(
+            ctx.accounts.mint.key() == order_tracker.mint,
+            OrbitError::InvalidTokenMint
+        );
         let amount_out = order_tracker.amount_out;
         let amount_in = order_tracker.amount_in;
         drop(order_tracker_data);
