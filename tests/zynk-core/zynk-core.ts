@@ -49,7 +49,7 @@ const timelockDelays = {
   [TimelockAction.Unpause]: 6 * 60 * 60,
 };
 
-describe.only("zynk-core", () => {
+describe("zynk-core", () => {
   // Configure the client to use the local cluster
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
@@ -2403,7 +2403,9 @@ describe.only("zynk-core", () => {
         })
         .signers([manager])
         .rpc();
-      assert.fail("Expected replenish to fail when using a different token mint");
+      assert.fail(
+        "Expected replenish to fail when using a different token mint"
+      );
     } catch (error) {
       assert.include(
         error.message,
@@ -2560,7 +2562,9 @@ describe.only("zynk-core", () => {
         })
         .signers([manager])
         .rpc();
-      assert.fail("Expected close order to fail when using a different mint token");
+      assert.fail(
+        "Expected close order to fail when using a different mint token"
+      );
     } catch (error) {
       assert.include(
         error.message,
@@ -3154,7 +3158,9 @@ describe.only("zynk-core", () => {
         })
         .signers([manager])
         .rpc();
-      assert.fail("Expected replenish to fail when using a different mint token");
+      assert.fail(
+        "Expected replenish to fail when using a different mint token"
+      );
     } catch (error) {
       assert.include(
         error.message,
@@ -5267,138 +5273,232 @@ describe.only("zynk-core", () => {
     await program.removeEventListener(listener);
   });
 
-  // it("**Whitelisting disabled ZOV flow**", async () => {
-  //   currentOrderId = generateOrderId();
-  //   currentOrderTrackerPDA = deriveOrderTrackerPDA(currentOrderId);
+  it("Should successfully add a new token mint to the whitelist by admin", async () => {
+    const newMintKeypair = Keypair.generate();
+    const newMint = await createMint(
+      provider.connection,
+      manager,
+      admin.publicKey,
+      null,
+      6,
+      newMintKeypair
+    );
 
-  //   const zZovBalance_preTx = await provider.connection.getTokenAccountBalance(
-  //     atas.zZovTokenAccount
-  //   );
+    const configBefore = await program.account.config.fetch(configPDA);
+    const initialCount = configBefore.whitelistedTokenMints.length;
 
-  //   const sourceBalance_preTx =
-  //     await provider.connection.getTokenAccountBalance(
-  //       atas.partnerDepositTokenAccount
-  //     );
+    await program.methods
+      .updateWhitelistedTokenMint({ add: {} }, newMint)
+      .accounts({
+        config: configPDA,
+        authority: admin.publicKey,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .signers([admin])
+      .rpc();
 
-  //   const destBalance_preTx = await provider.connection.getTokenAccountBalance(
-  //     atas.partnerOperationalTokenAccount
-  //   );
+    const configAfter = await program.account.config.fetch(configPDA);
+    assert.equal(configAfter.whitelistedTokenMints.length, initialCount + 1);
+    assert.isTrue(
+      configAfter.whitelistedTokenMints.some((m) => m.equals(newMint))
+    );
+  });
 
-  //   ///////////// pullAndCreateOrder ////////////////
+  it("Should successfully add a new token mint to the whitelist by guardian", async () => {
+    const newMintKeypair = Keypair.generate();
+    const newMint = await createMint(
+      provider.connection,
+      manager,
+      guardian.publicKey,
+      null,
+      6,
+      newMintKeypair
+    );
 
-  //   const amount = new anchor.BN(100000000000);
+    const configBefore = await program.account.config.fetch(configPDA);
+    const initialCount = configBefore.whitelistedTokenMints.length;
 
-  //   expect(+sourceBalance_preTx.value.amount).to.be.gte(+amount);
+    await program.methods
+      .updateWhitelistedTokenMint({ add: {} }, newMint)
+      .accounts({
+        config: configPDA,
+        authority: guardian.publicKey,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .signers([guardian])
+      .rpc();
 
-  //   await program.methods
-  //     .pullAndCreateOrder(
-  //       Array.from(partnerId),
-  //       Array.from(currentOrderId),
-  //       Array.from(zeroZovId),
-  //       false,
-  //       amount,
-  //       null,
-  //       null
-  //     )
-  //     .accounts({
-  //       config: configPDA,
-  //       manager: manager.publicKey,
-  //       partnerDepositVault: partnerDepositVaultPDA,
-  //       pdvTokenAccount: atas.partnerDepositTokenAccount,
-  //       zynkOpVault: zZynkOpVault,
-  //       zovTokenAccount: atas.zZovTokenAccount,
-  //       beneficiary: null,
-  //       beneficiaryTokenAccount: atas.partnerOperationalTokenAccount,
-  //       orderTracker: currentOrderTrackerPDA,
-  //       systemProgram: SystemProgram.programId,
-  //       mint: tokenMint,
-  //       tokenProgram: TOKEN_PROGRAM_ID,
-  //       sysvarInstructions: null,
-  //     })
-  //     .signers([manager])
-  //     .rpc();
+    const configAfter = await program.account.config.fetch(configPDA);
+    assert.equal(configAfter.whitelistedTokenMints.length, initialCount + 1);
+    assert.isTrue(
+      configAfter.whitelistedTokenMints.some((m) => m.equals(newMint))
+    );
+  });
 
-  //   // Verify token pull
-  //   const sourceBalance_postTx =
-  //     await provider.connection.getTokenAccountBalance(
-  //       atas.partnerDepositTokenAccount
-  //     );
-  //   assert.equal(
-  //     +sourceBalance_preTx.value.amount - +sourceBalance_postTx.value.amount,
-  //     +amount
-  //   );
+  it("Should fail when adding an already whitelisted token mint", async () => {
+    const config = await program.account.config.fetch(configPDA);
+    const existingMint = config.whitelistedTokenMints[0];
 
-  //   // Verify token transfer
-  //   const destBalance_postTx = await provider.connection.getTokenAccountBalance(
-  //     atas.partnerOperationalTokenAccount
-  //   );
-  //   assert.equal(
-  //     +destBalance_postTx.value.amount - +destBalance_preTx.value.amount,
-  //     +amount
-  //   );
+    try {
+      await program.methods
+        .updateWhitelistedTokenMint({ add: {} }, existingMint)
+        .accounts({
+          config: configPDA,
+          authority: admin.publicKey,
+          systemProgram: SystemProgram.programId,
+        } as any)
+        .signers([admin])
+        .rpc();
+      assert.fail("Expected transaction to fail");
+    } catch (error: any) {
+      assert.include(error.message, "TokenMintAlreadyWhitelisted");
+    }
+  });
 
-  //   // Verify OrderTracker stores correct details
-  //   const orderTrackerAccount = await program.account.orderTracker.fetch(
-  //     currentOrderTrackerPDA
-  //   );
-  //   assert.equal(
-  //     orderTrackerAccount.partnerDepositVault.toBase58(),
-  //     partnerDepositVaultPDA.toBase58()
-  //   );
-  //   assert.equal(
-  //     orderTrackerAccount.beneficiaryWallet.toBase58(),
-  //     partnerOperationalWallet.publicKey.toBase58()
-  //   );
+  it("Should fail when adding with invalid/null address", async () => {
+    try {
+      await program.methods
+        .updateWhitelistedTokenMint({ add: {} }, PublicKey.default)
+        .accounts({
+          config: configPDA,
+          authority: admin.publicKey,
+          systemProgram: SystemProgram.programId,
+        } as any)
+        .signers([admin])
+        .rpc();
+      assert.fail("Expected transaction to fail");
+    } catch (error: any) {
+      assert.include(error.message, "InvalidAddress");
+    }
+  });
 
-  //   const orderAmountIn = orderTrackerAccount.amountIn;
-  //   const orderAmountOut = orderTrackerAccount.amountOut;
-  //   assert.equal(orderAmountIn.toNumber(), amount.toNumber());
-  //   assert.equal(orderAmountOut.toNumber(), amount.toNumber());
+  it("Should fail when unauthorized signer tries to add token mint", async () => {
+    const unauthorized = Keypair.generate();
+    const sig = await provider.connection.requestAirdrop(
+      unauthorized.publicKey,
+      2 * anchor.web3.LAMPORTS_PER_SOL
+    );
+    await provider.connection.confirmTransaction(sig, "confirmed");
 
-  //   ///////////// replenish ////////////////
+    const newMintKeypair = Keypair.generate();
+    const newMint = await createMint(
+      provider.connection,
+      manager,
+      unauthorized.publicKey,
+      null,
+      6,
+      newMintKeypair
+    );
 
-  //   const feeAmount = new anchor.BN(1000000000);
+    try {
+      await program.methods
+        .updateWhitelistedTokenMint({ add: {} }, newMint)
+        .accounts({
+          config: configPDA,
+          authority: unauthorized.publicKey,
+          systemProgram: SystemProgram.programId,
+        } as any)
+        .signers([unauthorized])
+        .rpc();
+      assert.fail("Expected transaction to fail");
+    } catch (error: any) {
+      assert.include(error.message, "Unauthorized");
+    }
+  });
 
-  //   // Replenish the remaining amount and close the order
-  //   await program.methods
-  //     .replenish(
-  //       feeAmount,
-  //       true, // close_order = true
-  //       null
-  //     )
-  //     .accounts({
-  //       config: configPDA,
-  //       partnerDepositVault: partnerDepositVaultPDA,
-  //       pdvTokenAccount: atas.partnerDepositTokenAccount,
-  //       zovTokenAccount: atas.zZovTokenAccount,
-  //       orderTracker: currentOrderTrackerPDA,
-  //       manager: manager.publicKey,
-  //       mint: tokenMint,
-  //       tokenProgram: TOKEN_PROGRAM_ID,
-  //       systemProgram: SystemProgram.programId,
-  //     })
-  //     .signers([manager])
-  //     .rpc();
+  it("Should successfully remove a token mint from the whitelist", async () => {
+    // First add a token mint to remove
+    const tempMintKeypair = Keypair.generate();
+    const tempMint = await createMint(
+      provider.connection,
+      manager,
+      admin.publicKey,
+      null,
+      6,
+      tempMintKeypair
+    );
 
-  //   const zZovBalance_postTx = await provider.connection.getTokenAccountBalance(
-  //     atas.zZovTokenAccount
-  //   );
+    await program.methods
+      .updateWhitelistedTokenMint({ add: {} }, tempMint)
+      .accounts({
+        config: configPDA,
+        authority: admin.publicKey,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .signers([admin])
+      .rpc();
 
-  //   assert.equal(
-  //     +zZovBalance_postTx.value.amount - +zZovBalance_preTx.value.amount,
-  //     +feeAmount
-  //   );
+    const configBefore = await program.account.config.fetch(configPDA);
+    const countBefore = configBefore.whitelistedTokenMints.length;
 
-  //   // Verify order is closed
-  //   try {
-  //     await program.account.orderTracker.fetch(currentOrderTrackerPDA);
-  //     assert.fail("Expected order to be closed");
-  //   } catch (error) {
-  //     assert.include(
-  //       error.message,
-  //       "Account does not exist",
-  //       "Expected account to be closed"
-  //     );
-  //   }
-  // });
+    // Remove the token mint
+    await program.methods
+      .updateWhitelistedTokenMint({ remove: {} }, tempMint)
+      .accounts({
+        config: configPDA,
+        authority: admin.publicKey,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .signers([admin])
+      .rpc();
+
+    const configAfter = await program.account.config.fetch(configPDA);
+    assert.equal(configAfter.whitelistedTokenMints.length, countBefore - 1);
+    assert.isFalse(
+      configAfter.whitelistedTokenMints.some((m) => m.equals(tempMint))
+    );
+  });
+
+  it("Should fail when removing a token mint that is not whitelisted", async () => {
+    const nonWhitelistedMintKeypair = Keypair.generate();
+    const nonWhitelistedMint = await createMint(
+      provider.connection,
+      manager,
+      admin.publicKey,
+      null,
+      6,
+      nonWhitelistedMintKeypair
+    );
+
+    try {
+      await program.methods
+        .updateWhitelistedTokenMint({ remove: {} }, nonWhitelistedMint)
+        .accounts({
+          config: configPDA,
+          authority: admin.publicKey,
+          systemProgram: SystemProgram.programId,
+        } as any)
+        .signers([admin])
+        .rpc();
+      assert.fail("Expected transaction to fail");
+    } catch (error: any) {
+      assert.include(error.message, "TokenMintNotWhitelisted");
+    }
+  });
+
+  it("Should fail when unauthorized signer tries to remove token mint", async () => {
+    const config = await program.account.config.fetch(configPDA);
+    const targetMint = config.whitelistedTokenMints[0];
+    const unauthorized = Keypair.generate();
+    const sig = await provider.connection.requestAirdrop(
+      unauthorized.publicKey,
+      2 * anchor.web3.LAMPORTS_PER_SOL
+    );
+    await provider.connection.confirmTransaction(sig, "confirmed");
+
+    try {
+      await program.methods
+        .updateWhitelistedTokenMint({ remove: {} }, targetMint)
+        .accounts({
+          config: configPDA,
+          authority: unauthorized.publicKey,
+          systemProgram: SystemProgram.programId,
+        } as any)
+        .signers([unauthorized])
+        .rpc();
+      assert.fail("Expected transaction to fail");
+    } catch (error: any) {
+      assert.include(error.message, "Unauthorized");
+    }
+  });
 });

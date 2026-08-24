@@ -45,19 +45,46 @@ pub enum CustomError {
     #[msg("Whitelisted token mints must be non-empty")]
     EmptyWhitelistedTokenMints,
     #[msg("Whitelisted token mints must be unique")]
-    DuplicateWhitelistedTokenMint
+    DuplicateWhitelistedTokenMint,
+    #[msg("Token mint is already whitelisted")]
+    TokenMintAlreadyWhitelisted,
+    #[msg("Token mint is not whitelisted")]
+    TokenMintNotWhitelisted,
 }
 
+/// Action to perform on the whitelisted token mints.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq)]
+pub enum WhitelistAction {
+    Add,
+    Remove,
+}
 
 #[account]
-#[derive(InitSpace)]
 pub struct Config {
     pub paused: bool,
     pub admin: Pubkey,
     pub manager: Pubkey,
     pub guardian: Pubkey,
-    #[max_len(8)]
     pub whitelisted_token_mints: Vec<Pubkey>,
+}
+
+impl Config {
+    /// Fixed byte cost of every field except the vector's element storage:
+    ///   8   discriminator
+    /// + 1   paused
+    /// + 32  admin
+    /// + 32  manager
+    /// + 32  guardian
+    /// + 4   Vec<Pubkey> length prefix
+    /// = 109 bytes
+    pub const BASE_SIZE: usize = 8 + 1 + 32 + 32 + 32 + 4;
+
+    /// Total account space required to hold exactly `len` whitelisted token mints.
+    /// Each `Pubkey` token mint occupies 32 bytes.
+    #[inline]
+    pub fn space_for_len(len: usize) -> usize {
+        Self::BASE_SIZE + len * 32
+    }
 }
 
 #[account]
@@ -190,6 +217,14 @@ pub struct OrdersClosed {
     pub order_ids: Vec<[u8; 32]>,
     pub domain_separator: u64,
     pub meta: Option<Vec<EventArg>>
+}
+
+#[event]
+pub struct WhitelistedTokenMintsUpdated {
+    pub action: String,
+    pub mint: Pubkey,
+    pub domain_separator: u64,
+    pub whitelisted_token_mints: Vec<Pubkey>,
 }
 
 /// Helper function to validate an address is not the null address
@@ -740,6 +775,67 @@ pub mod zynk_core {
         Ok(())
     }
 
+    ////////////////////////////////////////////////////////////////
+    //////////////// token mints whitelist /////////////////////////
+    ////////////////////////////////////////////////////////////////
+
+    /// Updates the whitelisted token mints list in the program config.
+    ///
+    /// # Arguments
+    /// * `ctx` - The [`UpdateWhitelistedTokenMint`] context.
+    /// * `action` - The action to perform (`Add` or `Remove`).
+    /// * `mint` - The SPL token mint address to add or remove.
+    ///
+    /// # Behavior
+    /// - Validates the token mint address is not the default/null address.
+    /// - On `Add`: ensures the token mint is not already whitelisted, then appends it.
+    /// - On `Remove`: ensures the token mint is present, ensures at least one token mint remains, and removes it.
+    /// - Dynamically resizes the `Config` account buffer via Anchor `realloc`.
+    /// - Emits a [`WhitelistedTokenMintsUpdated`] event.
+    pub fn update_whitelisted_token_mint(
+        ctx: Context<UpdateWhitelistedTokenMint>,
+        action: WhitelistAction,
+        mint: Pubkey,
+    ) -> Result<()> {
+        validate_address(&mint)?;
+
+        let config = &mut ctx.accounts.config;
+
+        match action {
+            WhitelistAction::Add => {
+                require!(
+                    !config.whitelisted_token_mints.contains(&mint),
+                    CustomError::TokenMintAlreadyWhitelisted
+                );
+                config.whitelisted_token_mints.push(mint);
+            }
+            WhitelistAction::Remove => {
+                let pos = config
+                    .whitelisted_token_mints
+                    .iter()
+                    .position(|&m| m == mint)
+                    .ok_or(CustomError::TokenMintNotWhitelisted)?;
+                require!(
+                    config.whitelisted_token_mints.len() > 1,
+                    CustomError::EmptyWhitelistedTokenMints
+                );
+                config.whitelisted_token_mints.swap_remove(pos);
+            }
+        }
+
+        emit!(WhitelistedTokenMintsUpdated {
+            action: match action {
+                WhitelistAction::Add => String::from("add"),
+                WhitelistAction::Remove => String::from("remove"),
+            },
+            mint,
+            domain_separator: DOMAIN_SEPARATOR,
+            whitelisted_token_mints: config.whitelisted_token_mints.clone(),
+        });
+
+        Ok(())
+    }
+
 
     ////////////////////////////////////////////////////////////////
     /////////////////// critical functionalities ///////////////////
@@ -967,18 +1063,19 @@ pub const BENEFICIARY_SEED: &[u8] = b"beneficiary";
 
 
 #[derive(Accounts)]
+#[instruction(admin: Pubkey, guardian: Pubkey, whitelisted_token_mints: Vec<Pubkey>)]
 pub struct Initialize<'info> {
     #[account(
         init,
         payer = manager,
-        space = 8 + Config::INIT_SPACE,
+        space = Config::space_for_len(whitelisted_token_mints.len()),
         seeds = [CONFIG_SEED],
         bump
     )]
     pub config: Account<'info, Config>,
     #[account(
         mut,
-        // constraint = manager.key() == INITIAL_MANAGER @ CustomError::Unauthorized
+        constraint = manager.key() == INITIAL_MANAGER @ CustomError::Unauthorized
     )]
     pub manager: Signer<'info>,
 
@@ -1230,6 +1327,38 @@ pub struct RevokeBeneficiary<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[derive(Accounts)]
+#[instruction(action: WhitelistAction, mint: Pubkey)]
+pub struct UpdateWhitelistedTokenMint<'info> {
+    #[account(
+        mut,
+        seeds = [CONFIG_SEED],
+        bump,
+        // Dynamically resize the account buffer before the handler runs:
+        //   • Add    → grow by one Pubkey slot (32 bytes)
+        //   • Remove → shrink by one Pubkey slot (32 bytes)
+        // Anchor automatically tops up (or refunds) rent to/from `authority`.
+        realloc = Config::space_for_len(
+            match action {
+                WhitelistAction::Add    => config.whitelisted_token_mints.len().saturating_add(1),
+                WhitelistAction::Remove => config.whitelisted_token_mints.len().saturating_sub(1),
+            }
+        ),
+        realloc::payer = authority,
+        // false → do NOT zero-fill new bytes; Anchor re-serialises the whole
+        // account on exit anyway, so zeroing is wasted compute.
+        realloc::zero = false,
+    )]
+    pub config: Account<'info, Config>,
+
+    #[account(
+        mut,
+        constraint = authority.key() == config.admin || authority.key() == config.guardian @ CustomError::Unauthorized,
+    )]
+    pub authority: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
 
 #[derive(Accounts)]
 #[instruction(action: u8)]
