@@ -1,5 +1,9 @@
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::{pubkey::Pubkey, system_program::ID as SYSTEM_PROGRAM_ID};
+use anchor_lang::solana_program::{
+    pubkey::Pubkey,
+    system_program::ID as SYSTEM_PROGRAM_ID,
+    instruction::AccountMeta,
+};
 use anchor_spl::token_interface::{self, Mint, TokenAccount, TokenInterface, TransferChecked};
 use zynk_core::{self, cpi::accounts::CreateOrder, program::ZynkCore, EventArg};
 
@@ -7,7 +11,7 @@ declare_id!("ZYNKopsYjG6gaGqdwz8HLAgvCAEFwCET56kRQKkjxfc");
 
 pub const DOMAIN_SEPARATOR: u64 = 115131153410997;
 
-pub const ZOV: Pubkey = pubkey!("2FUNdgyGtGQAffBJ1UYPZrhgu4FSUStsohEzkPbUctnu");
+pub const ZOV: Pubkey = pubkey!("6pDE5h5sXrDZFdho65RD9QtzadrwK7RjQE7NKVSnhQ4e");
 
 pub const VAULT_SEED: &[u8] = b"vault";
 pub const RECORD_SEED: &[u8] = b"record";
@@ -118,6 +122,19 @@ pub struct AxEvent {
     pub partners: Vec<u32>,
 }
 
+#[event]
+pub struct CctpEvent {
+    pub event_name: String,
+    pub vault: Pubkey,
+    pub user_id: [u8; 32],
+    pub amount: u64,
+    pub token: Pubkey,
+    pub destination_domain: u32,
+    pub mint_recipient: [u8; 32],
+    pub destination_caller: [u8; 32],
+    pub domain_separator: u64,
+}
+
 pub fn close_account<'a, 'b>(
     from: impl ToAccountInfo<'a>,
     to: impl ToAccountInfo<'b>,
@@ -178,6 +195,65 @@ fn transfer_with_signer<'info>(
     let cpi_ctx =
         CpiContext::new_with_signer(token_program.to_account_info(), cpi_accounts, signer_seeds);
     token_interface::transfer_checked(cpi_ctx, amount, mint.decimals)
+}
+
+/// Invokes Circle CCTP TokenMessengerMinter deposit_for_burn / deposit_for_burn_with_caller instruction via CPI
+fn cpi_cctp_deposit_for_burn<'info>(
+    cctp_program: &AccountInfo<'info>,
+    remaining_accounts: &[AccountInfo<'info>],
+    authority_account: &AccountInfo<'info>,
+    signer_seeds: &[&[&[u8]]],
+    amount: u64,
+    destination_domain: u32,
+    mint_recipient: [u8; 32],
+    destination_caller: Option<[u8; 32]>,
+) -> Result<()> {
+    require!(amount > 0, OrbitError::ZeroAmount);
+
+    let (disc_name, caller_bytes) = match destination_caller {
+        Some(caller) if caller != [0u8; 32] => {
+            ("global:deposit_for_burn_with_caller", Some(caller))
+        }
+        _ => ("global:deposit_for_burn", None),
+    };
+
+    let disc = anchor_lang::solana_program::hash::hash(disc_name.as_bytes()).to_bytes();
+    let mut ix_data = Vec::with_capacity(8 + 8 + 4 + 32 + 32);
+    ix_data.extend_from_slice(&disc[..8]);
+    ix_data.extend_from_slice(&amount.to_le_bytes());
+    ix_data.extend_from_slice(&destination_domain.to_le_bytes());
+    ix_data.extend_from_slice(&mint_recipient);
+    if let Some(caller) = caller_bytes {
+        ix_data.extend_from_slice(&caller);
+    }
+
+    let mut account_metas = Vec::with_capacity(remaining_accounts.len());
+    let mut account_infos = Vec::with_capacity(remaining_accounts.len() + 1);
+    account_infos.push(cctp_program.clone());
+
+    for acc in remaining_accounts {
+        let is_signer = acc.key == authority_account.key || acc.is_signer;
+        if acc.is_writable {
+            account_metas.push(AccountMeta::new(*acc.key, is_signer));
+        } else {
+            account_metas.push(AccountMeta::new_readonly(*acc.key, is_signer));
+        }
+        account_infos.push(acc.clone());
+    }
+
+    let instruction = anchor_lang::solana_program::instruction::Instruction {
+        program_id: *cctp_program.key,
+        accounts: account_metas,
+        data: ix_data,
+    };
+
+    anchor_lang::solana_program::program::invoke_signed(
+        &instruction,
+        &account_infos,
+        signer_seeds,
+    )?;
+
+    Ok(())
 }
 
 /// Reads and validates the zynk-core Config account from a cross-program PDA.
@@ -1595,6 +1671,133 @@ pub mod zynk_orbit {
 
         Ok(())
     }
+
+    /// Unified CCTP transfer function from Orbit Vault (ovault),
+    /// Custom Spender Vaults (spender), or ICV Record Vaults (record) to a destination chain.
+    pub fn cctp<'info>(
+        ctx: Context<'_, '_, '_, 'info, Cctp<'info>>,
+        id: [u8; 32],
+        amount: u64,
+        destination_domain: u32,
+        mint_recipient: [u8; 32],
+        destination_caller: Option<[u8; 32]>,
+    ) -> Result<()> {
+        require!(amount > 0, OrbitError::ZeroAmount);
+
+        // Validate token mint against zynk-core's whitelisted token mints
+        let config = read_core_config(&ctx.accounts.core_config, &ctx.accounts.zynk_core_program.key())?;
+        require!(
+            config.whitelisted_token_mints.contains(&ctx.accounts.mint.key()),
+            OrbitError::InvalidTokenMint
+        );
+
+        let event_user_id: [u8; 32];
+        let (seed_a, seed_b, bump_val): (&[u8], &[u8], u8) = match &mut ctx.accounts.record {
+            Some(record) => {
+                // Verify that the record is of type ICV
+                require!(
+                    record.user_type == UserType::ICV,
+                    OrbitError::InvalidOperation
+                );
+
+                // Verify the signer is one of the whitelisted wallets on this record
+                require!(
+                    is_whitelisted_wallet(record, &ctx.accounts.signer.key()),
+                    OrbitError::InvalidAccount
+                );
+
+                // Verify authority matches record key
+                require!(
+                    ctx.accounts.authority.key() == record.key(),
+                    OrbitError::InvalidAccount
+                );
+
+                // Verify cliff period is over
+                let now = Clock::get()?.unix_timestamp;
+                require!(now >= record.cliff_period, OrbitError::CliffPeriodNotOver);
+
+                // Update record principle_out
+                record.principle_out = record
+                    .principle_out
+                    .checked_add(amount)
+                    .ok_or(ProgramError::ArithmeticOverflow)?;
+
+                event_user_id = id;
+                let bump = ctx.bumps.record.ok_or(OrbitError::InvalidAccount)?;
+                (RECORD_SEED, id.as_ref(), bump)
+            }
+            None => {
+                // Validate manager or admin against zynk-core config
+                require!(
+                    ctx.accounts.signer.key() == config.manager || ctx.accounts.signer.key() == config.admin,
+                    OrbitError::UnauthorizedSigner
+                );
+
+                // Check if authority is ovault [b"vault", b"orbit"] or custom spender [b"vault", id]
+                let (expected_ovault, ovault_bump) = Pubkey::find_program_address(
+                    &[VAULT_SEED, b"orbit"],
+                    ctx.program_id,
+                );
+                let (expected_spender, spender_bump) = Pubkey::find_program_address(
+                    &[VAULT_SEED, id.as_ref()],
+                    ctx.program_id,
+                );
+
+                if ctx.accounts.authority.key() == expected_ovault {
+                    event_user_id = [0u8; 32];
+                    (VAULT_SEED, b"orbit", ovault_bump)
+                } else if ctx.accounts.authority.key() == expected_spender {
+                    event_user_id = id;
+                    (VAULT_SEED, id.as_ref(), spender_bump)
+                } else {
+                    return Err(OrbitError::InvalidAccount.into());
+                }
+            }
+        };
+
+        let bump_arr = [bump_val];
+        let seeds: &[&[u8]] = &[seed_a, seed_b, &bump_arr];
+        let signer_seeds = &[&seeds[..]];
+
+        cpi_cctp_deposit_for_burn(
+            &ctx.accounts.cctp_token_messenger_minter_program.to_account_info(),
+            ctx.remaining_accounts,
+            &ctx.accounts.authority.to_account_info(),
+            signer_seeds,
+            amount,
+            destination_domain,
+            mint_recipient,
+            destination_caller,
+        )?;
+
+        let dest_caller_bytes = destination_caller.unwrap_or([0u8; 32]);
+        emit!(CctpEvent {
+            event_name: "Cctp".to_string(),
+            vault: ctx.accounts.authority.key(),
+            user_id: event_user_id,
+            amount,
+            token: ctx.accounts.mint.key(),
+            destination_domain,
+            mint_recipient,
+            destination_caller: dest_caller_bytes,
+            domain_separator: DOMAIN_SEPARATOR,
+        });
+
+        emit!(TxEvent {
+            event_name: "Cctp".to_string(),
+            user_id: event_user_id,
+            from_owner: ctx.accounts.authority.key(),
+            to_owner: Pubkey::new_from_array(mint_recipient),
+            from: ctx.accounts.source_token_account.key(),
+            to: Pubkey::new_from_array(mint_recipient),
+            amount,
+            token: ctx.accounts.mint.key(),
+            domain_separator: DOMAIN_SEPARATOR,
+            order_id: [0u8; 32],
+        });
+
+        Ok(())
+    }
 }
 
 #[derive(Accounts)]
@@ -2148,6 +2351,46 @@ pub struct Pledge<'info> {
     pub zynk_core_program: Program<'info, ZynkCore>,
 }
 
+#[derive(Accounts)]
+#[instruction(id: [u8; 32])]
+pub struct Cctp<'info> {
+    #[account(
+        mut,
+        constraint = source_token_account.owner == authority.key() @ OrbitError::InvalidAccount,
+        constraint = source_token_account.mint == mint.key() @ OrbitError::InvalidTokenMint,
+    )]
+    pub source_token_account: InterfaceAccount<'info, TokenAccount>,
+
+    pub mint: InterfaceAccount<'info, Mint>,
+
+    /// CHECK: Authority PDA — validated in handler (ovault [b"vault", b"orbit"], spender [b"vault", id], or record [b"record", id])
+    #[account(mut)]
+    pub authority: UncheckedAccount<'info>,
+
+    /// Optional Record account. Pass Some when transferring from an ICV Record.
+    #[account(
+        mut,
+        seeds = [RECORD_SEED, id.as_ref()],
+        bump,
+    )]
+    pub record: Option<Account<'info, Record>>,
+
+    #[account(mut)]
+    pub signer: Signer<'info>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+    pub system_program: Program<'info, System>,
+
+    /// CHECK: zynk-core config PDA — validated via read_core_config()
+    pub core_config: UncheckedAccount<'info>,
+
+    /// CHECK: zynk-core program for PDA derivation
+    pub zynk_core_program: Program<'info, ZynkCore>,
+
+    /// CHECK: Circle CCTP TokenMessengerMinter program
+    pub cctp_token_messenger_minter_program: UncheckedAccount<'info>,
+}
+
 #[error_code]
 pub enum OrbitError {
     #[msg("Unauthorized admin")]
@@ -2202,4 +2445,6 @@ pub enum OrbitError {
     ExcessiveRepay,
     #[msg("Source token account has insufficient token balance for withdrawal")]
     InsufficientTokenBalance,
+    #[msg("Unauthorized signer")]
+    UnauthorizedSigner,
 }

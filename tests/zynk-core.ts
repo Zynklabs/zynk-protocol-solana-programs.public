@@ -16,12 +16,13 @@ import {
   getOrCreateAssociatedTokenAccount,
   createAssociatedTokenAccount,
 } from "@solana/spl-token";
-import { ZynkCore } from "../../target/types/zynk_core";
+import { ZynkCore } from "../target/types/zynk_core";
 import { assert, expect } from "chai";
 import { createHash, randomUUID } from "crypto";
 import { TextEncoder } from "util";
 import { sha256 } from "@noble/hashes/sha2";
 import nacl from "tweetnacl";
+import { ADMIN_KEYPAIR, GUARDIAN_KEYPAIR } from "./addresses";
 
 const zynkPartnerId = `zp_32142`;
 const generateOrderId = (): Buffer => {
@@ -49,16 +50,16 @@ const timelockDelays = {
   [TimelockAction.Unpause]: 6 * 60 * 60,
 };
 
-describe.only("zynk-core", () => {
+describe("zynk-core", () => {
   // Configure the client to use the local cluster
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
 
   const program = anchor.workspace.ZynkCore as Program<ZynkCore>;
 
-  const admin = Keypair.generate();
   const manager = provider.wallet.payer;
-  const guardian = Keypair.generate();
+  const admin = ADMIN_KEYPAIR;
+  const guardian = GUARDIAN_KEYPAIR;
   const partnerOperationalWallet = Keypair.generate();
 
   const defaultZovId = Buffer.alloc(32);
