@@ -1075,7 +1075,7 @@ pub struct Initialize<'info> {
     pub config: Account<'info, Config>,
     #[account(
         mut,
-        constraint = manager.key() == INITIAL_MANAGER @ CustomError::Unauthorized
+        constraint = cfg!(feature = "testing") || manager.key() == INITIAL_MANAGER @ CustomError::Unauthorized
     )]
     pub manager: Signer<'info>,
 

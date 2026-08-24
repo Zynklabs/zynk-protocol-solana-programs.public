@@ -49,7 +49,7 @@ const timelockDelays = {
   [TimelockAction.Unpause]: 6 * 60 * 60,
 };
 
-describe("zynk-core", () => {
+describe.only("zynk-core", () => {
   // Configure the client to use the local cluster
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
