@@ -532,7 +532,6 @@ pub mod zynk_orbit {
             mint: ctx.accounts.mint.to_account_info(),
             token_program: ctx.accounts.token_program.to_account_info(),
             system_program: ctx.accounts.system_program.to_account_info(),
-            sysvar_instructions: None,
         };
 
         let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
@@ -654,7 +653,6 @@ pub mod zynk_orbit {
             mint: ctx.accounts.mint.to_account_info(),
             token_program: ctx.accounts.token_program.to_account_info(),
             system_program: ctx.accounts.system_program.to_account_info(),
-            sysvar_instructions: None,
         };
 
         let create_order_ctx = CpiContext::new(cpi_program, create_order_accounts);

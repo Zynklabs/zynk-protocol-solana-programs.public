@@ -33,34 +33,19 @@ const generateOrderId = (): Buffer => {
   return Buffer.from(hash.slice(0, 32));
 };
 
-const buildEd25519Ix = (msg: string, signer: Keypair) => {
-  const message = new TextEncoder().encode(msg);
-  const signature = nacl.sign.detached(message, signer.secretKey);
-
-  const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
-    publicKey: signer.publicKey.toBuffer(),
-    message,
-    signature,
-  });
-
-  return { ed25519Ix, signature };
-};
-
 const DOMAIN_SEPARATOR = 115111123810997;
 
 const TimelockAction = {
   UpdateAdmin: 0,
   UpdateManager: 1,
   UpdateGuardian: 2,
-  UpdateAttester: 3,
-  Unpause: 4,
+  Unpause: 3,
 };
 
 const timelockDelays = {
   [TimelockAction.UpdateAdmin]: 24 * 60 * 60,
   [TimelockAction.UpdateManager]: 12 * 60 * 60,
   [TimelockAction.UpdateGuardian]: 48 * 60 * 60,
-  [TimelockAction.UpdateAttester]: 12 * 60 * 60,
   [TimelockAction.Unpause]: 6 * 60 * 60,
 };
 
@@ -74,7 +59,6 @@ describe.only("zynk-core", () => {
   const admin = Keypair.generate();
   const manager = provider.wallet.payer;
   const guardian = Keypair.generate();
-  const attester = provider.wallet.payer;
   const partnerOperationalWallet = Keypair.generate();
 
   const defaultZovId = Buffer.alloc(32);
@@ -291,12 +275,7 @@ describe.only("zynk-core", () => {
 
     try {
       await program.methods
-        .initialize(
-          admin.publicKey,
-          guardian.publicKey,
-          attester.publicKey,
-          whitelistedTokenMints
-        )
+        .initialize(admin.publicKey, guardian.publicKey, whitelistedTokenMints)
         .accounts({
           config: configPDA,
           manager: manager.publicKey,
@@ -321,12 +300,7 @@ describe.only("zynk-core", () => {
 
     try {
       await program.methods
-        .initialize(
-          admin.publicKey,
-          guardian.publicKey,
-          attester.publicKey,
-          whitelistedTokenMints
-        )
+        .initialize(admin.publicKey, guardian.publicKey, whitelistedTokenMints)
         .accounts({
           config: configPDA,
           manager: manager.publicKey,
@@ -350,12 +324,7 @@ describe.only("zynk-core", () => {
     const whitelistedTokenMints: PublicKey[] = [tokenMint, tokenMint];
     try {
       await program.methods
-        .initialize(
-          admin.publicKey,
-          guardian.publicKey,
-          attester.publicKey,
-          whitelistedTokenMints
-        )
+        .initialize(admin.publicKey, guardian.publicKey, whitelistedTokenMints)
         .accounts({
           config: configPDA,
           manager: manager.publicKey,
@@ -375,12 +344,7 @@ describe.only("zynk-core", () => {
 
   it("Initializes the protocol with multiple token addresses", async () => {
     await program.methods
-      .initialize(
-        admin.publicKey,
-        guardian.publicKey,
-        attester.publicKey,
-        whitelistedTokenMints
-      )
+      .initialize(admin.publicKey, guardian.publicKey, whitelistedTokenMints)
       .accounts({
         config: configPDA,
         manager: manager.publicKey,
@@ -394,7 +358,6 @@ describe.only("zynk-core", () => {
     assert.ok(configAccount.admin.equals(admin.publicKey));
     assert.ok(configAccount.manager.equals(manager.publicKey));
     assert.ok(configAccount.guardian.equals(guardian.publicKey));
-    assert.ok(configAccount.attester.equals(attester.publicKey));
     assert.equal(configAccount.paused, false);
 
     // Verify all token mints are stored correctly
@@ -1120,7 +1083,7 @@ describe.only("zynk-core", () => {
     await program.removeEventListener(listener);
   });
 
-  it("Creates a transient pull order for partner_deposit_vault -> zynkOpVault -> partner_operational_wallet one-way txn - with no attester override", async () => {
+  it("Creates a transient pull order for partner_deposit_vault -> zynkOpVault -> partner_operational_wallet one-way txn", async () => {
     const amount = new anchor.BN(100000000000);
 
     const transientOrderId = generateOrderId();
@@ -1221,7 +1184,7 @@ describe.only("zynk-core", () => {
     }
   });
 
-  it("Creates a transient pull order for partner_deposit_vault -> zynkOpVault -> partner_operational_wallet one-way txn - Token2022 - with no attester override", async () => {
+  it("Creates a transient pull order for partner_deposit_vault -> zynkOpVault -> partner_operational_wallet one-way txn - Token2022", async () => {
     const amount = new anchor.BN(100000000000);
 
     const transientOrderId = generateOrderId();
@@ -4553,17 +4516,17 @@ describe.only("zynk-core", () => {
     let configAccount = await program.account.config.fetch(configPDA);
     assert.ok(configAccount.paused, "Expected program to be paused!");
 
-    const action = TimelockAction.UpdateAttester;
+    const action = TimelockAction.UpdateAdmin;
     const [wrongTimelockPDA] = PublicKey.findProgramAddressSync(
       [Buffer.from("timelock"), Buffer.from([action])],
       program.programId
     );
 
-    const newAttester = Keypair.generate();
+    const newAdmin = Keypair.generate();
 
     ///// Request wrong timelock /////
     await program.methods
-      .requestTimelock(action, newAttester.publicKey)
+      .requestTimelock(action, newAdmin.publicKey)
       .accounts({
         config: configPDA,
         timelock: wrongTimelockPDA,
@@ -4587,7 +4550,10 @@ describe.only("zynk-core", () => {
     const wrongTimelockAccount = await program.account.timelock.fetch(
       wrongTimelockPDA
     );
-    assert.ok(wrongTimelockAccount.ackBy.equals(guardian.publicKey), "Timelock not ack'ed!");
+    assert.ok(
+      wrongTimelockAccount.ackBy.equals(guardian.publicKey),
+      "Timelock not ack'ed!"
+    );
 
     try {
       ///// Execute unpause with wrong timelock /////
@@ -4639,7 +4605,10 @@ describe.only("zynk-core", () => {
       .rpc();
 
     const timelockAccount = await program.account.timelock.fetch(timelockPDA);
-    assert.ok(timelockAccount.ackBy.equals(guardian.publicKey), "Timelock not ack'ed!");
+    assert.ok(
+      timelockAccount.ackBy.equals(guardian.publicKey),
+      "Timelock not ack'ed!"
+    );
 
     await program.methods
       .unpause()
@@ -4728,7 +4697,10 @@ describe.only("zynk-core", () => {
       .rpc();
 
     timelockAccount = await program.account.timelock.fetch(timelockPDA);
-    assert.ok(timelockAccount.ackBy.equals(guardian.publicKey), "Timelock not ack'ed!");
+    assert.ok(
+      timelockAccount.ackBy.equals(guardian.publicKey),
+      "Timelock not ack'ed!"
+    );
 
     // Admin revokes
     await program.methods
@@ -4834,7 +4806,10 @@ describe.only("zynk-core", () => {
       .rpc();
 
     let configAccount = await program.account.config.fetch(configPDA);
-    assert.ok(configAccount.admin.equals(newAdmin.publicKey), "Admin should be updated to newAdmin");
+    assert.ok(
+      configAccount.admin.equals(newAdmin.publicKey),
+      "Admin should be updated to newAdmin"
+    );
 
     // Clean up timelock PDA
     await program.methods
@@ -4880,7 +4855,10 @@ describe.only("zynk-core", () => {
       .rpc();
 
     configAccount = await program.account.config.fetch(configPDA);
-    assert.ok(configAccount.admin.equals(admin.publicKey), "Admin should be restored");
+    assert.ok(
+      configAccount.admin.equals(admin.publicKey),
+      "Admin should be restored"
+    );
 
     await program.methods
       .revokeTimelock()
@@ -4942,7 +4920,10 @@ describe.only("zynk-core", () => {
       .rpc();
 
     let configAccount = await program.account.config.fetch(configPDA);
-    assert.ok(configAccount.manager.equals(newManager.publicKey), "Manager should be updated to newManager");
+    assert.ok(
+      configAccount.manager.equals(newManager.publicKey),
+      "Manager should be updated to newManager"
+    );
 
     // Clean up timelock PDA
     await program.methods
@@ -4988,7 +4969,10 @@ describe.only("zynk-core", () => {
       .rpc();
 
     configAccount = await program.account.config.fetch(configPDA);
-    assert.ok(configAccount.manager.equals(manager.publicKey), "Manager should be restored");
+    assert.ok(
+      configAccount.manager.equals(manager.publicKey),
+      "Manager should be restored"
+    );
 
     await program.methods
       .revokeTimelock()
@@ -5131,73 +5115,75 @@ describe.only("zynk-core", () => {
   const EthereumTxnIn = "0x8723t4gvru3b2yr8327432gb8dy32ieuh38yeb38e382";
   const BridgeTxnOut = "jidabuibf871yeu3brg3vrg3v3t27vg3vsdfg3";
   const BridgeTxnIn = "0xjkb32f32d3wh87egy3u2vbrg3v3782dgihbdkjfh9273tg3";
-  const attestOrderId = generateOrderId();
-  const attestOrderTrackerPDA = deriveOrderTrackerPDA(attestOrderId, "attest");
-  const attestTxnId = EthereumTxnOut;
+  const crossChainPartnerId = Buffer.from(
+    sha256(Buffer.from(EthereumzynkOpVaultAddress))
+  );
+  const crossChainOrderId = generateOrderId();
+  const crossChainOrderTrackerPDA = deriveOrderTrackerPDA(
+    crossChainOrderId,
+    crossChainPartnerId
+  );
   const amount = new anchor.BN(100);
 
-  it("Should attest cross-chain order creation", async () => {
+  it("Should record cross-chain order creation", async () => {
     const listener = program.addEventListener(
-      "orderAttested",
+      "orderCreated",
       (event, _slot) => {
-        if (!Buffer.from(event.orderId).equals(Buffer.from(attestOrderId)))
+        if (!Buffer.from(event.orderId).equals(Buffer.from(crossChainOrderId)))
           return;
 
         try {
-          assert.equal(event.originChain, "Solana");
-          assert.equal(event.targetChain, "Ethereum");
-          assert.equal(event.origin, zynkOpVault.toString());
-          assert.equal(event.proxy, EthereumzynkOpVaultAddress);
-          assert.equal(event.target, EthereumRecipientAddress);
-          assert.equal(event.txn, EthereumTxnOut);
-          assert.equal(event.proxyTxn, BridgeTxnOut);
-          assert.equal(event.asset, "USDC");
-          assert.equal(event.proxyAsset, "USDT");
+          assert.equal(event.token, "USDC");
+          assert.equal(event.zynkOpVault, zynkOpVault.toString());
+          assert.equal(event.partnerDepositVault, EthereumzynkOpVaultAddress);
+          assert.equal(event.beneficiaryWallet, EthereumRecipientAddress);
           assert.equal(event.amount.toNumber(), amount.toNumber());
+          assert.equal(event.transient, false);
+          assert.equal(event.domainSeparator.toNumber(), DOMAIN_SEPARATOR);
         } catch (err) {
           throw err;
         }
       }
     );
 
-    const message = `${DOMAIN_SEPARATOR}::${zynkOpVault.toString()}::${EthereumzynkOpVaultAddress}::${EthereumRecipientAddress}::${EthereumTxnOut}::${amount}`;
-    const { ed25519Ix, signature } = buildEd25519Ix(message, attester);
+    const meta = [
+      { key: "originChain", value: "Solana" },
+      { key: "targetChain", value: "Ethereum" },
+      { key: "txn", value: EthereumTxnOut },
+      { key: "proxyTxn", value: BridgeTxnOut },
+    ];
 
     await program.methods
-      .attestOrder(
-        Array.from(attestOrderId),
-        "Solana",
-        "Ethereum",
+      .recordOrder(
+        Array.from(crossChainPartnerId),
+        Array.from(crossChainOrderId),
+        "USDC",
         zynkOpVault.toString(),
         EthereumzynkOpVaultAddress,
         EthereumRecipientAddress,
-        attestTxnId,
-        EthereumTxnOut,
-        BridgeTxnOut,
-        "USDC",
-        "USDT",
         amount,
-        Buffer.from(signature).toJSON().data,
-        null
+        null,
+        meta
       )
       .accounts({
         config: configPDA,
         manager: manager.publicKey,
-        orderTracker: attestOrderTrackerPDA,
+        orderTracker: crossChainOrderTrackerPDA,
         systemProgram: SystemProgram.programId,
-        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY,
       })
-      .preInstructions([ed25519Ix])
       .signers([manager])
       .rpc();
 
     const orderTrackerAccount = await program.account.orderTracker.fetch(
-      attestOrderTrackerPDA
+      crossChainOrderTrackerPDA
     );
     assert.ok(
       Buffer.from(orderTrackerAccount.orderId).equals(
-        Buffer.from(attestOrderId)
+        Buffer.from(crossChainOrderId)
       )
+    );
+    assert.ok(
+      Buffer.from(orderTrackerAccount.partnerId).equals(crossChainPartnerId)
     );
 
     const orderAmountIn = orderTrackerAccount.amountIn;
@@ -5205,95 +5191,72 @@ describe.only("zynk-core", () => {
     assert.equal(orderAmountOut.toNumber(), amount.toNumber());
     assert.equal(orderAmountIn.toNumber(), 0);
 
-    assert.equal(
-      orderTrackerAccount.partnerDepositVault.toBase58(),
-      PublicKey.default.toBase58()
-    );
-    assert.equal(
-      orderTrackerAccount.beneficiaryWallet.toBase58(),
-      PublicKey.default.toBase58()
-    );
-
-    assert.ok(
-      Buffer.from(orderTrackerAccount.partnerId).equals(
-        sha256(Buffer.from(EthereumzynkOpVaultAddress))
-      )
-    );
-
     await program.removeEventListener(listener);
   });
 
-  it("Should attest cross-chain order closure", async () => {
+  it("Should record cross-chain order replenishment and closure", async () => {
     const orderTrackerAccount = await program.account.orderTracker.fetch(
-      attestOrderTrackerPDA
+      crossChainOrderTrackerPDA
     );
     assert.ok(
       Buffer.from(orderTrackerAccount.orderId).equals(
-        Buffer.from(attestOrderId)
+        Buffer.from(crossChainOrderId)
       )
     );
     assert.ok(
-      Buffer.from(orderTrackerAccount.partnerId).equals(
-        sha256(Buffer.from(EthereumzynkOpVaultAddress))
-      )
+      Buffer.from(orderTrackerAccount.partnerId).equals(crossChainPartnerId)
     );
 
     const listener = program.addEventListener(
-      "orderAttested",
+      "orderReplenished",
       (event, _slot) => {
-        if (!Buffer.from(event.orderId).equals(Buffer.from(attestOrderId)))
+        if (!Buffer.from(event.orderId).equals(Buffer.from(crossChainOrderId)))
           return;
 
         try {
-          assert.equal(event.originChain, "Ethereum");
-          assert.equal(event.targetChain, "Solana");
-          assert.equal(event.origin, EthereumRecipientAddress);
-          assert.equal(event.proxy, EthereumzynkOpVaultAddress);
-          assert.equal(event.target, zynkOpVault.toString());
-          assert.equal(event.txn, EthereumTxnIn);
-          assert.equal(event.proxyTxn, BridgeTxnIn);
-          assert.equal(event.asset, "USDT");
-          assert.equal(event.proxyAsset, "USDG");
+          assert.equal(event.token, "USDT");
+          assert.equal(event.zynkOpVault, EthereumzynkOpVaultAddress);
+          assert.equal(event.partnerDepositVault, zynkOpVault.toString());
           assert.equal(event.amount.toNumber(), amount.toNumber());
+          assert.equal(event.orderClosed, true);
+          assert.equal(event.domainSeparator.toNumber(), DOMAIN_SEPARATOR);
         } catch (err) {
           throw err;
         }
       }
     );
 
-    const message = `${DOMAIN_SEPARATOR}::${EthereumRecipientAddress}::${EthereumzynkOpVaultAddress}::${zynkOpVault.toString()}::${EthereumTxnIn}::${amount}`;
-    const { ed25519Ix, signature } = buildEd25519Ix(message, attester);
+    const meta = [
+      { key: "originChain", value: "Ethereum" },
+      { key: "targetChain", value: "Solana" },
+      { key: "txn", value: EthereumTxnIn },
+      { key: "proxyTxn", value: BridgeTxnIn },
+    ];
 
     await program.methods
-      .attestOrder(
-        Array.from(attestOrderId),
-        "Ethereum",
-        "Solana",
-        EthereumRecipientAddress,
+      .recordOrder(
+        Array.from(crossChainPartnerId),
+        Array.from(crossChainOrderId),
+        "USDT",
         EthereumzynkOpVaultAddress,
         zynkOpVault.toString(),
-        EthereumTxnIn,
-        EthereumTxnIn,
-        BridgeTxnIn,
-        "USDT",
-        "USDG",
+        EthereumRecipientAddress,
         amount,
-        Buffer.from(signature).toJSON().data,
-        null
+        null,
+        meta
       )
       .accounts({
         config: configPDA,
         manager: manager.publicKey,
-        orderTracker: attestOrderTrackerPDA,
+        orderTracker: crossChainOrderTrackerPDA,
         systemProgram: SystemProgram.programId,
-        sysvarInstructions: SYSVAR_INSTRUCTIONS_PUBKEY,
       })
-      .preInstructions([ed25519Ix])
       .signers([manager])
       .rpc();
 
     try {
-      await program.account.orderTracker.fetch(attestOrderTrackerPDA);
+      await program.account.orderTracker.fetch(crossChainOrderTrackerPDA);
+      assert.fail("Expected orderTracker PDA to be closed");
     } catch (error) {
       assert.include(
         error.message,

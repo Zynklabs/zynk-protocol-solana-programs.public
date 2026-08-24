@@ -8,11 +8,8 @@ use anchor_spl::token_interface::{
 };
 use anchor_lang::solana_program::{
     pubkey::Pubkey,
-    sysvar::instructions::{ ID as SYSVAR_IX_ID, load_instruction_at_checked },
     system_program::ID as SYSTEM_PROGRAM_ID,
-    ed25519_program::ID as ED25519_ID,
     program_error::ProgramError,
-    hash::hash,
 };
 
 declare_id!("ZYNKctWoaYeAdN9szq1joeu6rRPf7LK72pUurkcBpBY");
@@ -39,8 +36,6 @@ pub enum CustomError {
     InvalidBeneficiary,
     #[msg("Deployed amount must be replenished")]
     DeficientOrder,
-    #[msg("Invalid message in Ed25519 instruction")]
-    InvalidEd25519Message,
     #[msg("Action under review")]
     ActionUnderReview,
     #[msg("Action already executed")]
@@ -61,7 +56,6 @@ pub struct Config {
     pub admin: Pubkey,
     pub manager: Pubkey,
     pub guardian: Pubkey,
-    pub attester: Pubkey,
     #[max_len(8)]
     pub whitelisted_token_mints: Vec<Pubkey>,
 }
@@ -113,7 +107,6 @@ pub enum TimelockAction {
     UpdateAdmin,
     UpdateManager,
     UpdateGuardian,
-    UpdateAttester,
     Unpause,
 }
 
@@ -123,7 +116,6 @@ impl TimelockAction {
             TimelockAction::UpdateAdmin => 24 * 60 * 60,           // 24 hours
             TimelockAction::UpdateManager => 12 * 60 * 60,         // 12 hours
             TimelockAction::UpdateGuardian => 48 * 60 * 60,        // 48 hours
-            TimelockAction::UpdateAttester => 12 * 60 * 60,        // 12 hours
             TimelockAction::Unpause => 6 * 60 * 60,                // 6 hours
         }
     }
@@ -137,8 +129,7 @@ impl TryFrom<u8> for TimelockAction {
             0 => Ok(TimelockAction::UpdateAdmin),
             1 => Ok(TimelockAction::UpdateManager),
             2 => Ok(TimelockAction::UpdateGuardian),
-            3 => Ok(TimelockAction::UpdateAttester),
-            4 => Ok(TimelockAction::Unpause),
+            3 => Ok(TimelockAction::Unpause),
             _ => Err(CustomError::InvalidAction.into()),
         }
     }
@@ -200,79 +191,6 @@ pub struct OrdersClosed {
     pub meta: Option<Vec<EventArg>>
 }
 
-#[event]
-pub struct OrderAttested {
-    pub order_id: [u8; 32],
-    pub origin_chain: String,
-    pub target_chain: String,
-    pub origin: String,
-    pub proxy: String,
-    pub target: String,
-    pub txn_id: String,
-    pub txn: String,
-    pub proxy_txn: Option<String>,
-    pub asset: String,
-    pub proxy_asset: Option<String>,
-    pub amount: u64,
-    pub domain_separator: u64,
-    pub meta: Option<Vec<EventArg>>
-}
-
-
-/// Verifies an Ed25519 signature using the Solana Ed25519 program via sysvar instructions.
-/// This function checks that the previous instruction was an Ed25519 signature verification
-/// and validates the signer, message, and signature match the expected values.
-pub fn verify_signature_syscall(
-    ix_sysvar_account: &AccountInfo,
-    signer_pubkey: &Pubkey,
-    msg: String,
-    signature: [u8; 64]
-) -> Result<()> {
-    let ed25519_instruction_result = load_instruction_at_checked(0, ix_sysvar_account);
-    if ed25519_instruction_result.is_err() {
-        return Err(ed25519_instruction_result.unwrap_err().into());
-    }
-    let ed25519_instruction = ed25519_instruction_result.unwrap();
-    let data = &ed25519_instruction.data;
-
-    let message: Vec<u8> = msg.into_bytes();
-    if ed25519_instruction.program_id != ED25519_ID || ed25519_instruction.accounts.len() != 0 || data.len() != 16 + 32 + 64 + message.len() {
-        return Err(ProgramError::InvalidInstructionData.into());
-    }
-
-    if data[0] != 1 {
-        return Err(ProgramError::InvalidInstructionData.into());
-    }
-
-    let sig_offset = u16::from_le_bytes([data[2], data[3]]);
-    let sig_ix_idx = u16::from_le_bytes([data[4], data[5]]);
-    let pk_offset  = u16::from_le_bytes([data[6], data[7]]);
-    let pk_ix_idx  = u16::from_le_bytes([data[8], data[9]]);
-    let msg_offset = u16::from_le_bytes([data[10], data[11]]);
-    let msg_size   = u16::from_le_bytes([data[12], data[13]]);
-    let msg_ix_idx = u16::from_le_bytes([data[14], data[15]]);
-
-    if !(pk_offset == 16
-        && pk_ix_idx == 0xFFFF
-        && sig_offset == 48
-        && sig_ix_idx == 0xFFFF
-        && msg_offset == 112
-        && msg_ix_idx == 0xFFFF
-        && msg_size == message.len() as u16)
-    {
-        return Err(ProgramError::InvalidInstructionData.into());
-    }
-
-    let data_pubkey = &data[16..48];
-    let data_signature = &data[48..112];
-    let data_message = &data[112..];
-    if data_pubkey != &signer_pubkey.to_bytes() || data_signature != signature || data_message != message {
-        return Err(CustomError::InvalidEd25519Message.into());
-    }
-
-    Ok(())
-}
-
 /// Helper function to validate an address is not the null address
 pub fn validate_address(address: &Pubkey) -> Result<()> {
     require!(*address != Pubkey::default(), CustomError::InvalidAddress);
@@ -316,7 +234,6 @@ pub mod zynk_core {
     /// * `ctx` - The [`Initialize`] context containing the config and admin accounts.
     /// * `admin` - The admin address authorized for administrative operations.
     /// * `guardian` - The guardian address with emergency and oversight privileges.
-    /// * `attester` - The attester address with attestations signing privileges.
     /// * `whitelisted_token_mints` - A non-empty list of SPL token mints allowed by the program.
     ///
     /// # Behavior
@@ -334,12 +251,10 @@ pub mod zynk_core {
         ctx: Context<Initialize>,
         admin: Pubkey,
         guardian: Pubkey,
-        attester: Pubkey,
         whitelisted_token_mints: Vec<Pubkey>
     ) -> Result<()> {
         validate_address(&admin)?;
         validate_address(&guardian)?;
-        validate_address(&attester)?;
 
         let config = &mut ctx.accounts.config;
         config.paused = false;
@@ -347,7 +262,6 @@ pub mod zynk_core {
         config.manager = ctx.accounts.manager.key();
         config.admin = admin;
         config.guardian = guardian;
-        config.attester = attester;
 
         require!(whitelisted_token_mints.len() > 0, CustomError::EmptyWhitelistedTokenMints);
         for token_mint in whitelisted_token_mints.iter() {
@@ -370,14 +284,11 @@ pub mod zynk_core {
     /// * `zov_id` - The unique identifier of the ZOV to use (32 bytes, hashed off-chain).
     /// * `transient` - Flag to create (and close) transient orders.
     /// * `amount` - The amount of tokens to transfer.
-    /// * `signature` - Optional attested signature enabling explicit transient execution
-    ///                 (irrespective of the `allow_transient` attribute in beneficiary PDA)
     /// * `meta` - Optional metadata emitted with the event.
     ///
     /// # Behavior
     /// - Fails if the program is paused.
     /// - Validates the partner deposit vault token authority and token mint.
-    /// - Optionally verifies a attester signature for transient execution.
     /// - Transfers tokens from the partner deposit vault to the Zynk Operational vault.
     /// - Transfers tokens from the Zynk Operational vault to the beneficiary.
     /// - Records order details in an `OrderTracker` PDA unless executed transiently.
@@ -650,102 +561,84 @@ pub mod zynk_core {
         Ok(())
     }
 
-    /// Attests an order using an off-chain signature and records or settles the order state.
+    /// Records an order executed on an external chain (e.g. EVM) and logs the corresponding event.
     ///
     /// # Arguments
-    /// * `ctx` - The [`AttestOrder`] context.
-    /// * `order_id` - The unique identifier of the order.
-    /// * `origin_chain` - The source blockchain identifier.
-    /// * `target_chain` - The destination blockchain identifier.
-    /// * `origin` - The originating address.
-    /// * `proxy` - The proxy address involved in the transfer.
-    /// * `target` - The target address on the destination chain.
-    /// * `txn_id` - A unique identifier for the transaction.
-    /// * `txn` - The originating transaction hash.
-    /// * `proxy_txn` - Optional proxy transaction hash.
-    /// * `asset` - The asset identifier.
-    /// * `proxy_asset` - Optional proxy asset identifier.
-    /// * `amount` - The amount attested for the order.
-    /// * `signature` - The ed25519 signature authorizing the attestation.
+    /// * `ctx` - The [`RecordOrder`] context.
+    /// * `partner_id` - The unique identifier of the partner (32 bytes, hashed off-chain).
+    /// * `order_id` - The unique identifier of the order (32 bytes, hashed off-chain).
+    /// * `token` - The token address/identifier string.
+    /// * `zynk_op_vault` - The Zynk Operational vault address/identifier string.
+    /// * `partner_deposit_vault` - The partner deposit vault address/identifier string.
+    /// * `beneficiary_wallet` - The beneficiary wallet address/identifier string.
+    /// * `amount` - The amount of tokens for the order.
     /// * `meta` - Optional metadata emitted with the event.
     ///
     /// # Behavior
-    /// - Verifies the manager signature via the sysvar instructions account.
-    /// - Initializes or updates the order tracker.
-    /// - Closes the order if sufficient input has already been provided.
-    /// - Emits an `OrderAttested` event.
-    pub fn attest_order(
-        ctx: Context<AttestOrder>,
+    /// - Fails if the program is paused or amount is zero.
+    /// - If the `OrderTracker` does not exist (open order), initializes it and emits `OrderCreated`.
+    /// - If the `OrderTracker` already exists (replenishing/closing order), updates tracked amounts,
+    ///   closes the `OrderTracker` PDA if replenished (`amount_in >= amount_out`), and emits `OrderReplenished`.
+    pub fn record_order(
+        ctx: Context<RecordOrder>,
+        partner_id: [u8; 32],
         order_id: [u8; 32],
-        origin_chain: String,
-        target_chain: String,
-        origin: String,
-        proxy: String,
-        target: String,
-        txn_id: String,
-        txn: String,
-        proxy_txn: Option<String>,
-        asset: String,
-        proxy_asset: Option<String>,
+        token: String,
+        zynk_op_vault: String,
+        partner_deposit_vault: String,
+        beneficiary_wallet: String,
         amount: u64,
-        signature: [u8; 64],
+        domain_separator: Option<u64>,
         meta: Option<Vec<EventArg>>,
     ) -> Result<()> {
-        let config = &mut ctx.accounts.config;
+        let config = &ctx.accounts.config;
         require!(!config.paused, CustomError::ContractPaused);
-
-        require!(
-            !origin.contains("::") && !proxy.contains("::") && !target.contains("::") && !txn_id.contains("::"),
-            CustomError::InvalidOrder
-        );
-
-        let message = format!("{}::{}::{}::{}::{}::{}", DOMAIN_SEPARATOR, origin, proxy, target, txn_id, amount);
-        verify_signature_syscall(
-            &ctx.accounts.sysvar_instructions,
-            &config.attester,
-            message,
-            signature
-        )?;
+        require!(amount > 0, CustomError::InvalidOrder);
 
         let order_tracker = &mut ctx.accounts.order_tracker;
 
-        let hashed_proxy = hash(proxy.as_bytes()).to_bytes();
         if order_tracker.order_id != [0u8; 32] {
-            require!(
-                order_tracker.partner_id == hashed_proxy,
-                CustomError::InvalidOrder);
+            require!(order_tracker.partner_id == partner_id, CustomError::InvalidOrder);
+            require!(order_tracker.order_id == order_id, CustomError::InvalidOrder);
 
-            require!(
-                order_tracker.amount_in
-                    .checked_add(amount)
-                    .ok_or(ProgramError::ArithmeticOverflow)?
-                    >= order_tracker.amount_out,
-                CustomError::DeficientOrder
-            );
+            order_tracker.amount_in = order_tracker.amount_in
+                .checked_add(amount)
+                .ok_or(ProgramError::ArithmeticOverflow)?;
 
-            close_account(order_tracker, &ctx.accounts.manager)?;
+            let order_closed = order_tracker.amount_in >= order_tracker.amount_out;
+            if order_closed {
+                close_account(order_tracker, &ctx.accounts.manager)?;
+            }
+
+            emit!(OrderReplenished {
+                order_id,
+                token,
+                zynk_op_vault,
+                partner_deposit_vault,
+                amount,
+                order_closed,
+                domain_separator: domain_separator.unwrap_or(DOMAIN_SEPARATOR),
+                meta
+            });
+
+
         } else {
-            order_tracker.partner_id = hashed_proxy;
+            order_tracker.partner_id = partner_id;
             order_tracker.order_id = order_id;
             order_tracker.amount_out = amount;
-        }
 
-        emit!(OrderAttested {
-            order_id,
-            origin_chain,
-            target_chain,
-            origin,
-            proxy,
-            target,
-            txn_id,
-            txn,
-            proxy_txn,
-            asset,
-            proxy_asset,
-            amount,
-            domain_separator: DOMAIN_SEPARATOR,
-            meta
-        });
+            emit!(OrderCreated {
+                order_id,
+                token,
+                zynk_op_vault,
+                beneficiary_wallet,
+                partner_deposit_vault,
+                amount,
+                transient: false,
+                domain_separator: domain_separator.unwrap_or(DOMAIN_SEPARATOR),
+                meta
+            });
+        }
 
         Ok(())
     }
@@ -1042,7 +935,7 @@ pub mod zynk_core {
     /// * `ctx` - The [`Pause`] context containing the authority and config accounts.
     ///
     /// # Authorization
-    /// May be called by the admin, manager, or attester.
+    /// May be called by the admin or manager.
     ///
     /// # Behavior
     /// - Sets the contract paused state to `true`.
@@ -1159,10 +1052,6 @@ pub struct CreateOrder<'info> {
     pub mint: InterfaceAccount<'info, Mint>,
     pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
-
-    /// CHECK: This is the Sysvar Instructions account used for ed25519 signature verification
-    #[account(address = SYSVAR_IX_ID)]
-    pub sysvar_instructions: Option<AccountInfo<'info>>,
 }
 
 #[derive(Accounts)]
@@ -1234,8 +1123,8 @@ pub struct CloseOrders<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(order_id: [u8; 32])]
-pub struct AttestOrder<'info> {
+#[instruction(partner_id: [u8; 32], order_id: [u8; 32])]
+pub struct RecordOrder<'info> {
     #[account(
         mut,
         seeds = [CONFIG_SEED],
@@ -1251,16 +1140,12 @@ pub struct AttestOrder<'info> {
         init_if_needed,
         payer = manager,
         space = 8 + OrderTracker::INIT_SPACE,
-        seeds = [ORDER_TRACKER_SEED, b"attest", order_id.as_ref()],
+        seeds = [ORDER_TRACKER_SEED, partner_id.as_ref(), order_id.as_ref()],
         bump
     )]
     pub order_tracker: Account<'info, OrderTracker>,
 
     pub system_program: Program<'info, System>,
-
-    /// CHECK: This is the Sysvar Instructions account used for ed25519 signature verification
-    #[account(address = SYSVAR_IX_ID)]
-    pub sysvar_instructions: AccountInfo<'info>,
 }
 
 

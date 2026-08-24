@@ -59,7 +59,6 @@ describe("zynk-orbit", () => {
     const admin = ADMIN_KEYPAIR;
     const manager = INITIAL_MANAGER_KEYPAIR;
     const guardian = Keypair.generate();
-    const attester = INITIAL_MANAGER_KEYPAIR;
     const partnerOperationalWallet = Keypair.generate();
 
     // ── ICV user ──────────────────────────────────────────────────────────────
@@ -388,7 +387,6 @@ describe("zynk-orbit", () => {
                 .initialize(
                     admin.publicKey,
                     guardian.publicKey,
-                    attester.publicKey,
                     whitelistedTokenMints
                 )
                 .accounts({
