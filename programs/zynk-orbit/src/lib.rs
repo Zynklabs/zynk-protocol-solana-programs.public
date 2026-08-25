@@ -1012,6 +1012,8 @@ pub mod zynk_orbit {
         wallets: [Pubkey; 3],
         cliff_period: Option<i64>,
         max_principal: Option<u64>,
+        whitelisted_partners: Vec<u32>,
+        cctp_recipients: Vec<CctpRecipient>,
     ) -> Result<()> {
         // Validate admin signer against zynk-core config.
         let config = &ctx.accounts.config;
@@ -1034,18 +1036,29 @@ pub mod zynk_orbit {
         user.cliff_period = cliff_period.unwrap_or(i64::MAX);
         user.principal_in = 0;
         user.principal_out = 0;
+        require!(
+            whitelisted_partners.iter().enumerate().all(|(index, partner)|
+                !whitelisted_partners[..index].contains(partner)
+            ),
+            OrbitError::PartnerAlreadyWhitelisted
+        );
+        require!(
+            cctp_recipients.iter().enumerate().all(|(index, recipient)|
+                !cctp_recipients[..index].contains(recipient)
+            ),
+            OrbitError::CctpRecipientAlreadyWhitelisted
+        );
+
         user.max_principal = max_principal.unwrap_or(u64::MAX);
-        // Always start with an empty whitelist; add partners via
-        // update_partner_whitelist, which reallocs the account on demand.
-        user.whitelisted_partners = Vec::new();
-        user.cctp_recipients = Vec::new();
+        user.whitelisted_partners = whitelisted_partners;
+        user.cctp_recipients = cctp_recipients;
 
         emit!(AxEvent {
             event_name: "Whitelist".to_string(),
             user_id,
             public_key: wallets[0],
             domain_separator: DOMAIN_SEPARATOR,
-            partners: Vec::new(),
+            partners: user.whitelisted_partners.clone(),
         });
 
         Ok(())
@@ -1635,6 +1648,11 @@ pub mod zynk_orbit {
                     zynk_core::CoreError::InvalidAccount
                 );
 
+                require!(
+                    Clock::get()?.unix_timestamp >= user.cliff_period,
+                    OrbitError::CliffPeriodNotOver
+                );
+
                 let recipient = CctpRecipient {
                     destination_domain,
                     mint_recipient,
@@ -1958,7 +1976,15 @@ pub struct Disburse<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(user_id: [u8; 32])]
+#[instruction(
+    user_id: [u8; 32],
+    user_type: UserType,
+    wallets: [Pubkey; 3],
+    cliff_period: Option<i64>,
+    max_principal: Option<u64>,
+    whitelisted_partners: Vec<u32>,
+    cctp_recipients: Vec<CctpRecipient>
+)]
 pub struct Whitelist<'info> {
     #[account(
         seeds = [zynk_core::CONFIG_SEED],
@@ -1971,9 +1997,10 @@ pub struct Whitelist<'info> {
     #[account(
         init,
         payer = admin,
-        // Allocate only baseline space (empty whitelist). Partners are added
-        // later via update_partner_whitelist, which reallocs on demand.
-        space = User::space_for_lengths(0, 0),
+        space = User::space_for_lengths(
+            whitelisted_partners.len(),
+            cctp_recipients.len(),
+        ),
         seeds = [USER_SEED, user_id.as_ref()],
         bump
     )]
