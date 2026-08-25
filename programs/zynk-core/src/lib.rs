@@ -18,39 +18,6 @@ pub const DOMAIN_SEPARATOR: u64 = 115111123810997;
 pub const INITIAL_MANAGER: Pubkey = pubkey!("FnN6veEuyCr3R88iHxZYFRPwq22CZQwPMXzaTomeWWX5");
 
 
-#[error_code]
-pub enum CustomError {
-    #[msg("Unauthorized signer")]
-    Unauthorized,
-    #[msg("Invalid address: cannot use null address")]
-    InvalidAddress,
-    #[msg("Contract is paused")]
-    ContractPaused,
-    #[msg("Invalid order")]
-    InvalidOrder,
-    #[msg("Invalid account")]
-    InvalidAccount,
-    #[msg("Invalid token mint")]
-    InvalidTokenMint,
-    #[msg("Invalid beneficiary or it's state")]
-    InvalidBeneficiary,
-    #[msg("Deployed amount must be replenished")]
-    DeficientOrder,
-    #[msg("Action under review")]
-    ActionUnderReview,
-    #[msg("Action already executed")]
-    AlreadyExecuted,
-    #[msg("Invalid action")]
-    InvalidAction,
-    #[msg("Whitelisted token mints must be non-empty")]
-    EmptyWhitelistedTokenMints,
-    #[msg("Whitelisted token mints must be unique")]
-    DuplicateWhitelistedTokenMint,
-    #[msg("Token mint is already whitelisted")]
-    TokenMintAlreadyWhitelisted,
-    #[msg("Token mint is not whitelisted")]
-    TokenMintNotWhitelisted,
-}
 
 /// Action to perform on the whitelisted token mints.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq)]
@@ -150,7 +117,7 @@ impl TimelockAction {
 }
 
 impl TryFrom<u8> for TimelockAction {
-    type Error = CustomError;
+    type Error = CoreError;
 
     fn try_from(value: u8) -> std::result::Result<Self, Self::Error> {
         match value {
@@ -158,7 +125,7 @@ impl TryFrom<u8> for TimelockAction {
             1 => Ok(TimelockAction::UpdateManager),
             2 => Ok(TimelockAction::UpdateGuardian),
             3 => Ok(TimelockAction::Unpause),
-            _ => Err(CustomError::InvalidAction.into()),
+            _ => Err(CoreError::InvalidAction.into()),
         }
     }
 }
@@ -229,7 +196,7 @@ pub struct WhitelistedTokenMintsUpdated {
 
 /// Helper function to validate an address is not the null address
 pub fn validate_address(address: &Pubkey) -> Result<()> {
-    require!(*address != Pubkey::default(), CustomError::InvalidAddress);
+    require!(*address != Pubkey::default(), CoreError::InvalidAddress);
     Ok(())
 }
 
@@ -239,7 +206,7 @@ pub fn validate_unique_token_mints(token_mints: &[Pubkey]) -> Result<()> {
     sorted.sort_unstable();
 
     for pair in sorted.windows(2) {
-        require!(pair[0] != pair[1], CustomError::DuplicateWhitelistedTokenMint);
+        require!(pair[0] != pair[1], CoreError::DuplicateWhitelistedTokenMint);
     }
 
     Ok(())
@@ -299,7 +266,7 @@ pub mod zynk_core {
         config.admin = admin;
         config.guardian = guardian;
 
-        require!(whitelisted_token_mints.len() > 0, CustomError::EmptyWhitelistedTokenMints);
+        require!(whitelisted_token_mints.len() > 0, CoreError::EmptyWhitelistedTokenMints);
         for token_mint in whitelisted_token_mints.iter() {
             validate_address(token_mint)?;
         }
@@ -345,16 +312,16 @@ pub mod zynk_core {
     ) -> Result<()> {
         // Check if program is paused.
         let config = &ctx.accounts.config;
-        require!(!config.paused, CustomError::ContractPaused);
-        require!(amount > 0, CustomError::InvalidOrder);
+        require!(!config.paused, CoreError::ContractPaused);
+        require!(amount > 0, CoreError::InvalidOrder);
 
         let beneficiary_wallet = ctx.accounts.beneficiary_token_account.owner.key();
         let partner_deposit_vault = &ctx.accounts.partner_deposit_vault;
         let zynk_op_vault = &ctx.accounts.zynk_op_vault;
-        let pdv_token_account = ctx.accounts.pdv_token_account.as_ref().ok_or(CustomError::InvalidAccount)?;
+        let pdv_token_account = ctx.accounts.pdv_token_account.as_ref().ok_or(CoreError::InvalidAccount)?;
 
-        require!(pdv_token_account.owner == partner_deposit_vault.key(), CustomError::InvalidAccount);
-        require!(pdv_token_account.mint == ctx.accounts.zov_token_account.mint, CustomError::InvalidTokenMint);
+        require!(pdv_token_account.owner == partner_deposit_vault.key(), CoreError::InvalidAccount);
+        require!(pdv_token_account.mint == ctx.accounts.zov_token_account.mint, CoreError::InvalidTokenMint);
 
         // Perform token transfer from pdv_token_account to zov_token_account.
         let cpi_accounts = TransferChecked {
@@ -461,10 +428,10 @@ pub mod zynk_core {
     ) -> Result<()> {
         // Check if program is paused.
         let config = &ctx.accounts.config;
-        require!(!config.paused, CustomError::ContractPaused);
+        require!(!config.paused, CoreError::ContractPaused);
         require!(
             ctx.accounts.beneficiary.allow_transient || !transient,
-            CustomError::InvalidBeneficiary
+            CoreError::InvalidBeneficiary
         );
 
         let beneficiary_wallet = ctx.accounts.beneficiary_token_account.owner.key();
@@ -543,7 +510,7 @@ pub mod zynk_core {
         meta: Option<Vec<EventArg>>
     ) -> Result<()> {
         // Check if program is paused.
-        require!(!ctx.accounts.config.paused, CustomError::ContractPaused);
+        require!(!ctx.accounts.config.paused, CoreError::ContractPaused);
 
         let order_tracker = &mut ctx.accounts.order_tracker;
         let partner_deposit_vault = &ctx.accounts.partner_deposit_vault;
@@ -573,13 +540,13 @@ pub mod zynk_core {
                 .checked_add(amount)
                 .ok_or(ProgramError::ArithmeticOverflow)?;
         } else {
-            require!(order_tracker.amount_in >= order_tracker.amount_out, CustomError::DeficientOrder);
+            require!(order_tracker.amount_in >= order_tracker.amount_out, CoreError::DeficientOrder);
         }
 
         // If close_order flag is true, perform order closure
         if close_order {
             // Check if order_tracker's amount_in is greater than or equal to the order_tracker's amount_out
-            require!(order_tracker.amount_in >= order_tracker.amount_out, CustomError::DeficientOrder);
+            require!(order_tracker.amount_in >= order_tracker.amount_out, CoreError::DeficientOrder);
 
             // Close the order_tracker account (transfer lamports to manager and clear data)
             close_account(&mut *order_tracker, &ctx.accounts.manager)?;
@@ -630,14 +597,14 @@ pub mod zynk_core {
         meta: Option<Vec<EventArg>>,
     ) -> Result<()> {
         let config = &ctx.accounts.config;
-        require!(!config.paused, CustomError::ContractPaused);
-        require!(amount > 0, CustomError::InvalidOrder);
+        require!(!config.paused, CoreError::ContractPaused);
+        require!(amount > 0, CoreError::InvalidOrder);
 
         let order_tracker = &mut ctx.accounts.order_tracker;
 
         if order_tracker.order_id != [0u8; 32] {
-            require!(order_tracker.partner_id == partner_id, CustomError::InvalidOrder);
-            require!(order_tracker.order_id == order_id, CustomError::InvalidOrder);
+            require!(order_tracker.partner_id == partner_id, CoreError::InvalidOrder);
+            require!(order_tracker.order_id == order_id, CoreError::InvalidOrder);
 
             order_tracker.amount_in = order_tracker.amount_in
                 .checked_add(amount)
@@ -693,12 +660,12 @@ pub mod zynk_core {
     /// - Emits an `OrdersClosed` event with all closed order IDs.
     pub fn close_orders(ctx: Context<CloseOrders>, meta: Option<Vec<EventArg>>) -> Result<()> {
         let config = &mut ctx.accounts.config;
-        require!(!config.paused, CustomError::ContractPaused);
+        require!(!config.paused, CoreError::ContractPaused);
 
         let mut seen_accounts = Vec::<Pubkey>::new();
         let mut order_ids = Vec::<[u8; 32]>::new();
         for account_info in ctx.remaining_accounts.iter() {
-            require!(account_info.owner == ctx.program_id, CustomError::InvalidOrder);
+            require!(account_info.owner == ctx.program_id, CoreError::InvalidOrder);
 
             let account_key = account_info.key();
             if seen_accounts.contains(&account_key) { continue; }
@@ -805,7 +772,7 @@ pub mod zynk_core {
             WhitelistAction::Add => {
                 require!(
                     !config.whitelisted_token_mints.contains(&mint),
-                    CustomError::TokenMintAlreadyWhitelisted
+                    CoreError::TokenMintAlreadyWhitelisted
                 );
                 config.whitelisted_token_mints.push(mint);
             }
@@ -814,10 +781,10 @@ pub mod zynk_core {
                     .whitelisted_token_mints
                     .iter()
                     .position(|&m| m == mint)
-                    .ok_or(CustomError::TokenMintNotWhitelisted)?;
+                    .ok_or(CoreError::TokenMintNotWhitelisted)?;
                 require!(
                     config.whitelisted_token_mints.len() > 1,
-                    CustomError::EmptyWhitelistedTokenMints
+                    CoreError::EmptyWhitelistedTokenMints
                 );
                 config.whitelisted_token_mints.swap_remove(pos);
             }
@@ -892,7 +859,7 @@ pub mod zynk_core {
         let authority = &ctx.accounts.authority;
         let timelock = &ctx.accounts.timelock;
 
-        require!(timelock.req_by != authority.key(), CustomError::Unauthorized);
+        require!(timelock.req_by != authority.key(), CoreError::Unauthorized);
 
         close_account(timelock, authority)?;
 
@@ -921,8 +888,8 @@ pub mod zynk_core {
         let authority = ctx.accounts.authority.key();
         let timelock = &mut ctx.accounts.timelock;
 
-        require!(timelock.req_by != authority, CustomError::Unauthorized);
-        require!(timelock.ack_by.is_none(), CustomError::Unauthorized);
+        require!(timelock.req_by != authority, CoreError::Unauthorized);
+        require!(timelock.ack_by.is_none(), CoreError::Unauthorized);
 
         timelock.ack_by = Some(authority);
 
@@ -954,8 +921,8 @@ pub mod zynk_core {
         let timelock = &mut ctx.accounts.timelock;
         let action: TimelockAction = timelock.action.try_into()?;
 
-        require!(timelock.req_by != authority, CustomError::Unauthorized);
-        require!(timelock.ack_by != Some(authority), CustomError::Unauthorized);
+        require!(timelock.req_by != authority, CoreError::Unauthorized);
+        require!(timelock.ack_by != Some(authority), CoreError::Unauthorized);
 
         let acked = timelock.ack_by.is_some();
         let eta_ready = timestamp >= timelock.eta;
@@ -966,7 +933,7 @@ pub mod zynk_core {
             eta_ready || acked
         };
 
-        require!(ok, CustomError::ActionUnderReview);
+        require!(ok, CoreError::ActionUnderReview);
 
         let value = timelock.value;
         validate_address(&value)?;
@@ -977,7 +944,7 @@ pub mod zynk_core {
             TimelockAction::UpdateAdmin => config.admin = value,
             TimelockAction::UpdateManager => config.manager = value,
             TimelockAction::UpdateGuardian => config.guardian = value,
-            _ => return Err(error!(CustomError::InvalidAction)),
+            _ => return Err(error!(CoreError::InvalidAction)),
         }
 
         emit!(Action {
@@ -1007,11 +974,11 @@ pub mod zynk_core {
         let timestamp = Clock::get()?.unix_timestamp;
         let timelock = &mut ctx.accounts.timelock;
 
-        require!(TimelockAction::try_from(timelock.action)? == TimelockAction::Unpause, CustomError::InvalidAction);
+        require!(TimelockAction::try_from(timelock.action)? == TimelockAction::Unpause, CoreError::InvalidAction);
 
         let acked = timelock.ack_by.is_some();
         let eta_ready = timestamp >= timelock.eta;
-        require!(eta_ready || acked, CustomError::ActionUnderReview);
+        require!(eta_ready || acked, CoreError::ActionUnderReview);
 
         let config = &mut ctx.accounts.config;
 
@@ -1075,7 +1042,7 @@ pub struct Initialize<'info> {
     pub config: Account<'info, Config>,
     #[account(
         mut,
-        constraint = cfg!(feature = "testing") || manager.key() == INITIAL_MANAGER @ CustomError::Unauthorized
+        constraint = cfg!(feature = "testing") || manager.key() == INITIAL_MANAGER @ CoreError::Unauthorized
     )]
     pub manager: Signer<'info>,
 
@@ -1089,7 +1056,7 @@ pub struct CreateOrder<'info> {
         mut,
         seeds = [CONFIG_SEED],
         bump,
-        has_one = manager @ CustomError::Unauthorized
+        has_one = manager @ CoreError::Unauthorized
     )]
     pub config: Account<'info, Config>,
 
@@ -1115,24 +1082,24 @@ pub struct CreateOrder<'info> {
     pub zynk_op_vault: UncheckedAccount<'info>,
     #[account(
         mut,
-        constraint = zov_token_account.owner == zynk_op_vault.key() @ CustomError::InvalidAccount,
-        constraint = zov_token_account.mint == mint.key() @ CustomError::InvalidTokenMint
+        constraint = zov_token_account.owner == zynk_op_vault.key() @ CoreError::InvalidAccount,
+        constraint = zov_token_account.mint == mint.key() @ CoreError::InvalidTokenMint
     )]
     pub zov_token_account: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
         seeds = [BENEFICIARY_SEED, partner_id.as_ref(), beneficiary_token_account.owner.as_ref()],
         bump,
-        constraint = beneficiary.is_active @ CustomError::InvalidBeneficiary,
-        constraint = beneficiary.public_key == beneficiary_token_account.owner @ CustomError::InvalidBeneficiary,
+        constraint = beneficiary.is_active @ CoreError::InvalidBeneficiary,
+        constraint = beneficiary.public_key == beneficiary_token_account.owner @ CoreError::InvalidBeneficiary,
     )]
     pub beneficiary: Account<'info, Beneficiary>,
 
     // Tokens sent out to
     #[account(
         mut,
-        constraint = beneficiary_token_account.mint == zov_token_account.mint @ CustomError::InvalidAccount,
-        constraint = beneficiary_token_account.owner != zynk_op_vault.key() @ CustomError::InvalidAccount,
+        constraint = beneficiary_token_account.mint == zov_token_account.mint @ CoreError::InvalidAccount,
+        constraint = beneficiary_token_account.owner != zynk_op_vault.key() @ CoreError::InvalidAccount,
     )]
     pub beneficiary_token_account: InterfaceAccount<'info, TokenAccount>,
 
@@ -1147,7 +1114,7 @@ pub struct CreateOrder<'info> {
     pub order_tracker: Account<'info, OrderTracker>,
 
     #[account(
-        constraint = config.whitelisted_token_mints.contains(&mint.key()) @ CustomError::InvalidTokenMint,
+        constraint = config.whitelisted_token_mints.contains(&mint.key()) @ CoreError::InvalidTokenMint,
     )]
     pub mint: InterfaceAccount<'info, Mint>,
     pub token_program: Interface<'info, TokenInterface>,
@@ -1160,7 +1127,7 @@ pub struct Replenish<'info> {
         mut,
         seeds = [CONFIG_SEED],
         bump,
-        has_one = manager @ CustomError::Unauthorized
+        has_one = manager @ CoreError::Unauthorized
     )]
     pub config: Account<'info, Config>,
 
@@ -1180,27 +1147,27 @@ pub struct Replenish<'info> {
     #[account(
         seeds = [PARTNER_DEPOSIT_VAULT_SEED, order_tracker.partner_id.as_ref()],
         bump,
-        constraint = partner_deposit_vault.key() == order_tracker.partner_deposit_vault @ CustomError::InvalidAccount,
+        constraint = partner_deposit_vault.key() == order_tracker.partner_deposit_vault @ CoreError::InvalidAccount,
     )]
     pub partner_deposit_vault: UncheckedAccount<'info>,
     #[account(
         mut,
-        constraint = pdv_token_account.owner == partner_deposit_vault.key() @ CustomError::InvalidAccount,
-        constraint = pdv_token_account.mint == zov_token_account.mint @ CustomError::InvalidTokenMint
+        constraint = pdv_token_account.owner == partner_deposit_vault.key() @ CoreError::InvalidAccount,
+        constraint = pdv_token_account.mint == zov_token_account.mint @ CoreError::InvalidTokenMint
     )]
     pub pdv_token_account: InterfaceAccount<'info, TokenAccount>,
 
     // Tokens pulled in to
     #[account(
         mut,
-        constraint = zov_token_account.owner == order_tracker.zynk_op_vault @ CustomError::InvalidAccount,
-        constraint = zov_token_account.mint == mint.key() @ CustomError::InvalidTokenMint
+        constraint = zov_token_account.owner == order_tracker.zynk_op_vault @ CoreError::InvalidAccount,
+        constraint = zov_token_account.mint == mint.key() @ CoreError::InvalidTokenMint
     )]
     pub zov_token_account: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
-        constraint = config.whitelisted_token_mints.contains(&mint.key()) @ CustomError::InvalidTokenMint,
-        constraint = mint.key() == order_tracker.mint @ CustomError::InvalidTokenMint,
+        constraint = config.whitelisted_token_mints.contains(&mint.key()) @ CoreError::InvalidTokenMint,
+        constraint = mint.key() == order_tracker.mint @ CoreError::InvalidTokenMint,
     )]
     pub mint: InterfaceAccount<'info, Mint>,
     pub token_program: Interface<'info, TokenInterface>,
@@ -1218,7 +1185,7 @@ pub struct CloseOrders<'info> {
 
     #[account(
         mut,
-        constraint = authority.key() == config.admin || authority.key() == config.guardian @ CustomError::Unauthorized,
+        constraint = authority.key() == config.admin || authority.key() == config.guardian @ CoreError::Unauthorized,
     )]
     pub authority: Signer<'info>,
 }
@@ -1230,7 +1197,7 @@ pub struct RecordOrder<'info> {
         mut,
         seeds = [CONFIG_SEED],
         bump,
-        has_one = manager @ CustomError::Unauthorized
+        has_one = manager @ CoreError::Unauthorized
     )]
     pub config: Account<'info, Config>,
 
@@ -1271,7 +1238,7 @@ pub struct WhitelistBeneficiary<'info> {
 
     #[account(
         mut,
-        constraint = authority.key() == config.admin || authority.key() == config.guardian @ CustomError::Unauthorized,
+        constraint = authority.key() == config.admin || authority.key() == config.guardian @ CoreError::Unauthorized,
     )]
     pub authority: Signer<'info>,
 
@@ -1296,7 +1263,7 @@ pub struct ToggleBeneficiary<'info> {
 
     #[account(
         mut,
-        constraint = authority.key() == config.admin || authority.key() == config.guardian @ CustomError::Unauthorized,
+        constraint = authority.key() == config.admin || authority.key() == config.guardian @ CoreError::Unauthorized,
     )]
     pub authority: Signer<'info>,
 }
@@ -1320,7 +1287,7 @@ pub struct RevokeBeneficiary<'info> {
 
     #[account(
         mut,
-        constraint = authority.key() == config.admin || authority.key() == config.guardian @ CustomError::Unauthorized,
+        constraint = authority.key() == config.admin || authority.key() == config.guardian @ CoreError::Unauthorized,
     )]
     pub authority: Signer<'info>,
 
@@ -1353,7 +1320,7 @@ pub struct UpdateWhitelistedTokenMint<'info> {
 
     #[account(
         mut,
-        constraint = authority.key() == config.admin || authority.key() == config.guardian @ CustomError::Unauthorized,
+        constraint = authority.key() == config.admin || authority.key() == config.guardian @ CoreError::Unauthorized,
     )]
     pub authority: Signer<'info>,
 
@@ -1381,7 +1348,7 @@ pub struct RequestTimelock<'info> {
 
     #[account(
         mut,
-        constraint = authority.key() == config.admin || authority.key() == config.manager @ CustomError::Unauthorized
+        constraint = authority.key() == config.admin || authority.key() == config.manager @ CoreError::Unauthorized
     )]
     pub authority: Signer<'info>,
 
@@ -1407,7 +1374,7 @@ pub struct SignTimelock<'info> {
 
     #[account(
         mut,
-        constraint = authority.key() == config.admin || authority.key() == config.guardian @ CustomError::Unauthorized
+        constraint = authority.key() == config.admin || authority.key() == config.guardian @ CoreError::Unauthorized
     )]
     pub authority: Signer<'info>,
 }
@@ -1423,7 +1390,42 @@ pub struct Pause<'info> {
     pub config: Account<'info, Config>,
 
     #[account(
-        constraint = authority.key() == config.manager || authority.key() == config.admin @ CustomError::Unauthorized
+        constraint = authority.key() == config.manager || authority.key() == config.admin @ CoreError::Unauthorized
     )]
     pub authority: Signer<'info>,
+}
+
+
+#[error_code]
+pub enum CoreError {
+    #[msg("Unauthorized signer")]
+    Unauthorized,
+    #[msg("Invalid address: cannot use null address")]
+    InvalidAddress,
+    #[msg("Contract is paused")]
+    ContractPaused,
+    #[msg("Invalid order")]
+    InvalidOrder,
+    #[msg("Invalid account")]
+    InvalidAccount,
+    #[msg("Invalid token mint")]
+    InvalidTokenMint,
+    #[msg("Invalid beneficiary or it's state")]
+    InvalidBeneficiary,
+    #[msg("Deployed amount must be replenished")]
+    DeficientOrder,
+    #[msg("Action under review")]
+    ActionUnderReview,
+    #[msg("Action already executed")]
+    AlreadyExecuted,
+    #[msg("Invalid action")]
+    InvalidAction,
+    #[msg("Whitelisted token mints must be non-empty")]
+    EmptyWhitelistedTokenMints,
+    #[msg("Whitelisted token mints must be unique")]
+    DuplicateWhitelistedTokenMint,
+    #[msg("Token mint is already whitelisted")]
+    TokenMintAlreadyWhitelisted,
+    #[msg("Token mint is not whitelisted")]
+    TokenMintNotWhitelisted,
 }
