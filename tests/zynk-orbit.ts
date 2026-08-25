@@ -222,7 +222,7 @@ describe("zynk-orbit", () => {
   );
 
   const [configPDA] = PublicKey.findProgramAddressSync(
-    [Buffer.from("config::v4")],
+    [Buffer.from("config")],
     core_program.programId
   );
 
@@ -1929,7 +1929,7 @@ describe("zynk-orbit", () => {
 
   it("Should reject direct calls to core replenishAndRepay without Orbit PDA authority", async () => {
     const [orbitAuthority] = PublicKey.findProgramAddressSync(
-      [Buffer.from("core_repay")],
+      [Buffer.from("orbit<>core")],
       program.programId
     );
     const [coreZovPDA] = PublicKey.findProgramAddressSync(
@@ -4538,7 +4538,7 @@ describe("zynk-orbit", () => {
           icvTokenAccount: claimTokenAccount,
           coreManager: manager.publicKey,
           orbitAuthority: PublicKey.findProgramAddressSync(
-            [Buffer.from("core_repay")],
+            [Buffer.from("orbit<>core")],
             program.programId
           )[0],
           destinationTokenAccount: claimDestAta,
@@ -4570,7 +4570,7 @@ describe("zynk-orbit", () => {
           icvTokenAccount: null,
           coreManager: manager.publicKey,
           orbitAuthority: PublicKey.findProgramAddressSync(
-            [Buffer.from("core_repay")],
+            [Buffer.from("orbit<>core")],
             program.programId
           )[0],
           destinationTokenAccount: ncwTokenAccount,
@@ -4620,7 +4620,7 @@ describe("zynk-orbit", () => {
           icvTokenAccount: czrCustodyAta,
           coreManager: manager.publicKey,
           orbitAuthority: PublicKey.findProgramAddressSync(
-            [Buffer.from("core_repay")],
+            [Buffer.from("orbit<>core")],
             program.programId
           )[0],
           destinationTokenAccount: czrDestAta,
@@ -4700,7 +4700,7 @@ describe("zynk-orbit", () => {
         icvTokenAccount: claimTokenAccount,
         coreManager: manager.publicKey,
         orbitAuthority: PublicKey.findProgramAddressSync(
-          [Buffer.from("core_repay")],
+          [Buffer.from("orbit<>core")],
           program.programId
         )[0],
         destinationTokenAccount: claimDestAta,
@@ -4805,7 +4805,7 @@ describe("zynk-orbit", () => {
         icvTokenAccount: custodyAta,
         coreManager: manager.publicKey,
         orbitAuthority: PublicKey.findProgramAddressSync(
-          [Buffer.from("core_repay")],
+          [Buffer.from("orbit<>core")],
           program.programId
         )[0],
         destinationTokenAccount: claimantAta,
@@ -5109,7 +5109,7 @@ describe("zynk-orbit", () => {
           icvTokenAccount: rewlCustodyAta,
           coreManager: manager.publicKey,
           orbitAuthority: PublicKey.findProgramAddressSync(
-            [Buffer.from("core_repay")],
+            [Buffer.from("orbit<>core")],
             program.programId
           )[0],
           destinationTokenAccount: rewlDestAta,

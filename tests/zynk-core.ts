@@ -87,7 +87,7 @@ describe("zynk-core", () => {
 
   // Config account PDA (to be initialized)
   const [configPDA] = PublicKey.findProgramAddressSync(
-    [Buffer.from("config::v4")],
+    [Buffer.from("config")],
     program.programId
   );
 
