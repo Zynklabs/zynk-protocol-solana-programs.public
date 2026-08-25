@@ -226,7 +226,7 @@ pub fn close_account<'a, 'b>(from: impl ToAccountInfo<'a>, to: impl ToAccountInf
     **from.lamports.borrow_mut() = 0;
 
     from.assign(&SYSTEM_PROGRAM_ID);
-    from.realloc(0, false).map_err(Into::into)
+    from.resize(0).map_err(Into::into)
 }
 
 #[program]
@@ -1144,7 +1144,6 @@ pub struct Initialize<'info> {
 #[instruction(partner_id: [u8; 32], order_id: [u8; 32], zov_id: [u8; 32], transient: bool)]
 pub struct CreateOrder<'info> {
     #[account(
-        mut,
         seeds = [CONFIG_SEED],
         bump,
         has_one = manager @ CoreError::Unauthorized
@@ -1215,7 +1214,6 @@ pub struct CreateOrder<'info> {
 #[derive(Accounts)]
 pub struct Replenish<'info> {
     #[account(
-        mut,
         seeds = [CONFIG_SEED],
         bump,
         has_one = manager @ CoreError::Unauthorized
@@ -1343,7 +1341,6 @@ pub struct ReplenishAndRepay<'info> {
 #[derive(Accounts)]
 pub struct CloseOrders<'info> {
     #[account(
-        mut,
         seeds = [CONFIG_SEED],
         bump,
     )]
@@ -1360,7 +1357,6 @@ pub struct CloseOrders<'info> {
 #[instruction(partner_id: [u8; 32], order_id: [u8; 32])]
 pub struct RecordOrder<'info> {
     #[account(
-        mut,
         seeds = [CONFIG_SEED],
         bump,
         has_one = manager @ CoreError::Unauthorized
@@ -1387,7 +1383,6 @@ pub struct RecordOrder<'info> {
 #[instruction(partner_id: [u8; 32], public_key: Pubkey)]
 pub struct WhitelistBeneficiary<'info> {
     #[account(
-        mut,
         seeds = [CONFIG_SEED],
         bump,
     )]
@@ -1414,7 +1409,6 @@ pub struct WhitelistBeneficiary<'info> {
 #[derive(Accounts)]
 pub struct ToggleBeneficiary<'info> {
     #[account(
-        mut,
         seeds = [CONFIG_SEED],
         bump,
     )]
@@ -1428,7 +1422,6 @@ pub struct ToggleBeneficiary<'info> {
     pub beneficiary: Account<'info, Beneficiary>,
 
     #[account(
-        mut,
         constraint = authority.key() == config.admin || authority.key() == config.guardian @ CoreError::Unauthorized,
     )]
     pub authority: Signer<'info>,
@@ -1437,7 +1430,6 @@ pub struct ToggleBeneficiary<'info> {
 #[derive(Accounts)]
 pub struct RevokeBeneficiary<'info> {
     #[account(
-        mut,
         seeds = [CONFIG_SEED],
         bump,
     )]
@@ -1497,7 +1489,6 @@ pub struct UpdateWhitelistedTokenMint<'info> {
 #[instruction(action: u8)]
 pub struct RequestTimelock<'info> {
     #[account(
-        mut,
         seeds = [CONFIG_SEED],
         bump,
     )]

@@ -1917,7 +1917,6 @@ pub struct Deposit<'info> {
 
     pub zynk_core_program: Program<'info, ZynkCore>,
 
-    #[account(mut)]
     pub signer: Signer<'info>,
 }
 
@@ -1925,7 +1924,6 @@ pub struct Deposit<'info> {
 #[instruction(partner_id: String, order_id: [u8; 32], zov_id: [u8; 32])]
 pub struct Borrow<'info> {
     #[account(
-        mut,
         seeds = [zynk_core::CONFIG_SEED],
         seeds::program = ZynkCore::id(),
         bump,
@@ -1957,7 +1955,6 @@ pub struct Borrow<'info> {
 
     /// CHECK: zynk-core beneficiary token account
     #[account(
-        mut,
         constraint = beneficiary.public_key == beneficiary_token_account.owner @ zynk_core::CoreError::InvalidBeneficiary,
     )]
     pub beneficiary: Account<'info, zynk_core::Beneficiary>,
@@ -1987,7 +1984,6 @@ pub struct Borrow<'info> {
 #[instruction(partner_id: [u8; 32], order_id: [u8; 32], zov_id: [u8; 32])]
 pub struct Repay<'info> {
     #[account(
-        mut,
         seeds = [zynk_core::CONFIG_SEED],
         seeds::program = ZynkCore::id(),
         bump,
@@ -2101,10 +2097,8 @@ pub struct Disburse<'info> {
     )]
     pub spender: UncheckedAccount<'info>,
 
-    #[account(mut)]
     pub user: Account<'info, User>,
 
-    #[account(mut)]
     pub manager: Signer<'info>,
 
     pub token_program: Interface<'info, TokenInterface>,
@@ -2170,7 +2164,6 @@ pub struct UpdateWallets<'info> {
     )]
     pub user: Account<'info, User>,
 
-    #[account(mut)]
     pub admin: Signer<'info>,
 
     pub system_program: Program<'info, System>,
@@ -2248,7 +2241,6 @@ pub struct UpdateMaxPrincipal<'info> {
     )]
     pub user: Account<'info, User>,
 
-    #[account(mut)]
     pub admin: Signer<'info>,
 
     pub system_program: Program<'info, System>,
@@ -2513,7 +2505,6 @@ pub struct Claim<'info> {
     )]
     pub mint: InterfaceAccount<'info, Mint>,
 
-    #[account(mut)]
     pub signer: Signer<'info>,
 
     /// CHECK: Core manager receives rent from closed Core trackers and Orbit positions.
@@ -2559,7 +2550,6 @@ pub struct Pledge<'info> {
     )]
     pub mint: InterfaceAccount<'info, Mint>,
 
-    #[account(mut)]
     pub manager: Signer<'info>,
 
     /// CHECK: Ovault - verified by seeds. Must be whitelisted as a beneficiary in zynk-core with allow_transient=true.
@@ -2595,7 +2585,6 @@ pub struct Cctp<'info> {
     pub mint: InterfaceAccount<'info, Mint>,
 
     /// CHECK: Authority PDA — validated in handler (ovault [b"vault", b"orbit"], spender [b"vault", id], or user [b"user", id])
-    #[account(mut)]
     pub authority: UncheckedAccount<'info>,
 
     /// Optional User account. Pass Some when transferring from an ICV User.
@@ -2606,7 +2595,6 @@ pub struct Cctp<'info> {
     )]
     pub user: Option<Account<'info, User>>,
 
-    #[account(mut)]
     pub manager: Signer<'info>,
 
     pub token_program: Interface<'info, TokenInterface>,
