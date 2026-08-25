@@ -151,6 +151,7 @@ pub struct CctpEvent {
     pub domain_separator: u64,
 }
 
+/// Closes a program-owned account and transfers its lamports to `to`.
 pub fn close_account<'a, 'b>(
     from: impl ToAccountInfo<'a>,
     to: impl ToAccountInfo<'b>,
@@ -171,16 +172,14 @@ fn is_whitelisted_wallet(user: &User, wallet: &Pubkey) -> bool {
     user.wallets.contains(wallet)
 }
 
-/// Extracts the 6-digit numeric partner ID from a partner_id string.
-/// E.g., "zp_123456::context" -> 123456u32
+/// Extracts the six-digit numeric partner ID from values such as
+/// `zp_123456::context`.
 fn extract_partner_number(partner_id: &str) -> Result<u32> {
     let base = if let Some(colon_idx) = partner_id.find("::") {
         &partner_id[..colon_idx]
     } else {
         partner_id
     };
-    // base is e.g. "zp_123456"
-    // Strip the "zp_" prefix and parse the remaining digits
     let digits = base
         .strip_prefix("zp_")
         .ok_or(OrbitError::InvalidPartnerId)?;
@@ -213,7 +212,8 @@ fn transfer_with_signer_seeds<'info>(
     token_interface::transfer_checked(cpi_ctx, amount, mint.decimals)
 }
 
-/// Invokes Circle CCTP TokenMessengerMinter deposit_for_burn / deposit_for_burn_with_caller instruction via CPI
+/// Invokes Circle CCTP's `deposit_for_burn` instruction, selecting the
+/// destination-caller variant when a nonzero caller is supplied.
 fn cpi_cctp_deposit_for_burn<'info>(
     cctp_program: &AccountInfo<'info>,
     remaining_accounts: &[AccountInfo<'info>],
@@ -276,16 +276,18 @@ fn cpi_cctp_deposit_for_burn<'info>(
 pub mod zynk_orbit {
     use super::*;
 
-    // External (whitelisted) signers -> ZOV (for LP) or User PDA token account (for ICV)
+    /// Deposits principal for a registered LP or ICV user.
+    ///
+    /// LP funds are sent to the canonical Core ZOV, while ICV funds are held by
+    /// the User PDA. NCW deposits are rejected and net principal is capped by
+    /// `max_principal`.
     pub fn deposit(ctx: Context<Deposit>, user_id: [u8; 32], amount: u64) -> Result<()> {
         require!(amount != 0, OrbitError::ZeroAmount);
 
         let user = &mut ctx.accounts.user;
 
-        // Only LPs and ICVs can deposit. NCWs cannot.
         require!(user.user_type != UserType::NCW, OrbitError::InvalidOperation);
 
-        // Enforce max_principal cap on net balance (principal_in - principal_out)
         require!(
             user.principal_in
                 .checked_sub(user.principal_out)
@@ -340,8 +342,11 @@ pub mod zynk_orbit {
         Ok(())
     }
 
-    // Borrow from multiple sources (NCW wallets or ICV User PDAs) into ZOV,
-    // create a single order in zynk-core, and create Position PDAs for each source.
+    /// Creates one Core order funded by one or more NCW/ICV positions.
+    ///
+    /// Position amounts must exactly equal the order amount. Funds are transferred
+    /// into the selected ZOV before Core sends the aggregate amount to the
+    /// beneficiary and records the order.
     pub fn borrow<'info>(
         ctx: Context<'_, '_, '_, 'info, Borrow<'info>>,
         partner_id: String,
@@ -358,14 +363,11 @@ pub mod zynk_orbit {
             OrbitError::InvalidPositionOperation
         );
 
-        // Parse partner_id: extract the numeric portion (e.g., "zp_123456::context" -> 123456)
-        // for whitelist check. The full partner_id string is hashed for the create_order CPI.
+        // The numeric prefix is used for Orbit authorization; Core receives the
+        // hash of the complete partner identifier.
         let partner_number = extract_partner_number(&partner_id)?;
         let partner_id_bytes = hash(partner_id.as_bytes()).to_bytes();
 
-        // Pre-validate amounts and sum them up.
-        // LP/NCW/ICV type validation is deferred to per-position processing
-        // where user data is available.
         let mut total_position_amount: u64 = 0;
         for pos in &positions {
             require!(pos.amount > 0, OrbitError::ZeroAmount);
@@ -374,12 +376,10 @@ pub mod zynk_orbit {
                 .ok_or(ProgramError::ArithmeticOverflow)?;
         }
 
-        // Every borrowed token must be represented by an Orbit position.
         require!(total_position_amount == amount, OrbitError::AmountMismatch);
 
         let remaining_accounts = ctx.remaining_accounts;
 
-        // Process each position operation
         for (i, pos) in positions.iter().enumerate() {
             // Each position requires 4 remaining accounts:
             // [source_token_account, authority_account, user, position_pda]
@@ -393,16 +393,13 @@ pub mod zynk_orbit {
             let user_account = &remaining_accounts[base_idx + 2];
             let position_pda = &remaining_accounts[base_idx + 3];
 
-            // Deserialise user and capture all fields needed later before dropping the borrow.
             let (user_id, user_type) = {
                 let user_data = user_account.data.borrow();
                 let user = User::try_deserialize(&mut &user_data[..])
                     .map_err(|_| zynk_core::CoreError::InvalidAccount)?;
 
-                // NOTE: An empty whitelisted_partners list is considered open
+                // An empty partner list intentionally permits every partner.
                 if !user.whitelisted_partners.is_empty() {
-                    // Check partner whitelist: if whitelisted_partners is non-empty,
-                    // verify partner_number is present.
                     require!(
                         user.whitelisted_partners.contains(&partner_number),
                         OrbitError::PartnerNotWhitelisted
@@ -410,13 +407,10 @@ pub mod zynk_orbit {
                 }
 
                 (user.user_id, user.user_type)
-                // user_data Ref is dropped here
             };
 
-            // Validate that this position is not an LP borrow.
             require!(user_type != UserType::LP, zynk_core::CoreError::Unauthorized);
 
-            // Derive authority seeds, validate, and transfer based on user type
             match user_type {
                 UserType::NCW => {
                     let seeds: &[&[u8]] = &[VAULT_SEED, pos.vault_id.as_ref()];
@@ -426,18 +420,15 @@ pub mod zynk_orbit {
                         zynk_core::CoreError::InvalidAccount
                     );
 
-                    // Inspect token account delegate and amount in a SINGLE deserialization step
                     let (is_valid_delegate, approved_amount) = {
                         let data = source_token_account.try_borrow_data()?;
                         let token_acc = TokenAccount::try_deserialize(&mut &data[..])
                             .map_err(|_| zynk_core::CoreError::InvalidAccount)?;
 
-                        // Safety check for COption<Pubkey>
                         let has_delegate = token_acc.delegate.contains(&expected_authority);
                         (has_delegate, token_acc.delegated_amount)
                     };
 
-                    // Verify delegate validity and sufficient allowance
                     require!(is_valid_delegate, zynk_core::CoreError::InvalidAccount);
                     require!(approved_amount >= pos.amount, OrbitError::InsufficientBalance);
 
@@ -478,7 +469,6 @@ pub mod zynk_orbit {
                 }
             };
 
-            // Create the Position PDA using [POSITION_SEED, order_id, user_id]
             let position_seeds: &[&[u8]] = &[POSITION_SEED, order_id.as_ref(), user_id.as_ref()];
             let (expected_position_key, position_bump) = Pubkey::find_program_address(position_seeds, ctx.program_id);
             require!(
@@ -494,7 +484,6 @@ pub mod zynk_orbit {
             ];
             let position_signer_seeds = &[&position_seeds_with_bump[..]];
 
-            // Create the Position account via system_program CPI
             let position_space = 8 + Position::INIT_SPACE;
             let create_position_ix =
                 anchor_lang::solana_program::system_instruction::create_account(
@@ -515,7 +504,6 @@ pub mod zynk_orbit {
                 position_signer_seeds,
             )?;
 
-            // Write discriminator + data
             let mut position_data = position_pda.try_borrow_mut_data()?;
             position_data[..8].copy_from_slice(&Position::DISCRIMINATOR);
             let position_account = Position {
@@ -552,9 +540,6 @@ pub mod zynk_orbit {
             });
         }
 
-        // CPI to zynk-core create_order with amount (transfers from ZOV to beneficiary)
-        // Note: ZOV token account, mint, token_program, and system_program are shared
-        // between orbit and zynk-core, so we reuse orbit's accounts.
         let cpi_program = ctx.accounts.zynk_core_program.to_account_info();
         let cpi_accounts = CreateOrder {
             config: ctx.accounts.config.to_account_info(),
@@ -588,8 +573,11 @@ pub mod zynk_orbit {
         Ok(())
     }
 
-    // Repay from multiple sources (NCW wallets or ICV User PDAs) into ZOV,
-    // replenish the order in zynk-core, and update/close Position PDAs.
+    /// Replenishes a Core order and settles its Orbit positions.
+    ///
+    /// The Core CPI retains replenishment above outstanding principal in the ZOV.
+    /// Repayable principal is distributed proportionally through the Orbit vault;
+    /// fully repaid positions and the corresponding Core order are closed.
     pub fn repay<'info>(
         ctx: Context<'_, '_, '_, 'info, Repay<'info>>,
         partner_id: [u8; 32],
@@ -598,8 +586,8 @@ pub mod zynk_orbit {
         amount: u64,
         meta: Option<Vec<EventArg>>,
     ) -> Result<()> {
-        // Derive the number of positions from remaining_accounts (3 accounts per position:
-        // [destination_token_account, user, position_pda])
+        // Each position is supplied as
+        // [destination_token_account, user, position_pda].
         let num_positions = ctx.remaining_accounts.len() / 3;
         require!(num_positions > 0, OrbitError::EmptyPositions);
         require!(
@@ -608,25 +596,18 @@ pub mod zynk_orbit {
         );
         require!(amount > 0, OrbitError::ZeroAmount);
 
-        // Validate manager against zynk-core config
         let config = &ctx.accounts.config;
         require!(
             ctx.accounts.manager.key() == config.manager,
             zynk_core::CoreError::Unauthorized
         );
 
-        // Validate token mint against zynk-core's whitelisted token mints
         require!(
             config.whitelisted_token_mints.contains(&ctx.accounts.mint.key()),
             zynk_core::CoreError::InvalidTokenMint
         );
 
-        // LP/NCW/ICV type validation is deferred to per-position processing
-        // where user data (from remaining_accounts) is available.
-
-        // Read the order tracker to determine remaining order amount
         let order_tracker_data = ctx.accounts.order_tracker.try_borrow_data()?;
-        // Skip 8-byte discriminator
         let order_tracker = zynk_core::OrderTracker::try_deserialize(&mut &order_tracker_data[..])
             .map_err(|_| zynk_core::CoreError::InvalidAccount)?;
         require!(
@@ -637,16 +618,11 @@ pub mod zynk_orbit {
         let amount_in = order_tracker.amount_in;
         drop(order_tracker_data);
 
-        // Compute remaining order amount (amount still owed)
         let remaining_order = amount_out
             .checked_sub(amount_in)
             .ok_or(ProgramError::ArithmeticOverflow)?;
 
-
-        // The prepared amount is capped by the remaining order amount
         let prepared_amount = amount.min(remaining_order);
-
-        // Validate every position before moving funds across programs.
         let remaining_accounts = ctx.remaining_accounts;
 
         // First pass: validate all users and positions, cache user_type and remaining amount.
@@ -665,7 +641,6 @@ pub mod zynk_orbit {
             let user_account: &AccountInfo = &remaining_accounts[base_idx + 1];
             let position_pda: &AccountInfo = &remaining_accounts[base_idx + 2];
 
-            // Verify the user account
             let user_data = user_account.data.borrow();
             let user = User::try_deserialize(&mut &user_data[..])
                 .map_err(|_| zynk_core::CoreError::InvalidAccount)?;
@@ -680,13 +655,11 @@ pub mod zynk_orbit {
             require!(user_key == expected_user_key, zynk_core::CoreError::InvalidAccount);
             drop(user_data);
 
-            // Validate that this position is not an LP repay.
             require!(
                 user_type != UserType::LP,
                 zynk_core::CoreError::Unauthorized
             );
 
-            // Verify the position PDA
             let position_data = position_pda.data.borrow();
             let position = Position::try_deserialize(&mut &position_data[..])
                 .map_err(|_| zynk_core::CoreError::InvalidAccount)?;
@@ -718,11 +691,10 @@ pub mod zynk_orbit {
         })?;
         require!(open_position_total == remaining_order, OrbitError::AmountMismatch);
 
-        // Distribute prepared_amount across positions using ceiling-based algorithm.
-        // share = ceil(amount * position.remaining / remaining_total)
+        // Allocate proportionally with ceiling division while capping each share
+        // by both the position balance and the undistributed amount.
         let mut remaining_amount = prepared_amount;
         for info in position_infos.iter_mut() {
-            //Ceiling division
             let share = if prepared_amount > 0 {
                 let numerator = prepared_amount
                     .checked_mul(info.remaining)
@@ -771,7 +743,6 @@ pub mod zynk_orbit {
             meta,
         )?;
 
-        // Transfer from ovault to each position and update/close Position PDAs
         let ovault_seeds: &[&[u8]] = &[VAULT_SEED, b"orbit", &[ctx.bumps.ovault]];
         let ovault_signer_seeds = &[&ovault_seeds[..]];
 
@@ -785,9 +756,8 @@ pub mod zynk_orbit {
                 continue;
             }
 
-            // Deserialize the SPL token account data to read its authority (owner field).
-            // AccountInfo.owner is the Token Program address, not the token account's authority.
-            // The authority is stored inside the account data at bytes 32–64.
+            // `AccountInfo::owner` identifies the Token Program; the token
+            // authority must be read from the serialized token account.
             let dst_token_authority = {
                 let data = dst_token_account.try_borrow_data()?;
                 let token_account = TokenAccount::try_deserialize_unchecked(&mut &data[..])
@@ -795,11 +765,8 @@ pub mod zynk_orbit {
                 token_account.owner
             };
 
-            // Verify destination based on user type (from cached user data in PositionInfo)
             match info.user_type {
                 UserType::NCW => {
-                    // NCW: destination token account must be owned by one of the user's
-                    // whitelisted wallets. Read wallets from the user account.
                     let user_account: &AccountInfo = &remaining_accounts[base_idx + 1];
                     let user_data = user_account.data.borrow();
                     let user = User::try_deserialize(&mut &user_data[..])
@@ -810,7 +777,6 @@ pub mod zynk_orbit {
                     );
                 }
                 UserType::ICV => {
-                    // ICV: destination token account must be owned by the User PDA
                     require!(
                         dst_token_authority == info.user_key,
                         zynk_core::CoreError::InvalidAccount
@@ -821,7 +787,6 @@ pub mod zynk_orbit {
                 }
             }
 
-            // Transfer from ovault_token_account to destination
             let transfer_accounts = TransferChecked {
                 from: ctx.accounts.ovault_token_account.to_account_info(),
                 to: dst_token_account.to_account_info(),
@@ -840,7 +805,6 @@ pub mod zynk_orbit {
                 ctx.accounts.mint.decimals,
             )?;
 
-            // Update the Position PDA — deserialize, mutate, re-serialize in place.
             let is_position_closed = {
                 let mut position_data = position_pda.try_borrow_mut_data()?;
                 let mut position =
@@ -865,7 +829,6 @@ pub mod zynk_orbit {
                 user.try_serialize(&mut &mut user_data[..])?;
             }
 
-            // Close the Position PDA if fully repaid
             if is_position_closed {
                 close_account(position_pda, &ctx.accounts.manager)?;
             }
@@ -887,9 +850,11 @@ pub mod zynk_orbit {
         Ok(())
     }
 
-    // ICV and NCW users recover unlocked principal. ICV liquid custody is paid
-    // first; supplied open positions may then pull whatever is available from
-    // their matching Core PDVs through replenish_and_repay.
+    /// Claims unlocked principal for an ICV or NCW user.
+    ///
+    /// ICV custody is consumed first. Supplied positions may then recover up to
+    /// the available amount from matching Core PDVs. User and position accounting
+    /// advance only by funds actually paid.
     pub fn claim<'info>(
         ctx: Context<'_, '_, '_, 'info, Claim<'info>>,
         user_id: [u8; 32],
@@ -1099,25 +1064,23 @@ pub mod zynk_orbit {
         Ok(())
     }
 
-    // Disburse funds from any PDA vault to a whitelisted user wallet.
-    // The vault PDA is derived from [VAULT_SEED, vault_id] and acts as the transfer authority.
+    /// Disburses a PDA vault balance to a registered user wallet.
+    ///
+    /// Only the Core-configured manager may authorize the transfer.
     pub fn disburse(ctx: Context<Disburse>, vault_id: [u8; 32], amount: u64) -> Result<()> {
         let user = &mut ctx.accounts.user;
 
-        // Validate manager against zynk-core config
         let config = &ctx.accounts.config;
         require!(
             ctx.accounts.manager.key() == config.manager,
             zynk_core::CoreError::Unauthorized
         );
 
-        // Validate token mint against zynk-core's whitelisted token mints
         require!(
             config.whitelisted_token_mints.contains(&ctx.accounts.mint.key()),
             zynk_core::CoreError::InvalidTokenMint
         );
 
-        // Verify destination token account is owned by one of the user's whitelisted wallets
         require!(
             is_whitelisted_wallet(user, &ctx.accounts.destination_token_account.owner),
             zynk_core::CoreError::InvalidAccount
@@ -1156,6 +1119,10 @@ pub mod zynk_orbit {
         Ok(())
     }
 
+    /// Registers a user and initializes their protocol limits and allowlists.
+    ///
+    /// Only the Core-configured admin may create the User PDA. Duplicate partner
+    /// or CCTP recipient entries are rejected.
     pub fn register_user(
         ctx: Context<RegisterUser>,
         user_id: [u8; 32],
@@ -1166,7 +1133,6 @@ pub mod zynk_orbit {
         whitelisted_partners: Vec<u32>,
         cctp_recipients: Vec<CctpRecipient>,
     ) -> Result<()> {
-        // Validate admin signer against zynk-core config.
         let config = &ctx.accounts.config;
         require!(
             ctx.accounts.admin.key() == config.admin,
@@ -1175,7 +1141,6 @@ pub mod zynk_orbit {
 
         let user = &mut ctx.accounts.user;
 
-        // Validate cliff_period is in the future if provided.
         if let Some(cp) = cliff_period {
             let now = Clock::get()?.unix_timestamp;
             require!(cp > now, OrbitError::CliffPeriodInPast);
@@ -1215,14 +1180,14 @@ pub mod zynk_orbit {
         Ok(())
     }
 
-    /// Update the whitelisted wallets array for a user's user.
-    /// Only the admin can call this.
+    /// Replaces the wallet allowlist for a registered user.
+    ///
+    /// Only the Core-configured admin may perform this update.
     pub fn update_wallets(
         ctx: Context<UpdateWallets>,
         user_id: [u8; 32],
         wallets: [Pubkey; 3],
     ) -> Result<()> {
-        // Validate admin signer against zynk-core config.
         let config = &ctx.accounts.config;
         require!(
             ctx.accounts.admin.key() == config.admin,
@@ -1243,13 +1208,15 @@ pub mod zynk_orbit {
         Ok(())
     }
 
+    /// Adds or removes a partner from a user's allowlist.
+    ///
+    /// The User PDA is resized while preserving its CCTP recipient entries.
     pub fn update_partner_whitelist(
         ctx: Context<UpdatePartnerWhitelist>,
         user_id: [u8; 32],
         action: WhitelistAction,
         partner_id: u32,
     ) -> Result<()> {
-        // Validate admin signer against zynk-core config.
         let config = &ctx.accounts.config;
         require!(
             ctx.accounts.admin.key() == config.admin,
@@ -1260,8 +1227,6 @@ pub mod zynk_orbit {
 
         match action {
             WhitelistAction::Add => {
-                // Prevent duplicates — realloc already grew the buffer; an
-                // early error here lets Solana roll the whole tx back cleanly.
                 require!(
                     !user.whitelisted_partners.contains(&partner_id),
                     OrbitError::PartnerAlreadyWhitelisted
@@ -1269,13 +1234,11 @@ pub mod zynk_orbit {
                 user.whitelisted_partners.push(partner_id);
             }
             WhitelistAction::Remove => {
-                // locate the element; error if it doesn't exist.
                 let pos = user
                     .whitelisted_partners
                     .iter()
                     .position(|&id| id == partner_id)
                     .ok_or(OrbitError::PartnerNotWhitelisted)?;
-                // swap_remove is O(1) and order doesn't matter for a whitelist.
                 user.whitelisted_partners.swap_remove(pos);
             }
         }
@@ -1291,6 +1254,9 @@ pub mod zynk_orbit {
         Ok(())
     }
 
+    /// Adds or removes a typed CCTP recipient from a user's allowlist.
+    ///
+    /// The User PDA is resized while preserving its partner entries.
     pub fn update_cctp_recipient(
         ctx: Context<UpdateCctpRecipient>,
         _user_id: [u8; 32],
@@ -1320,8 +1286,10 @@ pub mod zynk_orbit {
         Ok(())
     }
 
+    /// Revokes Orbit state supplied through remaining accounts.
+    ///
+    /// Only the Core-configured admin may close these accounts.
     pub fn revoke(ctx: Context<Revoke>) -> Result<()> {
-        // Validate admin signer against zynk-core config
         let config = &ctx.accounts.config;
         require!(
             ctx.accounts.admin.key() == config.admin,
@@ -1368,7 +1336,6 @@ pub mod zynk_orbit {
                             "DenyUpdateRequest"
                         );
                 }
-                // `data` (Ref<[u8]>) is dropped here — RefCell is fully released
             }
 
             close_account(account_info, &ctx.accounts.admin)?;
@@ -1377,12 +1344,15 @@ pub mod zynk_orbit {
         Ok(())
     }
 
+    /// Creates a pending cliff-period update for a registered user.
+    ///
+    /// Only the Core-configured admin may create the request. The requested
+    /// cliff must be in the future; `None` preserves the user's current value.
     pub fn update_cliff_period(
         ctx: Context<UpdateCliffPeriod>,
         user_id: [u8; 32],
         cliff_period: Option<i64>,
     ) -> Result<()> {
-        // Validate admin signer against zynk-core config
         let config = &ctx.accounts.config;
         require!(
             ctx.accounts.admin.key() == config.admin,
@@ -1407,12 +1377,15 @@ pub mod zynk_orbit {
         Ok(())
     }
 
+    /// Updates the maximum net principal allowed for a registered user.
+    ///
+    /// Only the Core-configured admin may update the limit, and the new limit
+    /// cannot be lower than the user's current `principal_in - principal_out`.
     pub fn update_max_principal(
         ctx: Context<UpdateMaxPrincipal>,
         user_id: [u8; 32],
         max_principal: u64,
     ) -> Result<()> {
-        // Validate admin signer against zynk-core config
         let config = &ctx.accounts.config;
         require!(
             ctx.accounts.admin.key() == config.admin,
@@ -1421,7 +1394,6 @@ pub mod zynk_orbit {
 
         let user = &mut ctx.accounts.user;
 
-        // When reducing max_principal, ensure it does not go below the current net balance
         let net_balance = user
             .principal_in
             .checked_sub(user.principal_out)
@@ -1443,6 +1415,10 @@ pub mod zynk_orbit {
         Ok(())
     }
 
+    /// Creates a pending principal withdrawal request.
+    ///
+    /// NCW users are not eligible. The requested amount is capped by the user's
+    /// recorded net principal and the request is stored until approved or rejected.
     pub fn request_withdraw(
         ctx: Context<RequestWithdraw>,
         user_id: [u8; 32],
@@ -1452,18 +1428,15 @@ pub mod zynk_orbit {
         require!(amount != 0, OrbitError::ZeroAmount);
 
         let signer_user = &ctx.accounts.signer_user;
-        // NCW users are not permitted to raise withdraw requests
         require!(
             signer_user.user_type != UserType::NCW,
             OrbitError::InvalidOperation
         );
 
-        // Verify signer is one of the whitelisted wallets on the signer user
         require!(
             is_whitelisted_wallet(signer_user, &ctx.accounts.signer.key()),
             zynk_core::CoreError::InvalidAccount
         );
-        // Make sure that destination is whitelisted
         require!(
             is_whitelisted_wallet(signer_user, &destination),
             zynk_core::CoreError::InvalidAccount
@@ -1493,11 +1466,14 @@ pub mod zynk_orbit {
         Ok(())
     }
 
+    /// Executes an approved principal withdrawal.
+    ///
+    /// The Core admin transfers the requested amount from ICV custody or the
+    /// Orbit vault, updates `principal_out`, and closes the request account.
     pub fn approve_withdraw(
         ctx: Context<ApproveWithdraw>,
         user_id: [u8; 32],
     ) -> Result<()> {
-        // Validate admin signer against zynk-core config
         let config = &ctx.accounts.config;
         require!(
             ctx.accounts.admin.key() == config.admin,
@@ -1511,29 +1487,23 @@ pub mod zynk_orbit {
 
         let user = &mut ctx.accounts.user;
 
-        // Update principal_out on the user
         user.principal_out = user
             .principal_out
             .checked_add(withdraw_request.amount as u64)
             .ok_or(ProgramError::ArithmeticOverflow)?;
 
-        // Verify destination token account matches the withdraw request
         require!(
             ctx.accounts.destination_token_account.owner == withdraw_request.destination,
             zynk_core::CoreError::InvalidAccount
         );
 
-        // Verify the source token account holds enough tokens for the withdrawal
         require!(
             ctx.accounts.source_token_account.amount >= withdraw_request.amount as u64,
             OrbitError::InsufficientTokenBalance
         );
 
-        // Handle transfer based on user type
         match user.user_type {
             UserType::ICV => {
-                // For ICVs, transfer from the ICV token account (owned by User PDA)
-                // to the destination, using User PDA seeds as authority
                 require!(
                     ctx.accounts.source_token_account.owner == user.key(),
                     zynk_core::CoreError::InvalidAccount
@@ -1556,7 +1526,6 @@ pub mod zynk_orbit {
                 )?;
             }
             UserType::LP => {
-                // For LPs transfer from ovault to destination
                 let ovault = ctx
                     .accounts
                     .ovault
@@ -1580,7 +1549,6 @@ pub mod zynk_orbit {
             }
         }
 
-        // Close the withdraw request account, move lamports to admin
         close_account(
             ctx.accounts.request.to_account_info(),
             ctx.accounts.admin.to_account_info(),
@@ -1602,17 +1570,17 @@ pub mod zynk_orbit {
         Ok(())
     }
 
-    /// Reject (cancel) a pending withdraw request.
-    /// Only the admin can reject a withdraw request.
+    /// Rejects a pending principal withdrawal request.
+    ///
+    /// Only the Core-configured admin may reject the request. Closing it returns
+    /// the account rent to the admin without changing user principal accounting.
     pub fn reject_withdraw(ctx: Context<RejectWithdraw>, user_id: [u8; 32]) -> Result<()> {
-        // Validate admin signer against zynk-core config
         let config = &ctx.accounts.config;
         require!(
             ctx.accounts.admin.key() == config.admin,
             zynk_core::CoreError::Unauthorized
         );
 
-        // Close the WithdrawRequest PDA and return lamports to the admin
         close_account(
             ctx.accounts.request.to_account_info(),
             ctx.accounts.admin.to_account_info(),
@@ -1629,24 +1597,21 @@ pub mod zynk_orbit {
         Ok(())
     }
 
+    /// Applies a pending cliff-period update.
+    ///
+    /// A registered user wallet must sign. The request is closed after its value
+    /// is written to the user account.
     pub fn approve_cliff_period(ctx: Context<ApproveCliffPeriod>, user_id: [u8; 32]) -> Result<()> {
-        // Validate that the request belongs to this user.
-
         let user = &mut ctx.accounts.user;
 
-        // Verify signer is one of the whitelisted wallets on the user
         require!(
             is_whitelisted_wallet(user, &ctx.accounts.signer.key()),
             zynk_core::CoreError::InvalidAccount
         );
 
-        // Capture the new cliff period before the borrow ends
         let new_cliff_period = ctx.accounts.request.cliff_period;
-
-        // Update the cliff period on the user
         user.cliff_period = new_cliff_period;
 
-        // Close the update request account, move lamports to signer.
         close_account(
             ctx.accounts.request.to_account_info(),
             ctx.accounts.signer.to_account_info(),
@@ -1675,7 +1640,6 @@ pub mod zynk_orbit {
             zynk_core::CoreError::Unauthorized
         );
 
-        // Close the UpdateCliffPeriodRequest PDA — return lamports to the signer
         close_account(
             ctx.accounts.request.to_account_info(),
             ctx.accounts.signer.to_account_info(),
@@ -1692,9 +1656,10 @@ pub mod zynk_orbit {
         Ok(())
     }
 
-    // Pledge: deposit yield back into the system. Same validations as deposit.
-    // For LP: moves funds from ovault to ZOV (ovault PDA is the authority).
-    // For ICV: moves funds from ovault to ICV's ATA (token account owned by User PDA).
+    /// Reinvests funds held by the Orbit vault.
+    ///
+    /// The manager sends ICV funds to User-PDA custody and other user funds to
+    /// the canonical Core ZOV, then credits the user's principal balance.
     pub fn pledge(
         ctx: Context<Pledge>,
         user_id: [u8; 32],
@@ -1704,7 +1669,6 @@ pub mod zynk_orbit {
 
         let user = &ctx.accounts.user;
 
-        // Enforce max_principal cap on net balance (principal_in - principal_out)
         require!(
             user.principal_in
                 .checked_sub(user.principal_out)
@@ -1715,7 +1679,6 @@ pub mod zynk_orbit {
             OrbitError::MaxDepositExceeded
         );
 
-        // Validate destination and perform transfer based on user type.
         let ovault_bump_ref = [ctx.bumps.ovault];
         let signer_seeds = &[&[VAULT_SEED, b"orbit", &ovault_bump_ref][..]];
 
@@ -1765,8 +1728,12 @@ pub mod zynk_orbit {
         Ok(())
     }
 
-    /// Unified CCTP transfer function from Orbit Vault (ovault),
-    /// Custom Spender Vaults (spender), or ICV User Vaults (user) to a destination chain.
+    /// Burns tokens through Circle CCTP for transfer to another domain.
+    ///
+    /// The Core-configured manager may transfer from the Orbit vault, a derived
+    /// spender vault, or an ICV User PDA. ICV transfers require an elapsed cliff
+    /// and an allowed recipient or deployment-time destination caller, and are
+    /// recorded in `principal_out`.
     pub fn cctp<'info>(
         ctx: Context<'_, '_, '_, 'info, Cctp<'info>>,
         id: [u8; 32],
@@ -1777,7 +1744,6 @@ pub mod zynk_orbit {
     ) -> Result<()> {
         require!(amount > 0, OrbitError::ZeroAmount);
 
-        // Validate token mint against zynk-core's whitelisted token mints
         let config = &ctx.accounts.config;
         require!(
             config.whitelisted_token_mints.contains(&ctx.accounts.mint.key()),
@@ -1787,13 +1753,11 @@ pub mod zynk_orbit {
         let event_user_id: [u8; 32];
         let (seed_a, seed_b, bump_val): (&[u8], &[u8], u8) = match &mut ctx.accounts.user {
             Some(user) => {
-                // Verify that the user is of type ICV
                 require!(
                     user.user_type == UserType::ICV,
                     OrbitError::InvalidOperation
                 );
 
-                // Verify authority matches user key
                 require!(
                     ctx.accounts.authority.key() == user.key(),
                     zynk_core::CoreError::InvalidAccount
@@ -1817,7 +1781,6 @@ pub mod zynk_orbit {
                     OrbitError::CctpRecipientNotWhitelisted
                 );
 
-                // Update user principal_out
                 user.principal_out = user
                     .principal_out
                     .checked_add(amount)
@@ -1828,7 +1791,6 @@ pub mod zynk_orbit {
                 (USER_SEED, id.as_ref(), bump)
             }
             None => {
-                // Check if authority is ovault [b"vault", b"orbit"] or custom spender [b"vault", id]
                 let (expected_ovault, ovault_bump) = Pubkey::find_program_address(
                     &[VAULT_SEED, b"orbit"],
                     ctx.program_id,
@@ -1931,7 +1893,7 @@ pub struct Borrow<'info> {
     )]
     pub config: Account<'info, zynk_core::Config>,
 
-    /// CHECK: zynk-core ZOV PDA (derived with zynk-core's ZYNK_OP_VAULT_SEED + zov_id)
+    /// CHECK: Core ZOV PDA validated by Core program seeds and `zov_id`.
     #[account(
         seeds = [zynk_core::ZYNK_OP_VAULT_SEED, zov_id.as_ref()],
         seeds::program = ZynkCore::id(),
@@ -1953,24 +1915,22 @@ pub struct Borrow<'info> {
     )]
     pub mint: InterfaceAccount<'info, Mint>,
 
-    /// CHECK: zynk-core beneficiary token account
     #[account(
         constraint = beneficiary.public_key == beneficiary_token_account.owner @ zynk_core::CoreError::InvalidBeneficiary,
     )]
     pub beneficiary: Account<'info, zynk_core::Beneficiary>,
 
-    /// CHECK: zynk-core order tracker PDA (to be created via CPI)
+    /// CHECK: Core validates and initializes this order tracker during the CPI.
     #[account(mut)]
     pub order_tracker: UncheckedAccount<'info>,
 
-    /// CHECK: zynk-core partner deposit vault PDA (derived with zynk-core seeds)
+    /// CHECK: Core validates this partner deposit vault during the CPI.
     pub partner_deposit_vault: UncheckedAccount<'info>,
 
     pub token_program: Interface<'info, TokenInterface>,
 
     pub system_program: Program<'info, System>,
 
-    /// CHECK: zynk-core program (for CPI)
     pub zynk_core_program: Program<'info, ZynkCore>,
 
     #[account(mut)]
@@ -1991,11 +1951,9 @@ pub struct Repay<'info> {
     )]
     pub config: Account<'info, zynk_core::Config>,
 
-    /// ZOV token account (shared with zynk-core CPI)
     #[account(mut, constraint = zov_token_account.owner == zynk_op_vault.key() @ zynk_core::CoreError::InvalidAccount)]
     pub zov_token_account: InterfaceAccount<'info, TokenAccount>,
 
-    /// Ovault token account (destination for transient create_order, source for position transfers)
     #[account(
         mut,
         constraint = ovault_token_account.owner == ovault.key() @ zynk_core::CoreError::InvalidAccount,
@@ -2014,10 +1972,9 @@ pub struct Repay<'info> {
     pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
 
-    /// CHECK: zynk-core program (for CPI)
     pub zynk_core_program: Program<'info, ZynkCore>,
 
-    /// CHECK: zynk-core order tracker PDA — seed-constrained and CPI-validated.
+    /// CHECK: Core order tracker validated by Core program seeds and the CPI.
     #[account(
         mut,
         seeds = [zynk_core::ORDER_TRACKER_SEED, partner_id.as_ref(), order_id.as_ref()],
@@ -2026,7 +1983,7 @@ pub struct Repay<'info> {
     )]
     pub order_tracker: UncheckedAccount<'info>,
 
-    /// CHECK: zynk-core partner deposit vault PDA — seed-constrained and CPI-validated.
+    /// CHECK: Core partner deposit vault validated by Core program seeds and the CPI.
     #[account(
         seeds = [zynk_core::PARTNER_DEPOSIT_VAULT_SEED, partner_id.as_ref()],
         seeds::program = ZynkCore::id(),
@@ -2034,7 +1991,7 @@ pub struct Repay<'info> {
     )]
     pub partner_deposit_vault: UncheckedAccount<'info>,
 
-    /// CHECK: zynk-core PDV token account (source for replenish)
+    /// CHECK: Core validates this PDV token account's authority and mint during the CPI.
     #[account(mut)]
     pub pdv_token_account: UncheckedAccount<'info>,
 
@@ -2045,7 +2002,7 @@ pub struct Repay<'info> {
     )]
     pub orbit_authority: UncheckedAccount<'info>,
 
-    /// CHECK: zynk-core ZOV PDA — seed-constrained and CPI-validated.
+    /// CHECK: Core ZOV PDA validated by Core program seeds and the CPI.
     #[account(
         seeds = [zynk_core::ZYNK_OP_VAULT_SEED, zov_id.as_ref()],
         seeds::program = ZynkCore::id(),
@@ -2053,9 +2010,7 @@ pub struct Repay<'info> {
     )]
     pub zynk_op_vault: UncheckedAccount<'info>,
 
-
-    // --- Ovault PDA (signer for ovault → position transfers) ---
-    /// CHECK: Ovault - verified by seeds.
+    /// CHECK: Orbit vault PDA validated by seeds and used as transfer authority.
     #[account(
         seeds = [VAULT_SEED, b"orbit"],
         bump
@@ -2090,7 +2045,7 @@ pub struct Disburse<'info> {
     )]
     pub mint: InterfaceAccount<'info, Mint>,
 
-    /// CHECK: Vault PDA - verified by seeds, acts as the transfer authority
+    /// CHECK: Vault PDA validated by seeds and used as transfer authority.
     #[account(
         seeds = [VAULT_SEED, vault_id.as_ref()],
         bump
@@ -2249,7 +2204,6 @@ pub struct UpdateMaxPrincipal<'info> {
 }
 
 #[derive(Accounts)]
-// `action` is bound here so the realloc expression below can reference it.
 #[instruction(user_id: [u8; 32], action: WhitelistAction)]
 pub struct UpdatePartnerWhitelist<'info> {
     #[account(
@@ -2264,10 +2218,6 @@ pub struct UpdatePartnerWhitelist<'info> {
         mut,
         seeds = [USER_SEED, user_id.as_ref()],
         bump,
-        // Dynamically resize the account buffer before the handler runs:
-        //   • Add    → grow by one u32 slot (4 bytes)
-        //   • Remove → shrink by one u32 slot, floored at 0 via saturating_sub
-        // Anchor automatically tops up (or refunds) rent to/from `admin`.
         realloc = User::space_for_lengths(
             match action {
                 WhitelistAction::Add    => user.whitelisted_partners.len().saturating_add(1),
@@ -2276,8 +2226,6 @@ pub struct UpdatePartnerWhitelist<'info> {
             user.cctp_recipients.len(),
         ),
         realloc::payer = admin,
-        // false → do NOT zero-fill new bytes; Anchor re-serialises the whole
-        // account on exit anyway, so zeroing is wasted compute.
         realloc::zero = false,
     )]
     pub user: Account<'info, User>,
@@ -2358,7 +2306,7 @@ pub struct ApproveWithdraw<'info> {
     )]
     pub config: Account<'info, zynk_core::Config>,
 
-    /// CHECK: WithdrawRequest PDA - validated in handler
+    /// CHECK: The handler deserializes this account as a withdrawal request.
     #[account(mut)]
     pub request: UncheckedAccount<'info>,
 
@@ -2378,8 +2326,7 @@ pub struct ApproveWithdraw<'info> {
     #[account(mut)]
     pub destination_token_account: InterfaceAccount<'info, TokenAccount>,
 
-    /// CHECK: Ovault PDA — seed-constrained so Anchor populates ctx.bumps.ovault.
-    /// Only required for LP withdrawals; pass None for ICV/NCW paths.
+    /// CHECK: Optional Orbit vault PDA validated by seeds for LP withdrawals.
     #[account(
         seeds = [VAULT_SEED, b"orbit"],
         bump
@@ -2405,7 +2352,7 @@ pub struct RejectWithdraw<'info> {
     )]
     pub config: Account<'info, zynk_core::Config>,
 
-    /// CHECK: WithdrawRequest PDA - validated in handler
+    /// CHECK: The admin-authorized handler closes this supplied request account.
     #[account(mut)]
     pub request: UncheckedAccount<'info>,
 
@@ -2420,9 +2367,6 @@ pub struct RejectWithdraw<'info> {
 #[derive(Accounts)]
 #[instruction(user_id: [u8; 32])]
 pub struct ApproveCliffPeriod<'info> {
-    /// UpdateCliffPeriodRequest PDA.
-    /// user_id ownership and user PDA derivation are validated in the handler
-    /// after converting the String user_id to its 32-byte on-chain representation.
     #[account(
         mut,
         constraint = request.user_id == user_id @ OrbitError::UserIdMismatch
@@ -2436,7 +2380,6 @@ pub struct ApproveCliffPeriod<'info> {
     )]
     pub user: Account<'info, User>,
 
-    /// A whitelisted wallet that is approving the cliff period update
     #[account(mut)]
     pub signer: Signer<'info>,
 
@@ -2453,21 +2396,18 @@ pub struct RejectCliffPeriod<'info> {
     )]
     pub config: Account<'info, zynk_core::Config>,
 
-    /// UpdateCliffPeriodRequest PDA - validated by user ID.
     #[account(
         mut,
         constraint = request.user_id == user_id @ OrbitError::UserIdMismatch
     )]
     pub request: Account<'info, UpdateCliffPeriodRequest >,
 
-    /// User PDA for wallet membership verification
     #[account(
         seeds = [USER_SEED, user_id.as_ref()],
         bump,
     )]
     pub user: Account<'info, User>,
 
-    /// Core admin or a whitelisted user wallet rejecting the update.
     #[account(mut)]
     pub signer: Signer<'info>,
 
@@ -2496,7 +2436,6 @@ pub struct Claim<'info> {
     #[account(mut)]
     pub icv_token_account: Option<InterfaceAccount<'info, TokenAccount>>,
 
-    /// Token account to receive claimed funds — must be owned by user.primary_account or user.aux_account
     #[account(mut)]
     pub destination_token_account: InterfaceAccount<'info, TokenAccount>,
 
@@ -2552,7 +2491,7 @@ pub struct Pledge<'info> {
 
     pub manager: Signer<'info>,
 
-    /// CHECK: Ovault - verified by seeds. Must be whitelisted as a beneficiary in zynk-core with allow_transient=true.
+    /// CHECK: Orbit vault PDA validated by seeds and used as transfer authority.
     #[account(
         seeds = [VAULT_SEED, b"orbit"],
         bump
@@ -2584,7 +2523,7 @@ pub struct Cctp<'info> {
 
     pub mint: InterfaceAccount<'info, Mint>,
 
-    /// CHECK: Authority PDA — validated in handler (ovault [b"vault", b"orbit"], spender [b"vault", id], or user [b"user", id])
+    /// CHECK: Handler validates the authority as the Orbit vault, derived spender, or supplied User PDA.
     pub authority: UncheckedAccount<'info>,
 
     /// Optional User account. Pass Some when transferring from an ICV User.
@@ -2602,7 +2541,7 @@ pub struct Cctp<'info> {
 
     pub zynk_core_program: Program<'info, ZynkCore>,
 
-    /// CHECK: Circle CCTP TokenMessengerMinter program
+    /// CHECK: Manager-authorized instruction forwards this account as the CCTP CPI target.
     pub cctp_token_messenger_minter_program: UncheckedAccount<'info>,
 }
 

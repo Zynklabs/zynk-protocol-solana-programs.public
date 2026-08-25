@@ -895,9 +895,6 @@ pub mod zynk_core {
     }
 
 
-    ////////////////////////////////////////////////////////////////
-    /////////////////// critical functionalities ///////////////////
-    ////////////////////////////////////////////////////////////////
 
 
     /// Requests a timelocked administrative action.
@@ -1153,18 +1150,17 @@ pub struct CreateOrder<'info> {
     #[account(mut)]
     pub manager: Signer<'info>,
 
-    // Tokens pulled in from
-    /// CHECK: Partner deposit vault PDA - verified by seeds
+    /// CHECK: Partner deposit vault PDA validated by seeds.
     #[account(
         seeds = [PARTNER_DEPOSIT_VAULT_SEED, partner_id.as_ref()],
         bump
     )]
     pub partner_deposit_vault: UncheckedAccount<'info>,
-    // optional - used only for pull_and_create_order
+
     #[account(mut)]
     pub pdv_token_account: Option<InterfaceAccount<'info, TokenAccount>>,
 
-    /// CHECK: Zynk Operational vault PDA - verified by seeds
+    /// CHECK: Zynk Operational vault PDA validated by seeds.
     #[account(
         seeds = [ZYNK_OP_VAULT_SEED, zov_id.as_ref()],
         bump,
@@ -1185,7 +1181,6 @@ pub struct CreateOrder<'info> {
     )]
     pub beneficiary: Account<'info, Beneficiary>,
 
-    // Tokens sent out to
     #[account(
         mut,
         constraint = beneficiary_token_account.mint == zov_token_account.mint @ CoreError::InvalidAccount,
@@ -1193,7 +1188,6 @@ pub struct CreateOrder<'info> {
     )]
     pub beneficiary_token_account: InterfaceAccount<'info, TokenAccount>,
 
-    // Order tracker PDA
     #[account(
         init,
         payer = manager,
@@ -1223,7 +1217,6 @@ pub struct Replenish<'info> {
     #[account(mut)]
     pub manager: Signer<'info>,
 
-    // Order tracker PDA
     #[account(
         mut,
         seeds = [ORDER_TRACKER_SEED, order_tracker.partner_id.as_ref(), order_tracker.order_id.as_ref()],
@@ -1231,8 +1224,7 @@ pub struct Replenish<'info> {
     )]
     pub order_tracker: Account<'info, OrderTracker>,
 
-    // Tokens pulled in from
-    /// CHECK: Partner deposit vault PDA - verified by seeds
+    /// CHECK: Partner deposit vault PDA validated by seeds.
     #[account(
         seeds = [PARTNER_DEPOSIT_VAULT_SEED, order_tracker.partner_id.as_ref()],
         bump,
@@ -1246,7 +1238,6 @@ pub struct Replenish<'info> {
     )]
     pub pdv_token_account: InterfaceAccount<'info, TokenAccount>,
 
-    // Tokens pulled in to
     #[account(
         mut,
         constraint = zov_token_account.owner == order_tracker.zynk_op_vault @ CoreError::InvalidAccount,
