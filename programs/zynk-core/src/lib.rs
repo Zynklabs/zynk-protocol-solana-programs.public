@@ -16,6 +16,8 @@ declare_id!("ZYNKctWoaYeAdN9szq1joeu6rRPf7LK72pUurkcBpBY");
 
 pub const DOMAIN_SEPARATOR: u64 = 115111123810997;
 pub const INITIAL_MANAGER: Pubkey = pubkey!("FnN6veEuyCr3R88iHxZYFRPwq22CZQwPMXzaTomeWWX5");
+pub const ZYNK_ORBIT_ID: Pubkey = pubkey!("ZYNKopsYjG6gaGqdwz8HLAgvCAEFwCET56kRQKkjxfc");
+pub const ORBIT_CPI_AUTHORITY_SEED: &[u8] = b"core_repay";
 
 
 
@@ -562,6 +564,95 @@ pub mod zynk_core {
             domain_separator: DOMAIN_SEPARATOR,
             meta
         });
+
+        Ok(())
+    }
+
+    /// Atomically replenishes a ZOV and returns only outstanding principal to Orbit.
+    /// The excess `amount - repay_amount` remains in the ZOV.
+    pub fn replenish_and_repay(
+        ctx: Context<ReplenishAndRepay>,
+        zov_id: [u8; 32],
+        amount: u64,
+        repay_amount: u64,
+        meta: Option<Vec<EventArg>>,
+    ) -> Result<()> {
+        require!(!ctx.accounts.config.paused, CoreError::ContractPaused);
+        require!(amount > 0 && repay_amount > 0, CoreError::InvalidOrder);
+        require!(repay_amount <= amount, CoreError::InvalidOrder);
+
+        let order_tracker = &mut ctx.accounts.order_tracker;
+        let outstanding = order_tracker
+            .amount_out
+            .checked_sub(order_tracker.amount_in)
+            .ok_or(CoreError::InvalidOrder)?;
+        require!(repay_amount <= outstanding, CoreError::InvalidOrder);
+
+        let pdv_seeds: &[&[u8]] = &[
+            PARTNER_DEPOSIT_VAULT_SEED,
+            order_tracker.partner_id.as_ref(),
+            &[ctx.bumps.partner_deposit_vault],
+        ];
+        let replenish_accounts = TransferChecked {
+            from: ctx.accounts.pdv_token_account.to_account_info(),
+            to: ctx.accounts.zov_token_account.to_account_info(),
+            mint: ctx.accounts.mint.to_account_info(),
+            authority: ctx.accounts.partner_deposit_vault.to_account_info(),
+        };
+        token_interface::transfer_checked(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                replenish_accounts,
+                &[pdv_seeds],
+            ),
+            amount,
+            ctx.accounts.mint.decimals,
+        )?;
+
+        let zov_seeds: &[&[u8]] = &[
+            ZYNK_OP_VAULT_SEED,
+            zov_id.as_ref(),
+            &[ctx.bumps.zynk_op_vault],
+        ];
+        let repay_accounts = TransferChecked {
+            from: ctx.accounts.zov_token_account.to_account_info(),
+            to: ctx.accounts.destination_token_account.to_account_info(),
+            mint: ctx.accounts.mint.to_account_info(),
+            authority: ctx.accounts.zynk_op_vault.to_account_info(),
+        };
+        token_interface::transfer_checked(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                repay_accounts,
+                &[zov_seeds],
+            ),
+            repay_amount,
+            ctx.accounts.mint.decimals,
+        )?;
+
+        order_tracker.amount_in = order_tracker
+            .amount_in
+            .checked_add(repay_amount)
+            .ok_or(ProgramError::ArithmeticOverflow)?;
+        let order_closed = order_tracker.amount_in == order_tracker.amount_out;
+        let order_id = order_tracker.order_id;
+        let zynk_op_vault = order_tracker.zynk_op_vault.to_string();
+        let partner_deposit_vault = ctx.accounts.partner_deposit_vault.key().to_string();
+
+        emit!(OrderReplenished {
+            order_id,
+            zynk_op_vault,
+            token: ctx.accounts.mint.key().to_string(),
+            partner_deposit_vault,
+            amount,
+            order_closed,
+            domain_separator: DOMAIN_SEPARATOR,
+            meta,
+        });
+
+        if order_closed {
+            close_account(order_tracker, &ctx.accounts.manager)?;
+        }
 
         Ok(())
     }
@@ -1172,6 +1263,81 @@ pub struct Replenish<'info> {
     pub mint: InterfaceAccount<'info, Mint>,
     pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(zov_id: [u8; 32])]
+pub struct ReplenishAndRepay<'info> {
+    #[account(
+        seeds = [CONFIG_SEED],
+        bump,
+    )]
+    pub config: Account<'info, Config>,
+
+    /// CHECK: Orbit-owned PDA capability; only zynk-orbit can sign for it.
+    #[account(
+        signer,
+        seeds = [ORBIT_CPI_AUTHORITY_SEED],
+        seeds::program = ZYNK_ORBIT_ID,
+        bump,
+    )]
+    pub orbit_authority: UncheckedAccount<'info>,
+
+    /// CHECK: Receives rent when a fully repaid order tracker is closed.
+    #[account(mut, address = config.manager @ CoreError::Unauthorized)]
+    pub manager: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        seeds = [ORDER_TRACKER_SEED, order_tracker.partner_id.as_ref(), order_tracker.order_id.as_ref()],
+        bump,
+    )]
+    pub order_tracker: Account<'info, OrderTracker>,
+
+    /// CHECK: Core partner deposit vault PDA.
+    #[account(
+        seeds = [PARTNER_DEPOSIT_VAULT_SEED, order_tracker.partner_id.as_ref()],
+        bump,
+        constraint = partner_deposit_vault.key() == order_tracker.partner_deposit_vault @ CoreError::InvalidAccount,
+    )]
+    pub partner_deposit_vault: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        constraint = pdv_token_account.owner == partner_deposit_vault.key() @ CoreError::InvalidAccount,
+        constraint = pdv_token_account.mint == mint.key() @ CoreError::InvalidTokenMint,
+    )]
+    pub pdv_token_account: InterfaceAccount<'info, TokenAccount>,
+
+    /// CHECK: Core ZOV PDA bound to this order.
+    #[account(
+        seeds = [ZYNK_OP_VAULT_SEED, zov_id.as_ref()],
+        bump,
+        constraint = zynk_op_vault.key() == order_tracker.zynk_op_vault @ CoreError::InvalidAccount,
+    )]
+    pub zynk_op_vault: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        constraint = zov_token_account.owner == zynk_op_vault.key() @ CoreError::InvalidAccount,
+        constraint = zov_token_account.mint == mint.key() @ CoreError::InvalidTokenMint,
+    )]
+    pub zov_token_account: InterfaceAccount<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        constraint = destination_token_account.mint == mint.key() @ CoreError::InvalidTokenMint,
+        constraint = destination_token_account.key() != zov_token_account.key() @ CoreError::InvalidAccount,
+    )]
+    pub destination_token_account: InterfaceAccount<'info, TokenAccount>,
+
+    #[account(
+        constraint = config.whitelisted_token_mints.contains(&mint.key()) @ CoreError::InvalidTokenMint,
+        constraint = mint.key() == order_tracker.mint @ CoreError::InvalidTokenMint,
+    )]
+    pub mint: InterfaceAccount<'info, Mint>,
+
+    pub token_program: Interface<'info, TokenInterface>,
 }
 
 #[derive(Accounts)]

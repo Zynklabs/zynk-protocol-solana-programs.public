@@ -36,7 +36,7 @@ const generateOrderId = (): Buffer => {
   return Buffer.from(hash.slice(0, 32));
 };
 
-describe.only("zynk-orbit", () => {
+describe("zynk-orbit", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
 
@@ -53,7 +53,7 @@ describe.only("zynk-orbit", () => {
   icvUserId.write("icv_user_1", 0, "utf-8");
   const icvUser = Keypair.generate();
 
-  // ── Whitelist test users ───────────────────────────────────────────────────
+  // ── User registration test users ───────────────────────────────────────────
   const ncwUser = Keypair.generate();
   const ncwUserId = Buffer.alloc(32);
   ncwUserId.write("ncw_user_wl_1", 0, "utf-8");
@@ -74,13 +74,13 @@ describe.only("zynk-orbit", () => {
   const icvUserNoMaxPrincipalId = Buffer.alloc(32);
   icvUserNoMaxPrincipalId.write("icv_user_wl_nm", 0, "utf-8");
 
-  // ── Duplicate user (for already-whitelisted / pending-request tests) ───────
+  // ── Duplicate user (for already-registered user tests) ─────────────────────
   const dupWlUser = Keypair.generate();
   const dupWlUserId = Buffer.alloc(32);
   dupWlUserId.write("dup_wl_user_1", 0, "utf-8");
 
   // ── Approve / updateMaxPrincipal test users ─────────────────────────────────
-  // umdUser is whitelisted + deposited in-test so we can verify max-deposit
+  // umdUser is registered + deposited in-test so we can verify max-deposit
   // guard against reducing below the active balance.
   const umdUser = Keypair.generate();
   const umdUserId = Buffer.alloc(32);
@@ -148,12 +148,12 @@ describe.only("zynk-orbit", () => {
   claimZeroBalUserId.write("clm_zero_bal_1", 0, "utf-8");
 
   // ── Revoke whitelist test users ───────────────────────────────────────────
-  // Fresh NCW user whitelisted inside the revoke NCW test.
+  // Fresh NCW user registered inside the revoke NCW test.
   const revokeNcwUser = Keypair.generate();
   const revokeNcwUserId = Buffer.alloc(32);
   revokeNcwUserId.write("rev_ncw_user_1", 0, "utf-8");
 
-  // Fresh LP user whitelisted inside the revoke LP test.
+  // Fresh LP user registered inside the revoke LP test.
   const revokeLpUser = Keypair.generate();
   const revokeLpUserId = Buffer.alloc(32);
   revokeLpUserId.write("rev_lp_user_1", 0, "utf-8");
@@ -552,18 +552,18 @@ describe.only("zynk-orbit", () => {
   });
 
   // =========================================================================
-  // WHITELIST NEGATIVE TESTS – must be first so positive tests have a clean slate
+  // USER REGISTRATION NEGATIVE TESTS – must be first so positive tests have a clean slate
   // =========================================================================
 
-  // ── WL-N1 : Non-admin (manager) cannot whitelist ──────────────────────────
-  it("Should not raise whitelist request with some other wallet than primary wallet (eg manager) signing the request", async () => {
+  // ── WL-N1 : Non-admin (manager) cannot register a user ──────────────────────────
+  it("Should not register a user with some other wallet than the primary wallet (eg manager) signing the request", async () => {
     const nonAdminUser = Keypair.generate();
     const nonAdminUserId = Buffer.alloc(32);
     nonAdminUserId.write("non_admin_user", 0, "utf-8");
 
     try {
       await program.methods
-        .whitelist(
+        .registerUser(
           Array.from(nonAdminUserId),
           { ncw: {} },
           [
@@ -592,15 +592,15 @@ describe.only("zynk-orbit", () => {
     }
   });
 
-  // ── WL-N2 : Invalid user type cannot be whitelisted ───────────────────────
-  it("Should not whitelist an invalid user type", async () => {
+  // ── WL-N2 : Invalid user type cannot be registered ────────────────────────
+  it("Should not register an invalid user type", async () => {
     const invalidTypeUser = Keypair.generate();
     const invalidTypeUserId = Buffer.alloc(32);
     invalidTypeUserId.write("invalid_type_u", 0, "utf-8");
 
     try {
       await program.methods
-        .whitelist(
+        .registerUser(
           Array.from(invalidTypeUserId),
           { unknownType: {} } as any, // invalid variant — not LP / NCW / ICV
           [
@@ -629,13 +629,13 @@ describe.only("zynk-orbit", () => {
     }
   });
 
-  // ── WL-N3 : Already-whitelisted address cannot be whitelisted again ────────
-  it("Should not raise whitelist request for an already whitelisted address", async () => {
+  // ── WL-N3 : Already-registered address cannot be registered again ────────
+  it("Should not register an already registered address", async () => {
     const dupUserPDA = deriveUserPDA(dupWlUserId);
 
-    // Step 1 – whitelist dupWlUser for the first time (must succeed).
+    // Step 1 – register dupWlUser for the first time (must succeed).
     await program.methods
-      .whitelist(
+      .registerUser(
         Array.from(dupWlUserId),
         { ncw: {} },
         [dupWlUser.publicKey],
@@ -657,10 +657,10 @@ describe.only("zynk-orbit", () => {
       "User should exist after first whitelist"
     );
 
-    // Step 2 – attempt to whitelist the same address again — must fail.
+    // Step 2 – attempt to register the same address again — must fail.
     try {
       await program.methods
-        .whitelist(
+        .registerUser(
           Array.from(dupWlUserId),
           { ncw: {} },
           [dupWlUser.publicKey, dupWlUser.publicKey, dupWlUser.publicKey],
@@ -686,9 +686,9 @@ describe.only("zynk-orbit", () => {
     }
   });
 
-  // ── WL-N4 : Cannot whitelist an address that already has a pending entry ───
-  it("Should not raise whitelist request for an address for which there is already a whitelist request", async () => {
-    // dupWlUser was whitelisted in WL-N3 — the User PDA is still live.
+  // ── WL-N4 : Cannot register an address that already has a user entry ───
+  it("Should not register an address that already has a user entry", async () => {
+    // dupWlUser was registered in WL-N3 — the User PDA is still live.
     const dupUserPDA = deriveUserPDA(dupWlUserId);
 
     const existingUser = await program.account.user.fetch(dupUserPDA);
@@ -699,7 +699,7 @@ describe.only("zynk-orbit", () => {
 
     try {
       await program.methods
-        .whitelist(
+        .registerUser(
           Array.from(dupWlUserId),
           { ncw: {} },
           [dupWlUser.publicKey, dupWlUser.publicKey, dupWlUser.publicKey],
@@ -726,15 +726,15 @@ describe.only("zynk-orbit", () => {
   });
 
   // =========================================================================
-  // WHITELIST POSITIVE TESTS
+  // USER REGISTRATION POSITIVE TESTS
   // =========================================================================
 
-  // ── WL-P1 : Whitelist an NCW user ─────────────────────────────────────────
-  it("Should be able to Whitelist NCW user", async () => {
+  // ── WL-P1 : Register an NCW user ─────────────────────────────────────────
+  it("Should be able to register NCW user", async () => {
     const userPDA = deriveUserPDA(ncwUserId);
 
     await program.methods
-      .whitelist(
+      .registerUser(
         Array.from(ncwUserId),
         { ncw: {} },
         [ncwUser.publicKey, ncwUser.publicKey, ncwUser.publicKey],
@@ -776,14 +776,14 @@ describe.only("zynk-orbit", () => {
     );
   });
 
-  // ── WL-P2 : Whitelist LP user without aux wallet ──────────────────────────
-  it("Should be able to Whitelist LP user without aux wallet => Primary wallet stored as aux wallet", async () => {
+  // ── WL-P2 : Register LP user without aux wallet ──────────────────────────
+  it("Should be able to Register LP user without aux wallet => Primary wallet stored as aux wallet", async () => {
     const userPDA = deriveUserPDA(lpUserId);
     const now = Math.floor(Date.now() / 1000);
     const futureCliff = new anchor.BN(now + 365 * 24 * 60 * 60);
 
     await program.methods
-      .whitelist(
+      .registerUser(
         Array.from(lpUserId),
         { lp: {} },
         [lpUser.publicKey, lpUser.publicKey, lpUser.publicKey],
@@ -816,13 +816,13 @@ describe.only("zynk-orbit", () => {
     );
   });
 
-  // ── WL-P3 : Whitelist ICV user without cliff period => stored as i64::MAX ──
-  it("Should be able to Whitelist ICV user without cliff period => Set as max time", async () => {
+  // ── WL-P3 : Register ICV user without cliff period => stored as i64::MAX ──
+  it("Should be able to Register ICV user without cliff period => Set as max time", async () => {
     const userPDA = deriveUserPDA(icvUserNoCliffId);
     const I64_MAX = new anchor.BN("9223372036854775807");
 
     await program.methods
-      .whitelist(
+      .registerUser(
         Array.from(icvUserNoCliffId),
         { icv: {} },
         [
@@ -867,15 +867,15 @@ describe.only("zynk-orbit", () => {
     ]);
   });
 
-  // ── WL-P4 : Whitelist ICV user without max Principal => stored as u64::MAX ──
-  it("Should be able to Whitelist ICV user without max Principal => max Principal set as max number", async () => {
+  // ── WL-P4 : Register ICV user without max Principal => stored as u64::MAX ──
+  it("Should be able to Register ICV user without max Principal => max Principal set as max number", async () => {
     const userPDA = deriveUserPDA(icvUserNoMaxPrincipalId);
     const U64_MAX = "18446744073709551615";
     const now = Math.floor(Date.now() / 1000);
     const futureCliff = new anchor.BN(now + 365 * 24 * 60 * 60);
 
     await program.methods
-      .whitelist(
+      .registerUser(
         Array.from(icvUserNoMaxPrincipalId),
         { icv: {} },
         [
@@ -908,15 +908,15 @@ describe.only("zynk-orbit", () => {
     );
   });
 
-  // ── WL-P5 : Whitelist LP with many partner whitelisting ───────────────────
-  it("Should be able to Whitelist LP with many partner whitelisting", async () => {
+  // ── WL-P5 : Register LP with many partner whitelist entries ───────────────────
+  it("Should be able to Register LP with many partner whitelist entries", async () => {
     const userPDA = deriveUserPDA(lpUserWithPartnersId);
     const now = Math.floor(Date.now() / 1000);
     const futureCliff = new anchor.BN(now + 365 * 24 * 60 * 60);
 
-    // Step 1 – whitelist the LP user (empty partner list initially).
+    // Step 1 – register the LP user (empty partner list initially).
     await program.methods
-      .whitelist(
+      .registerUser(
         Array.from(lpUserWithPartnersId),
         { lp: {} },
         [lpUserWithPartners.publicKey],
@@ -1018,9 +1018,9 @@ describe.only("zynk-orbit", () => {
     const now = Math.floor(Date.now() / 1000);
     const futureCliff = new anchor.BN(now + 2 * 365 * 24 * 60 * 60);
 
-    // Whitelist umdUser as ICV with a 500M cap.
+    // Register umdUser as ICV with a 500M cap.
     await program.methods
-      .whitelist(
+      .registerUser(
         Array.from(umdUserId),
         { icv: {} },
         [umdUser.publicKey, umdUser.publicKey, umdUser.publicKey],
@@ -1165,7 +1165,7 @@ describe.only("zynk-orbit", () => {
   // -------------------------------------------------------------------------
 
   // ── D-N1 : NCW user cannot deposit ───────────────────────────────────────
-  it("Should not be able to deposits funds into the contract for NCW user", async () => {
+  it("Should not be able to deposit funds into the contract for NCW user", async () => {
     // ncwUser was whitelisted as NCW in WL-P1 and is still live.
     const userPDA = deriveUserPDA(ncwUserId);
     const ncwUserAta = await gocAta(ncwUser.publicKey, tokenMint);
@@ -1228,14 +1228,14 @@ describe.only("zynk-orbit", () => {
 
   // ── D-N3 : Deposit exceeding max_deposit is rejected ─────────────────────
   it("Should not be able to exceed deposit more than max_deposit", async () => {
-    // Whitelist depositIcvUser with a tight cap of 100_000_000.
+    // Register depositIcvUser with a tight cap of 100_000_000.
     const depositIcvUserPDA = deriveUserPDA(depositIcvUserId);
     const now = Math.floor(Date.now() / 1000);
     const futureCliff = new anchor.BN(now + 365 * 24 * 60 * 60);
     const cap = new anchor.BN(100_000_000);
 
     await program.methods
-      .whitelist(
+      .registerUser(
         Array.from(depositIcvUserId),
         { icv: {} },
         [depositIcvUser.publicKey],
@@ -1280,7 +1280,7 @@ describe.only("zynk-orbit", () => {
   });
 
   // ── D-P1 : ICV user can deposit ───────────────────────────────────────────
-  it("Should be able to deposits funds into the contract for ICV user", async () => {
+  it("Should be able to deposit funds into the contract for ICV user", async () => {
     // depositIcvUser was whitelisted in D-N3 with cap = 100_000_000.
     // Deposit exactly the cap — should succeed.
     const depositIcvUserPDA = deriveUserPDA(depositIcvUserId);
@@ -1322,15 +1322,15 @@ describe.only("zynk-orbit", () => {
   });
 
   // ── D-P2 : LP user can deposit ────────────────────────────────────────────
-  it("Should be able to deposits funds into the contract for LP user", async () => {
-    // 1. Whitelist depositLpUser as LP with a future cliff and a cap.
+  it("Should be able to deposit funds into the contract for LP user", async () => {
+    // 1. Register depositLpUser as LP with a future cliff and a cap.
     const depositLpUserPDA = deriveUserPDA(depositLpUserId);
     const now = Math.floor(Date.now() / 1000);
     const futureCliff = new anchor.BN(now + 365 * 24 * 60 * 60);
     const cap = new anchor.BN(500_000_000);
 
     await program.methods
-      .whitelist(
+      .registerUser(
         Array.from(depositLpUserId),
         { lp: {} },
         [depositLpUser.publicKey],
@@ -1394,7 +1394,7 @@ describe.only("zynk-orbit", () => {
     const lpUserPDA = deriveUserPDA(borrowLpUserId);
 
     await program.methods
-      .whitelist(
+      .registerUser(
         Array.from(borrowLpUserId),
         { lp: {} },
         [
@@ -1454,7 +1454,7 @@ describe.only("zynk-orbit", () => {
         .remainingAccounts([
           { pubkey: lpTokenAccount, isSigner: false, isWritable: true },
           { pubkey: lpUserPDA, isSigner: false, isWritable: false },
-          { pubkey: lpUserPDA, isSigner: false, isWritable: false },
+          { pubkey: lpUserPDA, isSigner: false, isWritable: true },
           { pubkey: positionPDA, isSigner: false, isWritable: true },
         ])
         .signers([manager])
@@ -1476,7 +1476,7 @@ describe.only("zynk-orbit", () => {
     const restrictedUserPDA = deriveUserPDA(borrowIcvRestrictedUserId);
 
     await program.methods
-      .whitelist(
+      .registerUser(
         Array.from(borrowIcvRestrictedUserId),
         { icv: {} },
         [
@@ -1572,7 +1572,7 @@ describe.only("zynk-orbit", () => {
         .remainingAccounts([
           { pubkey: restrictedTokenAccount, isSigner: false, isWritable: true },
           { pubkey: restrictedUserPDA, isSigner: false, isWritable: false },
-          { pubkey: restrictedUserPDA, isSigner: false, isWritable: false },
+          { pubkey: restrictedUserPDA, isSigner: false, isWritable: true },
           { pubkey: positionPDA, isSigner: false, isWritable: true },
         ])
         .signers([manager])
@@ -1599,7 +1599,7 @@ describe.only("zynk-orbit", () => {
     );
     if (!existingUser) {
       await program.methods
-        .whitelist(
+        .registerUser(
           Array.from(borrowIcvUserId),
           { icv: {} },
           [
@@ -1676,7 +1676,7 @@ describe.only("zynk-orbit", () => {
         .remainingAccounts([
           { pubkey: borrowIcvTokenAccount, isSigner: false, isWritable: true },
           { pubkey: borrowIcvUserPDA, isSigner: false, isWritable: false },
-          { pubkey: borrowIcvUserPDA, isSigner: false, isWritable: false },
+          { pubkey: borrowIcvUserPDA, isSigner: false, isWritable: true },
           { pubkey: positionPDA, isSigner: false, isWritable: true },
         ])
         .signers([manager])
@@ -1734,7 +1734,7 @@ describe.only("zynk-orbit", () => {
         .remainingAccounts([
           { pubkey: borrowIcvTokenAccount, isSigner: false, isWritable: true },
           { pubkey: borrowIcvUserPDA, isSigner: false, isWritable: false },
-          { pubkey: borrowIcvUserPDA, isSigner: false, isWritable: false },
+          { pubkey: borrowIcvUserPDA, isSigner: false, isWritable: true },
           { pubkey: positionPDA, isSigner: false, isWritable: true },
         ])
         .signers([admin])
@@ -1793,7 +1793,7 @@ describe.only("zynk-orbit", () => {
         .remainingAccounts([
           { pubkey: borrowIcvTokenAccount, isSigner: false, isWritable: true },
           { pubkey: borrowIcvUserPDA, isSigner: false, isWritable: false },
-          { pubkey: borrowIcvUserPDA, isSigner: false, isWritable: false },
+          { pubkey: borrowIcvUserPDA, isSigner: false, isWritable: true },
           { pubkey: positionPDA, isSigner: false, isWritable: true },
         ])
         .signers([manager])
@@ -1853,7 +1853,7 @@ describe.only("zynk-orbit", () => {
         .remainingAccounts([
           { pubkey: borrowIcvTokenAccount, isSigner: false, isWritable: true },
           { pubkey: borrowIcvUserPDA, isSigner: false, isWritable: false },
-          { pubkey: borrowIcvUserPDA, isSigner: false, isWritable: false },
+          { pubkey: borrowIcvUserPDA, isSigner: false, isWritable: true },
           { pubkey: positionPDA, isSigner: false, isWritable: true },
         ])
         .signers([manager])
@@ -1909,7 +1909,7 @@ describe.only("zynk-orbit", () => {
       .remainingAccounts([
         { pubkey: borrowIcvTokenAccount, isSigner: false, isWritable: true },
         { pubkey: borrowIcvUserPDA, isSigner: false, isWritable: false },
-        { pubkey: borrowIcvUserPDA, isSigner: false, isWritable: false },
+        { pubkey: borrowIcvUserPDA, isSigner: false, isWritable: true },
         { pubkey: positionPDA, isSigner: false, isWritable: true },
       ])
       .signers([manager])
@@ -1927,9 +1927,48 @@ describe.only("zynk-orbit", () => {
     );
   });
 
+  it("Should reject direct calls to core replenishAndRepay without Orbit PDA authority", async () => {
+    const [orbitAuthority] = PublicKey.findProgramAddressSync(
+      [Buffer.from("core_repay")],
+      program.programId
+    );
+    const [coreZovPDA] = PublicKey.findProgramAddressSync(
+      [Buffer.from("zynk_op_vault"), defaultZovId],
+      core_program.programId
+    );
+
+    try {
+      await core_program.methods
+        .replenishAndRepay(
+          Array.from(defaultZovId),
+          new anchor.BN(1),
+          new anchor.BN(1),
+          null
+        )
+        .accounts({
+          config: configPDA,
+          orbitAuthority,
+          manager: manager.publicKey,
+          orderTracker: repayIcvOrderTrackerPDA,
+          partnerDepositVault: partnerDepositVaultPDA,
+          pdvTokenAccount: pdvAta,
+          zynkOpVault: coreZovPDA,
+          zovTokenAccount: zovAta,
+          destinationTokenAccount: ovaultAta,
+          mint: tokenMint,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        } as any)
+        .signers([manager])
+        .rpc();
+      assert.fail("Direct core call must not be able to sign as Orbit's PDA");
+    } catch (err: any) {
+      assert.match(err.message, /sign|signature|unknown signer/i);
+    }
+  });
+
   // ── B-P2 : Manager borrows against NCW user ───────────────────────────────
   it("Should be able to borrow against NCW user", async () => {
-    // Whitelist borrowNcwUser as NCW (NCW users don't deposit; the NCW vault is pre-funded).
+    // Register borrowNcwUser as NCW (NCW users don't deposit; the NCW vault is pre-funded).
     const now = Math.floor(Date.now() / 1000);
     const futureCliff = new anchor.BN(now + 365 * 24 * 60 * 60);
     const ncwUserPDA = deriveUserPDA(borrowNcwUserId);
@@ -1937,7 +1976,7 @@ describe.only("zynk-orbit", () => {
     const existingUser = await provider.connection.getAccountInfo(ncwUserPDA);
     if (!existingUser) {
       await program.methods
-        .whitelist(
+        .registerUser(
           Array.from(borrowNcwUserId),
           { ncw: {} },
           [
@@ -1992,7 +2031,7 @@ describe.only("zynk-orbit", () => {
       .remainingAccounts([
         { pubkey: ncwVaultTokenAccount, isSigner: false, isWritable: true }, // source
         { pubkey: ncwVaultAuthority, isSigner: false, isWritable: false }, // authority
-        { pubkey: ncwUserPDA, isSigner: false, isWritable: false }, // user
+        { pubkey: ncwUserPDA, isSigner: false, isWritable: true }, // user
         { pubkey: positionPDA, isSigner: false, isWritable: true }, // position
       ])
       .signers([manager])
@@ -2020,13 +2059,13 @@ describe.only("zynk-orbit", () => {
     const positionAmount = new anchor.BN(10_000_000); // 10M each
     const totalAmount = new anchor.BN(10_000_000 * MAX_POSITIONS);
 
-    // Whitelist each ICV user and deposit funds into their custody accounts.
+    // Register each ICV user and deposit funds into their custody accounts.
     for (let i = 0; i < MAX_POSITIONS; i++) {
       const userPDA = deriveUserPDA(multiIcvUserIds[i]);
       const existingUser = await provider.connection.getAccountInfo(userPDA);
       if (!existingUser) {
         await program.methods
-          .whitelist(
+          .registerUser(
             Array.from(multiIcvUserIds[i]),
             { icv: {} },
             [
@@ -2092,7 +2131,7 @@ describe.only("zynk-orbit", () => {
       remainingAccounts.push(
         { pubkey: multiIcvTokenAccounts[i], isSigner: false, isWritable: true }, // source token account
         { pubkey: userPDA, isSigner: false, isWritable: false }, // authority (= user PDA for ICV)
-        { pubkey: userPDA, isSigner: false, isWritable: false }, // user
+        { pubkey: userPDA, isSigner: false, isWritable: true }, // user
         { pubkey: positionPDA, isSigner: false, isWritable: true } // position PDA
       );
     }
@@ -2151,11 +2190,6 @@ describe.only("zynk-orbit", () => {
   it("Manager repays against the ICV user (full repay)", async () => {
     const borrowIcvUserPDA = deriveUserPDA(borrowIcvUserId);
     const positionPDA = derivePositionPDA(repayIcvOrderId, borrowIcvUserId);
-    const transientOrderId = generateOrderId();
-    const [transientOrderTrackerPDA] = PublicKey.findProgramAddressSync(
-      [Buffer.from("order_tracker"), borrowPartnerIdBytes, transientOrderId],
-      core_program.programId
-    );
     const [coreZovPDA] = PublicKey.findProgramAddressSync(
       [Buffer.from("zynk_op_vault"), defaultZovId],
       core_program.programId
@@ -2173,7 +2207,6 @@ describe.only("zynk-orbit", () => {
         Array.from(borrowPartnerIdBytes),
         Array.from(repayIcvOrderId),
         Array.from(defaultZovId),
-        Array.from(transientOrderId),
         repayIcvBorrowAmount,
         null
       )
@@ -2188,13 +2221,11 @@ describe.only("zynk-orbit", () => {
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: pdvAta,
         zynkOpVault: coreZovPDA,
-        transientOrderTracker: transientOrderTrackerPDA,
         ovault: ovaultPDA,
-        ovaultsBeneficiaryPda: beneficiaryPDA,
       } as any)
       .remainingAccounts([
         { pubkey: borrowIcvTokenAccount, isSigner: false, isWritable: true },
-        { pubkey: borrowIcvUserPDA, isSigner: false, isWritable: false },
+        { pubkey: borrowIcvUserPDA, isSigner: false, isWritable: true },
         { pubkey: positionPDA, isSigner: false, isWritable: true },
       ])
       .signers([manager])
@@ -2211,11 +2242,6 @@ describe.only("zynk-orbit", () => {
   it("Manager repays against the NCW user (full repay)", async () => {
     const ncwUserPDA = deriveUserPDA(borrowNcwUserId);
     const positionPDA = derivePositionPDA(repayNcwOrderId, borrowNcwUserId);
-    const transientOrderId = generateOrderId();
-    const [transientOrderTrackerPDA] = PublicKey.findProgramAddressSync(
-      [Buffer.from("order_tracker"), borrowPartnerIdBytes, transientOrderId],
-      core_program.programId
-    );
     const [coreZovPDA] = PublicKey.findProgramAddressSync(
       [Buffer.from("zynk_op_vault"), defaultZovId],
       core_program.programId
@@ -2233,7 +2259,6 @@ describe.only("zynk-orbit", () => {
         Array.from(borrowPartnerIdBytes),
         Array.from(repayNcwOrderId),
         Array.from(defaultZovId),
-        Array.from(transientOrderId),
         repayNcwBorrowAmount,
         null
       )
@@ -2248,14 +2273,12 @@ describe.only("zynk-orbit", () => {
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: pdvAta,
         zynkOpVault: coreZovPDA,
-        transientOrderTracker: transientOrderTrackerPDA,
         ovault: ovaultPDA,
-        ovaultsBeneficiaryPda: beneficiaryPDA,
       } as any)
       .remainingAccounts([
         // NCW: destination is borrowNcwUserAta (owned by borrowNcwUser == user.primary_account)
         { pubkey: borrowNcwUserAta, isSigner: false, isWritable: true },
-        { pubkey: ncwUserPDA, isSigner: false, isWritable: false },
+        { pubkey: ncwUserPDA, isSigner: false, isWritable: true },
         { pubkey: positionPDA, isSigner: false, isWritable: true },
       ])
       .signers([manager])
@@ -2272,11 +2295,6 @@ describe.only("zynk-orbit", () => {
   it("Should be able to repay with multiple positions (3 positions) for an order", async () => {
     const totalRepayAmount = new anchor.BN(
       repayMultiPositionAmount.toNumber() * REPAY_MULTI_POSITIONS
-    );
-    const transientOrderId = generateOrderId();
-    const [transientOrderTrackerPDA] = PublicKey.findProgramAddressSync(
-      [Buffer.from("order_tracker"), borrowPartnerIdBytes, transientOrderId],
-      core_program.programId
     );
     const [coreZovPDA] = PublicKey.findProgramAddressSync(
       [Buffer.from("zynk_op_vault"), defaultZovId],
@@ -2296,7 +2314,7 @@ describe.only("zynk-orbit", () => {
       );
       remainingAccounts.push(
         { pubkey: multiIcvTokenAccounts[i], isSigner: false, isWritable: true },
-        { pubkey: userPDA, isSigner: false, isWritable: false },
+        { pubkey: userPDA, isSigner: false, isWritable: true },
         { pubkey: positionPDA, isSigner: false, isWritable: true }
       );
     }
@@ -2306,7 +2324,6 @@ describe.only("zynk-orbit", () => {
         Array.from(borrowPartnerIdBytes),
         Array.from(repayMultiOrderId),
         Array.from(defaultZovId),
-        Array.from(transientOrderId),
         totalRepayAmount,
         null
       )
@@ -2321,9 +2338,7 @@ describe.only("zynk-orbit", () => {
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: pdvAta,
         zynkOpVault: coreZovPDA,
-        transientOrderTracker: transientOrderTrackerPDA,
         ovault: ovaultPDA,
-        ovaultsBeneficiaryPda: beneficiaryPDA,
       } as any)
       .remainingAccounts(remainingAccounts)
       .signers([manager])
@@ -2357,7 +2372,7 @@ describe.only("zynk-orbit", () => {
       const existing = await provider.connection.getAccountInfo(rPDA);
       if (!existing) {
         await program.methods
-          .whitelist(
+          .registerUser(
             Array.from(multiIcvUserIds[i]),
             { icv: {} },
             [
@@ -2434,27 +2449,21 @@ describe.only("zynk-orbit", () => {
       .remainingAccounts([
         { pubkey: multiIcvTokenAccounts[3], isSigner: false, isWritable: true },
         { pubkey: r3, isSigner: false, isWritable: false },
-        { pubkey: r3, isSigner: false, isWritable: false },
+        { pubkey: r3, isSigner: false, isWritable: true },
         { pubkey: p3, isSigner: false, isWritable: true },
         { pubkey: multiIcvTokenAccounts[4], isSigner: false, isWritable: true },
         { pubkey: r4, isSigner: false, isWritable: false },
-        { pubkey: r4, isSigner: false, isWritable: false },
+        { pubkey: r4, isSigner: false, isWritable: true },
         { pubkey: p4, isSigner: false, isWritable: true },
       ])
       .signers([manager])
       .rpc();
 
-    const tOId = generateOrderId();
-    const [tOTPDA] = PublicKey.findProgramAddressSync(
-      [Buffer.from("order_tracker"), borrowPartnerIdBytes, tOId],
-      core_program.programId
-    );
     await program.methods
       .repay(
         Array.from(borrowPartnerIdBytes),
         Array.from(pOId),
         Array.from(defaultZovId),
-        Array.from(tOId),
         partialRepayAmount,
         null
       )
@@ -2469,16 +2478,14 @@ describe.only("zynk-orbit", () => {
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: pdvAta,
         zynkOpVault: czovPDA,
-        transientOrderTracker: tOTPDA,
         ovault: ovaultPDA,
-        ovaultsBeneficiaryPda: beneficiaryPDA,
       } as any)
       .remainingAccounts([
         { pubkey: multiIcvTokenAccounts[3], isSigner: false, isWritable: true },
-        { pubkey: r3, isSigner: false, isWritable: false },
+        { pubkey: r3, isSigner: false, isWritable: true },
         { pubkey: p3, isSigner: false, isWritable: true },
         { pubkey: multiIcvTokenAccounts[4], isSigner: false, isWritable: true },
-        { pubkey: r4, isSigner: false, isWritable: false },
+        { pubkey: r4, isSigner: false, isWritable: true },
         { pubkey: p4, isSigner: false, isWritable: true },
       ])
       .signers([manager])
@@ -2531,7 +2538,7 @@ describe.only("zynk-orbit", () => {
       const existing = await provider.connection.getAccountInfo(rPDA);
       if (!existing) {
         await program.methods
-          .whitelist(
+          .registerUser(
             Array.from(multiIcvUserIds[i]),
             { icv: {} },
             [
@@ -2611,29 +2618,23 @@ describe.only("zynk-orbit", () => {
       .remainingAccounts([
         { pubkey: multiIcvTokenAccounts[5], isSigner: false, isWritable: true },
         { pubkey: r5, isSigner: false, isWritable: false },
-        { pubkey: r5, isSigner: false, isWritable: false },
+        { pubkey: r5, isSigner: false, isWritable: true },
         { pubkey: pos5, isSigner: false, isWritable: true },
         { pubkey: multiIcvTokenAccounts[6], isSigner: false, isWritable: true },
         { pubkey: r6, isSigner: false, isWritable: false },
-        { pubkey: r6, isSigner: false, isWritable: false },
+        { pubkey: r6, isSigner: false, isWritable: true },
         { pubkey: pos6, isSigner: false, isWritable: true },
       ])
       .signers([manager])
       .rpc();
 
     // Repay with only 1 position (15M) while remaining_order = 30M → AmountMismatch
-    const tOId = generateOrderId();
-    const [tOTPDA] = PublicKey.findProgramAddressSync(
-      [Buffer.from("order_tracker"), borrowPartnerIdBytes, tOId],
-      core_program.programId
-    );
     try {
       await program.methods
         .repay(
           Array.from(borrowPartnerIdBytes),
           Array.from(orderId),
           Array.from(defaultZovId),
-          Array.from(tOId),
           singleAmount,
           null
         )
@@ -2648,9 +2649,7 @@ describe.only("zynk-orbit", () => {
           partnerDepositVault: partnerDepositVaultPDA,
           pdvTokenAccount: pdvAta,
           zynkOpVault: czovPDA,
-          transientOrderTracker: tOTPDA,
           ovault: ovaultPDA,
-          ovaultsBeneficiaryPda: beneficiaryPDA,
         } as any)
         .remainingAccounts([
           {
@@ -2658,7 +2657,7 @@ describe.only("zynk-orbit", () => {
             isSigner: false,
             isWritable: true,
           },
-          { pubkey: r5, isSigner: false, isWritable: false },
+          { pubkey: r5, isSigner: false, isWritable: true },
           { pubkey: pos5, isSigner: false, isWritable: true },
         ])
         .signers([manager])
@@ -2684,7 +2683,7 @@ describe.only("zynk-orbit", () => {
     const existing7 = await provider.connection.getAccountInfo(r7PDA);
     if (!existing7) {
       await program.methods
-        .whitelist(
+        .registerUser(
           Array.from(multiIcvUserIds[7]),
           { icv: {} },
           [
@@ -2755,7 +2754,7 @@ describe.only("zynk-orbit", () => {
       .remainingAccounts([
         { pubkey: multiIcvTokenAccounts[7], isSigner: false, isWritable: true },
         { pubkey: r7PDA, isSigner: false, isWritable: false },
-        { pubkey: r7PDA, isSigner: false, isWritable: false },
+        { pubkey: r7PDA, isSigner: false, isWritable: true },
         { pubkey: positionPDA, isSigner: false, isWritable: true },
       ])
       .signers([manager])
@@ -2768,18 +2767,12 @@ describe.only("zynk-orbit", () => {
       1_000_000_000
     );
     const invalidOvaultAta = await gocAta(ovaultPDA, invalidTokenMint);
-    const tOId = generateOrderId();
-    const [tOTPDA] = PublicKey.findProgramAddressSync(
-      [Buffer.from("order_tracker"), borrowPartnerIdBytes, tOId],
-      core_program.programId
-    );
     try {
       await program.methods
         .repay(
           Array.from(borrowPartnerIdBytes),
           Array.from(orderId),
           Array.from(defaultZovId),
-          Array.from(tOId),
           borrowAmt,
           null
         )
@@ -2794,9 +2787,7 @@ describe.only("zynk-orbit", () => {
           partnerDepositVault: partnerDepositVaultPDA,
           pdvTokenAccount: pdvAta,
           zynkOpVault: czovPDA,
-          transientOrderTracker: tOTPDA,
           ovault: ovaultPDA,
-          ovaultsBeneficiaryPda: beneficiaryPDA,
         } as any)
         .remainingAccounts([
           {
@@ -2804,7 +2795,7 @@ describe.only("zynk-orbit", () => {
             isSigner: false,
             isWritable: true,
           },
-          { pubkey: r7PDA, isSigner: false, isWritable: false },
+          { pubkey: r7PDA, isSigner: false, isWritable: true },
           { pubkey: positionPDA, isSigner: false, isWritable: true },
         ])
         .signers([manager])
@@ -2829,7 +2820,7 @@ describe.only("zynk-orbit", () => {
     const existing8 = await provider.connection.getAccountInfo(r8PDA);
     if (!existing8) {
       await program.methods
-        .whitelist(
+        .registerUser(
           Array.from(multiIcvUserIds[8]),
           { icv: {} },
           [
@@ -2900,24 +2891,18 @@ describe.only("zynk-orbit", () => {
       .remainingAccounts([
         { pubkey: multiIcvTokenAccounts[8], isSigner: false, isWritable: true },
         { pubkey: r8PDA, isSigner: false, isWritable: false },
-        { pubkey: r8PDA, isSigner: false, isWritable: false },
+        { pubkey: r8PDA, isSigner: false, isWritable: true },
         { pubkey: positionPDA8, isSigner: false, isWritable: true },
       ])
       .signers([manager])
       .rpc();
 
-    const tOId8 = generateOrderId();
-    const [tOTPDA8] = PublicKey.findProgramAddressSync(
-      [Buffer.from("order_tracker"), borrowPartnerIdBytes, tOId8],
-      core_program.programId
-    );
     try {
       await program.methods
         .repay(
           Array.from(borrowPartnerIdBytes),
           Array.from(orderId8),
           Array.from(defaultZovId),
-          Array.from(tOId8),
           borrowAmt,
           null
         )
@@ -2932,14 +2917,12 @@ describe.only("zynk-orbit", () => {
           partnerDepositVault: partnerDepositVaultPDA,
           pdvTokenAccount: pdvAta,
           zynkOpVault: czovPDA,
-          transientOrderTracker: tOTPDA8,
           ovault: ovaultPDA,
-          ovaultsBeneficiaryPda: beneficiaryPDA,
         } as any)
         .remainingAccounts([
           // Wrong destination: borrowIcvTokenAccount is owned by borrowIcvUser's user, not r8PDA
           { pubkey: borrowIcvTokenAccount, isSigner: false, isWritable: true },
-          { pubkey: r8PDA, isSigner: false, isWritable: false },
+          { pubkey: r8PDA, isSigner: false, isWritable: true },
           { pubkey: positionPDA8, isSigner: false, isWritable: true },
         ])
         .signers([manager])
@@ -2956,8 +2939,8 @@ describe.only("zynk-orbit", () => {
     }
   });
 
-  // ── R-N4 : Repay amount > remaining order → ExcessiveRepay ───────────────
-  it("Should not repay more funds than that of borrowed even though we can replenish with higher amount", async () => {
+  // ── R-P4 : Excess replenishment remains in Core's ZOV ────────────────────
+  it("Should repay only open principal and retain excess replenishment in ZOV", async () => {
     const nowTs = Math.floor(Date.now() / 1000);
     const futureCliff = new anchor.BN(nowTs + 365 * 24 * 60 * 60);
     const borrowAmt = new anchor.BN(10_000_000);
@@ -2966,7 +2949,7 @@ describe.only("zynk-orbit", () => {
     const existing9 = await provider.connection.getAccountInfo(r9PDA);
     if (!existing9) {
       await program.methods
-        .whitelist(
+        .registerUser(
           Array.from(multiIcvUserIds[9]),
           { icv: {} },
           [
@@ -3037,77 +3020,91 @@ describe.only("zynk-orbit", () => {
       .remainingAccounts([
         { pubkey: multiIcvTokenAccounts[9], isSigner: false, isWritable: true },
         { pubkey: r9PDA, isSigner: false, isWritable: false },
-        { pubkey: r9PDA, isSigner: false, isWritable: false },
+        { pubkey: r9PDA, isSigner: false, isWritable: true },
         { pubkey: positionPDA9, isSigner: false, isWritable: true },
       ])
       .signers([manager])
       .rpc();
 
-    // Attempt over-repay: 20M > 10M remaining order
-    const tOId9 = generateOrderId();
-    const [tOTPDA9] = PublicKey.findProgramAddressSync(
-      [Buffer.from("order_tracker"), borrowPartnerIdBytes, tOId9],
-      core_program.programId
+    const zovBefore = BigInt(
+      (await provider.connection.getTokenAccountBalance(zovAta)).value.amount
     );
-    try {
-      await program.methods
-        .repay(
-          Array.from(borrowPartnerIdBytes),
-          Array.from(orderId9),
-          Array.from(defaultZovId),
-          Array.from(tOId9),
-          overRepayAmt, // 20M > 10M remaining
-          null
+    const pdvBefore = BigInt(
+      (await provider.connection.getTokenAccountBalance(pdvAta)).value.amount
+    );
+    const userBefore = BigInt(
+      (
+        await provider.connection.getTokenAccountBalance(
+          multiIcvTokenAccounts[9]
         )
-        .accounts({
-          zovTokenAccount: zovAta,
-          ovaultTokenAccount: ovaultAta,
-          mint: tokenMint,
-          manager: manager.publicKey,
-          tokenProgram: TOKEN_PROGRAM_ID,
-          config: configPDA,
-          orderTracker: orderTrackerPDA9,
-          partnerDepositVault: partnerDepositVaultPDA,
-          pdvTokenAccount: pdvAta,
-          zynkOpVault: czovPDA,
-          transientOrderTracker: tOTPDA9,
-          ovault: ovaultPDA,
-          ovaultsBeneficiaryPda: beneficiaryPDA,
-        } as any)
-        .remainingAccounts([
-          {
-            pubkey: multiIcvTokenAccounts[9],
-            isSigner: false,
-            isWritable: true,
-          },
-          { pubkey: r9PDA, isSigner: false, isWritable: false },
-          { pubkey: positionPDA9, isSigner: false, isWritable: true },
-        ])
-        .signers([manager])
-        .rpc();
-      assert.fail(
-        "Expected ExcessiveRepay when repay amount exceeds remaining order"
-      );
-    } catch (err: any) {
-      assert.include(
-        err.message,
-        "ExcessiveRepay",
-        "Error should be ExcessiveRepay when repay amount exceeds remaining order balance"
-      );
-    }
+      ).value.amount
+    );
+
+    await program.methods
+      .repay(
+        Array.from(borrowPartnerIdBytes),
+        Array.from(orderId9),
+        Array.from(defaultZovId),
+        overRepayAmt,
+        null
+      )
+      .accounts({
+        zovTokenAccount: zovAta,
+        ovaultTokenAccount: ovaultAta,
+        mint: tokenMint,
+        manager: manager.publicKey,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        config: configPDA,
+        orderTracker: orderTrackerPDA9,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: pdvAta,
+        zynkOpVault: czovPDA,
+        ovault: ovaultPDA,
+      } as any)
+      .remainingAccounts([
+        {
+          pubkey: multiIcvTokenAccounts[9],
+          isSigner: false,
+          isWritable: true,
+        },
+        { pubkey: r9PDA, isSigner: false, isWritable: true },
+        { pubkey: positionPDA9, isSigner: false, isWritable: true },
+      ])
+      .signers([manager])
+      .rpc();
+
+    const zovAfter = BigInt(
+      (await provider.connection.getTokenAccountBalance(zovAta)).value.amount
+    );
+    const pdvAfter = BigInt(
+      (await provider.connection.getTokenAccountBalance(pdvAta)).value.amount
+    );
+    const userAfter = BigInt(
+      (
+        await provider.connection.getTokenAccountBalance(
+          multiIcvTokenAccounts[9]
+        )
+      ).value.amount
+    );
+
+    assert.equal(pdvBefore - pdvAfter, 20_000_000n);
+    assert.equal(userAfter - userBefore, 10_000_000n);
+    assert.equal(zovAfter - zovBefore, 10_000_000n);
+    assert.isNull(await provider.connection.getAccountInfo(positionPDA9));
+    assert.isNull(await provider.connection.getAccountInfo(orderTrackerPDA9));
   });
 
   // =========================================================================
-  // TEST 1 – Whitelist ICV user
+  // TEST 1 – Register ICV user
   // =========================================================================
-  it("Should whitelist an ICV user", async () => {
+  it("Should register an ICV user", async () => {
     const userPDA = deriveUserPDA(icvUserId);
     const now = Math.floor(Date.now() / 1000);
     // Cliff 2 years in the future (deposits allowed; cliff not yet reached)
     const futureCliffPeriod = new anchor.BN(now + 2 * 365 * 24 * 60 * 60);
 
     await program.methods
-      .whitelist(
+      .registerUser(
         Array.from(icvUserId),
         { icv: {} },
         [icvUser.publicKey, icvUser.publicKey, icvUser.publicKey],
@@ -3273,7 +3270,7 @@ describe.only("zynk-orbit", () => {
       .remainingAccounts([
         { pubkey: icvTokenAccount, isSigner: false, isWritable: true },
         { pubkey: userPDA, isSigner: false, isWritable: false },
-        { pubkey: userPDA, isSigner: false, isWritable: false },
+        { pubkey: userPDA, isSigner: false, isWritable: true },
         { pubkey: positionPDA, isSigner: false, isWritable: true },
       ])
       .signers([manager])
@@ -3302,11 +3299,6 @@ describe.only("zynk-orbit", () => {
     // Position is not in IDL — use the known borrow amount directly
     const repayAmount = new anchor.BN(50_000_000); // same as borrowAmount
 
-    const transientOrderId = generateOrderId();
-    const [transientOrderTrackerPDA] = PublicKey.findProgramAddressSync(
-      [Buffer.from("order_tracker"), borrowPartnerIdBytes, transientOrderId],
-      core_program.programId
-    );
     const [coreZovPDA] = PublicKey.findProgramAddressSync(
       [Buffer.from("zynk_op_vault"), defaultZovId],
       core_program.programId
@@ -3317,7 +3309,6 @@ describe.only("zynk-orbit", () => {
         Array.from(borrowPartnerIdBytes),
         Array.from(borrowOrderId),
         Array.from(defaultZovId),
-        Array.from(transientOrderId),
         repayAmount,
         null
       )
@@ -3332,13 +3323,11 @@ describe.only("zynk-orbit", () => {
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: pdvAta,
         zynkOpVault: coreZovPDA,
-        transientOrderTracker: transientOrderTrackerPDA,
         ovault: ovaultPDA,
-        ovaultsBeneficiaryPda: beneficiaryPDA,
       } as any)
       .remainingAccounts([
         { pubkey: icvTokenAccount, isSigner: false, isWritable: true },
-        { pubkey: userPDA, isSigner: false, isWritable: false },
+        { pubkey: userPDA, isSigner: false, isWritable: true },
         { pubkey: positionPDA, isSigner: false, isWritable: true },
       ])
       .signers([manager])
@@ -3617,7 +3606,7 @@ describe.only("zynk-orbit", () => {
   // only way to expose a mismatch is by directly minting tokens into the
   // User PDA so that the User net > ATA balance after the ATA is drained.
   // We achieve this by:
-  //   1. Whitelist a fresh ICV user, deposit 20M (ATA=20M, net=20M).
+  //   1. Register a fresh ICV user, deposit 20M (ATA=20M, net=20M).
   //   2. Raise + approve → ATA=0, net=0.
   //   3. Mint 20M directly into ATA (bypassing program → ATA=20M, net=0).
   //   4. Deposit 20M via program → ATA=40M, net=20M.
@@ -3658,7 +3647,7 @@ describe.only("zynk-orbit", () => {
     const futureCliff2 = new anchor.BN(now2 + 365 * 24 * 60 * 60);
 
     await program.methods
-      .whitelist(
+      .registerUser(
         Array.from(lb2UserId),
         { icv: {} },
         [lb2User.publicKey, lb2User.publicKey, lb2User.publicKey],
@@ -4164,6 +4153,7 @@ describe.only("zynk-orbit", () => {
     await program.methods
       .rejectCliffPeriod(Array.from(icvUserId))
       .accounts({
+        config: configPDA,
         request: updateCliffRequestPDA,
         user: userPDA,
         signer: icvUser.publicKey,
@@ -4210,6 +4200,7 @@ describe.only("zynk-orbit", () => {
     await program.methods
       .rejectCliffPeriod(Array.from(icvUserId))
       .accounts({
+        config: configPDA,
         request: updateCliffRequestPDA,
         user: deriveUserPDA(icvUserId),
         signer: icvUser.publicKey,
@@ -4256,6 +4247,7 @@ describe.only("zynk-orbit", () => {
       await program.methods
         .rejectCliffPeriod(Array.from(icvUserId))
         .accounts({
+          config: configPDA,
           request: updateCliffRequestPDA,
           user: deriveUserPDA(icvUserId),
           signer: lpUser.publicKey,
@@ -4266,18 +4258,19 @@ describe.only("zynk-orbit", () => {
         "Expected transaction to fail — signer is not the primary account holder"
       );
     } catch (err: any) {
-      assert.include(err.message, "InvalidAccount", err.message);
+      assert.include(err.message, "Unauthorized", err.message);
     }
 
-    // Cleanup – the actual owner rejects the open request
+    // Core admin may also reject the open request.
     await program.methods
       .rejectCliffPeriod(Array.from(icvUserId))
       .accounts({
+        config: configPDA,
         request: updateCliffRequestPDA,
-        primaryAccount: icvUser.publicKey,
-        signer: icvUser.publicKey,
+        user: deriveUserPDA(icvUserId),
+        signer: admin.publicKey,
       } as any)
-      .signers([icvUser])
+      .signers([admin])
       .rpc();
     assert.isNull(
       await provider.connection.getAccountInfo(updateCliffRequestPDA),
@@ -4507,7 +4500,7 @@ describe.only("zynk-orbit", () => {
     const farFutureCliff = new anchor.BN(now + 2 * 365 * 24 * 60 * 60);
 
     await program.methods
-      .whitelist(
+      .registerUser(
         Array.from(claimUserId),
         { icv: {} },
         [claimUser.publicKey],
@@ -4540,9 +4533,14 @@ describe.only("zynk-orbit", () => {
     const claimDestAta = await gocAta(claimUser.publicKey, tokenMint);
     try {
       await program.methods
-        .claim(Array.from(claimUserId))
+        .claim(Array.from(claimUserId), [])
         .accounts({
           icvTokenAccount: claimTokenAccount,
+          coreManager: manager.publicKey,
+          orbitAuthority: PublicKey.findProgramAddressSync(
+            [Buffer.from("core_repay")],
+            program.programId
+          )[0],
           destinationTokenAccount: claimDestAta,
           mint: tokenMint,
           signer: claimUser.publicKey,
@@ -4561,15 +4559,20 @@ describe.only("zynk-orbit", () => {
     }
   });
 
-  // ── C-N3 : Non-ICV user cannot call claim ─────────────────────────────────
-  it("Should not be able to claim if user type is not ICV", async () => {
-    // ncwUser is already whitelisted as NCW from WL-P1.
+  // ── C-N3 : NCW without recorded principal or positions has nothing to claim ──
+  it("Should not allow an NCW claim without claimable principal", async () => {
+    // ncwUser is whitelisted but has not contributed to an order.
     const ncwTokenAccount = await gocAta(ncwUser.publicKey, tokenMint);
     try {
       await program.methods
-        .claim(Array.from(ncwUserId))
+        .claim(Array.from(ncwUserId), [])
         .accounts({
-          icvTokenAccount: ncwTokenAccount,
+          icvTokenAccount: null,
+          coreManager: manager.publicKey,
+          orbitAuthority: PublicKey.findProgramAddressSync(
+            [Buffer.from("core_repay")],
+            program.programId
+          )[0],
           destinationTokenAccount: ncwTokenAccount,
           mint: tokenMint,
           signer: ncwUser.publicKey,
@@ -4578,15 +4581,9 @@ describe.only("zynk-orbit", () => {
         } as any)
         .signers([ncwUser])
         .rpc();
-      assert.fail(
-        "Expected transaction to fail with InvalidOperation for non-ICV user"
-      );
+      assert.fail("Expected transaction to fail with ZeroAmount");
     } catch (err: any) {
-      assert.include(
-        err.message,
-        "InvalidOperation",
-        "Error should be InvalidOperation when a non-ICV user attempts to claim"
-      );
+      assert.include(err.message, "CliffPeriodNotOver");
     }
   });
 
@@ -4597,7 +4594,7 @@ describe.only("zynk-orbit", () => {
     const nearCliff = new anchor.BN(now2 + 2);
 
     await program.methods
-      .whitelist(
+      .registerUser(
         Array.from(claimZeroBalUserId),
         { icv: {} },
         [claimZeroBalUser.publicKey],
@@ -4618,9 +4615,14 @@ describe.only("zynk-orbit", () => {
 
     try {
       await program.methods
-        .claim(Array.from(claimZeroBalUserId))
+        .claim(Array.from(claimZeroBalUserId), [])
         .accounts({
           icvTokenAccount: czrCustodyAta,
+          coreManager: manager.publicKey,
+          orbitAuthority: PublicKey.findProgramAddressSync(
+            [Buffer.from("core_repay")],
+            program.programId
+          )[0],
           destinationTokenAccount: czrDestAta,
           mint: tokenMint,
           signer: claimZeroBalUser.publicKey,
@@ -4693,9 +4695,14 @@ describe.only("zynk-orbit", () => {
       "claimUser should have a non-zero net balance"
     );
     await program.methods
-      .claim(Array.from(claimUserId))
+      .claim(Array.from(claimUserId), [])
       .accounts({
         icvTokenAccount: claimTokenAccount,
+        coreManager: manager.publicKey,
+        orbitAuthority: PublicKey.findProgramAddressSync(
+          [Buffer.from("core_repay")],
+          program.programId
+        )[0],
         destinationTokenAccount: claimDestAta,
         mint: tokenMint,
         signer: claimUser.publicKey,
@@ -4713,6 +4720,122 @@ describe.only("zynk-orbit", () => {
     );
   });
 
+  it("Should claim liquid ICV principal plus available PDV recovery", async () => {
+    const claimant = Keypair.generate();
+    const claimantId = Buffer.alloc(32);
+    claimantId.write("claim_combo_icv", 0, "utf-8");
+    const claimantPda = deriveUserPDA(claimantId);
+    const claimantAta = await gocAtaAndMint(
+      claimant.publicKey,
+      tokenMint,
+      10_000_000
+    );
+    const custodyAta = await gocAta(claimantPda, tokenMint);
+    const cliff = new anchor.BN(Math.floor(Date.now() / 1000) + 2);
+
+    await program.methods
+      .registerUser(
+        Array.from(claimantId),
+        { icv: {} },
+        [claimant.publicKey, claimant.publicKey, claimant.publicKey],
+        cliff,
+        new anchor.BN(10_000_000),
+        [],
+        []
+      )
+      .accounts({ admin: admin.publicKey, config: configPDA } as any)
+      .signers([admin])
+      .rpc();
+
+    await program.methods
+      .deposit(Array.from(claimantId), new anchor.BN(10_000_000))
+      .accounts({
+        sourceTokenAccount: claimantAta,
+        destinationTokenAccount: custodyAta,
+        user: claimantPda,
+        mint: tokenMint,
+        signer: claimant.publicKey,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        config: configPDA,
+      } as any)
+      .signers([claimant])
+      .rpc();
+
+    const orderId = generateOrderId();
+    const orderTracker = deriveOrderTrackerPDA(borrowPartnerIdBytes, orderId);
+    const position = derivePositionPDA(orderId, claimantId);
+    await program.methods
+      .borrow(
+        zynkPartnerId,
+        Array.from(orderId),
+        Array.from(defaultZovId),
+        new anchor.BN(8_000_000),
+        [{ amount: new anchor.BN(8_000_000), vaultId: Array.from(zeroZovId) }],
+        null
+      )
+      .accounts({
+        zovTokenAccount: zovAta,
+        mint: tokenMint,
+        manager: manager.publicKey,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        config: configPDA,
+        partnerDepositVault: partnerDepositVaultPDA,
+        zynkOpVault,
+        beneficiary: beneficiaryPDA,
+        beneficiaryTokenAccount: ovaultAta,
+        orderTracker,
+      } as any)
+      .remainingAccounts([
+        { pubkey: custodyAta, isSigner: false, isWritable: true },
+        { pubkey: claimantPda, isSigner: false, isWritable: false },
+        { pubkey: claimantPda, isSigner: false, isWritable: true },
+        { pubkey: position, isSigner: false, isWritable: true },
+      ])
+      .signers([manager])
+      .rpc();
+
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    const before = BigInt(
+      (await provider.connection.getTokenAccountBalance(claimantAta)).value
+        .amount
+    );
+    await program.methods
+      .claim(Array.from(claimantId), [{ zovId: Array.from(defaultZovId) }])
+      .accounts({
+        icvTokenAccount: custodyAta,
+        coreManager: manager.publicKey,
+        orbitAuthority: PublicKey.findProgramAddressSync(
+          [Buffer.from("core_repay")],
+          program.programId
+        )[0],
+        destinationTokenAccount: claimantAta,
+        mint: tokenMint,
+        signer: claimant.publicKey,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        config: configPDA,
+      } as any)
+      .remainingAccounts([
+        { pubkey: position, isSigner: false, isWritable: true },
+        { pubkey: orderTracker, isSigner: false, isWritable: true },
+        { pubkey: partnerDepositVaultPDA, isSigner: false, isWritable: false },
+        { pubkey: pdvAta, isSigner: false, isWritable: true },
+        { pubkey: zynkOpVault, isSigner: false, isWritable: false },
+        { pubkey: zovAta, isSigner: false, isWritable: true },
+      ])
+      .signers([claimant])
+      .rpc();
+
+    const after = BigInt(
+      (await provider.connection.getTokenAccountBalance(claimantAta)).value
+        .amount
+    );
+    assert.equal(after - before, 10_000_000n);
+    const user = await program.account.user.fetch(claimantPda);
+    assert.equal(user.principalOut.toNumber(), 10_000_000);
+    assert.isNull(await provider.connection.getAccountInfo(position));
+    assert.isNull(await provider.connection.getAccountInfo(orderTracker));
+  });
+
   // =========================================================================
   // TEST 13 – Revoke Whitelist
   // =========================================================================
@@ -4722,7 +4845,7 @@ describe.only("zynk-orbit", () => {
     const revokeNcwUserPDA = deriveUserPDA(revokeNcwUserId);
 
     await program.methods
-      .whitelist(
+      .registerUser(
         Array.from(revokeNcwUserId),
         { ncw: {} },
         [revokeNcwUser.publicKey],
@@ -4765,7 +4888,7 @@ describe.only("zynk-orbit", () => {
     const futureCliff = new anchor.BN(now + 365 * 24 * 60 * 60);
 
     await program.methods
-      .whitelist(
+      .registerUser(
         Array.from(revokeLpUserId),
         { lp: {} },
         [revokeLpUser.publicKey],
@@ -4806,7 +4929,7 @@ describe.only("zynk-orbit", () => {
     const revokeNonAdminUserPDA = deriveUserPDA(revokeNonAdminUserId);
 
     await program.methods
-      .whitelist(
+      .registerUser(
         Array.from(revokeNonAdminUserId),
         { ncw: {} },
         [revokeNonAdminUser.publicKey],
@@ -4860,15 +4983,15 @@ describe.only("zynk-orbit", () => {
     );
   });
 
-  // ── RV-P4 : Rewhitelist ICV user to recover stuck funds ───────────────────
-  it("Should be able to rewhitelist an icv user to disburse funds out of its wallet if the funds are stuck in its wallet", async () => {
+  // ── RV-N2 : Rewhitelisting does not recreate erased principal accounting ──
+  it("Should not claim unaccounted token balances after revoke and rewhitelist", async () => {
     const rewlUserPDA = deriveUserPDA(revokeRewlUserId);
     const now = Math.floor(Date.now() / 1000);
     const farFutureCliff = new anchor.BN(now + 2 * 365 * 24 * 60 * 60);
 
-    // Step 1 – Whitelist revokeRewlUser as ICV with a far-future cliff.
+    // Step 1 – Register revokeRewlUser as ICV with a far-future cliff.
     await program.methods
-      .whitelist(
+      .registerUser(
         Array.from(revokeRewlUserId),
         { icv: {} },
         [revokeRewlUser.publicKey],
@@ -4932,13 +5055,13 @@ describe.only("zynk-orbit", () => {
       "Tokens should still be in custody ATA after revoke"
     );
 
-    // Step 4 – Rewhitelist with the same userId + publicKey (same PDA seeds).
+    // Step 4 – Register again with the same userId + publicKey (same PDA seeds).
     //          Use a short cliff so we can claim immediately after.
     const nowTs2 = Math.floor(Date.now() / 1000);
     const shortCliff = new anchor.BN(nowTs2 + 2);
 
     await program.methods
-      .whitelist(
+      .registerUser(
         Array.from(revokeRewlUserId),
         { icv: {} },
         [revokeRewlUser.publicKey],
@@ -4976,45 +5099,36 @@ describe.only("zynk-orbit", () => {
     // Step 5 – Wait for the short cliff to pass.
     await new Promise((r) => setTimeout(r, 4_000));
 
-    // Step 6 – Claim to recover the stuck funds.
-    // rewlDestAta is the same wallet as revokeRewlUserAta (the user's own ATA),
-    // which may already hold tokens from the before-hook funding.  Snapshot the
-    // balance *before* the claim so we can assert the exact delta (50M) rather
-    // than an absolute value.
+    // Rewhitelisting creates a fresh User ledger. The pre-existing token balance
+    // is deliberately not claimable because principal_in is zero.
     const rewlDestAta = await gocAta(revokeRewlUser.publicKey, tokenMint);
-    const destBalBefore = BigInt(
-      (await provider.connection.getTokenAccountBalance(rewlDestAta)).value
-        .amount
-    );
-
-    await program.methods
-      .claim(Array.from(revokeRewlUserId))
-      .accounts({
-        icvTokenAccount: rewlCustodyAta,
-        destinationTokenAccount: rewlDestAta,
-        mint: tokenMint,
-        signer: revokeRewlUser.publicKey,
-        tokenProgram: TOKEN_PROGRAM_ID,
-        config: configPDA,
-      } as any)
-      .signers([revokeRewlUser])
-      .rpc();
-
-    const destBalAfter = BigInt(
-      (await provider.connection.getTokenAccountBalance(rewlDestAta)).value
-        .amount
-    );
-    const claimedDelta = destBalAfter - destBalBefore;
-    assert.equal(
-      claimedDelta.toString(),
-      depositAmt.toString(),
-      "Destination ATA should have received exactly the 50M stuck tokens"
-    );
+    try {
+      await program.methods
+        .claim(Array.from(revokeRewlUserId), [])
+        .accounts({
+          icvTokenAccount: rewlCustodyAta,
+          coreManager: manager.publicKey,
+          orbitAuthority: PublicKey.findProgramAddressSync(
+            [Buffer.from("core_repay")],
+            program.programId
+          )[0],
+          destinationTokenAccount: rewlDestAta,
+          mint: tokenMint,
+          signer: revokeRewlUser.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          config: configPDA,
+        } as any)
+        .signers([revokeRewlUser])
+        .rpc();
+      assert.fail("Expected unaccounted balance claim to fail");
+    } catch (err: any) {
+      assert.include(err.message, "ZeroAmount");
+    }
 
     const custodyBal = (
       await provider.connection.getTokenAccountBalance(rewlCustodyAta)
     ).value.amount;
-    assert.equal(custodyBal, "0", "Custody ATA should be empty after claim");
+    assert.equal(custodyBal, "50000000");
   });
 
   // =========================================================================
@@ -5039,7 +5153,7 @@ describe.only("zynk-orbit", () => {
     }
     const disburseNcwUserPDA = deriveUserPDA(disburseNcwUserId);
     await program.methods
-      .whitelist(
+      .registerUser(
         Array.from(disburseNcwUserId),
         { ncw: {} },
         [disburseNcwUser.publicKey],
@@ -5112,7 +5226,7 @@ describe.only("zynk-orbit", () => {
     const futureCliff = new anchor.BN(now + 365 * 24 * 60 * 60);
     const disburseIcvUserPDA = deriveUserPDA(disburseIcvUserId);
     await program.methods
-      .whitelist(
+      .registerUser(
         Array.from(disburseIcvUserId),
         { icv: {} },
         [disburseIcvUser.publicKey],
@@ -5227,7 +5341,7 @@ describe.only("zynk-orbit", () => {
     }
     const dis4UserPDA = deriveUserPDA(dis4UserId);
     await program.methods
-      .whitelist(
+      .registerUser(
         Array.from(dis4UserId),
         { ncw: {} },
         [dis4User.publicKey],
@@ -5286,7 +5400,7 @@ describe.only("zynk-orbit", () => {
     const upwUserPDA = deriveUserPDA(upwUserId);
     const now = Math.floor(Date.now() / 1000);
     await program.methods
-      .whitelist(
+      .registerUser(
         Array.from(upwUserId),
         { icv: {} },
         [upwUser.publicKey],
@@ -5341,7 +5455,7 @@ describe.only("zynk-orbit", () => {
     const upwRemUserPDA = deriveUserPDA(upwRemUserId);
     const now = Math.floor(Date.now() / 1000);
     await program.methods
-      .whitelist(
+      .registerUser(
         Array.from(upwRemUserId),
         { icv: {} },
         [upwRemUser.publicKey],
@@ -5430,7 +5544,7 @@ describe.only("zynk-orbit", () => {
     const massUserPDA = deriveUserPDA(massUserId);
     const now = Math.floor(Date.now() / 1000);
     await program.methods
-      .whitelist(
+      .registerUser(
         Array.from(massUserId),
         { icv: {} },
         [massUser.publicKey],
@@ -5498,7 +5612,7 @@ describe.only("zynk-orbit", () => {
     const upwNaUserPDA = deriveUserPDA(upwNaUserId);
     const now = Math.floor(Date.now() / 1000);
     await program.methods
-      .whitelist(
+      .registerUser(
         Array.from(upwNaUserId),
         { icv: {} },
         [upwNaUser.publicKey],
@@ -5556,7 +5670,7 @@ describe.only("zynk-orbit", () => {
     const now = Math.floor(Date.now() / 1000);
     const pledgeIcvUserPDA = deriveUserPDA(pledgeIcvUserId);
     await program.methods
-      .whitelist(
+      .registerUser(
         Array.from(pledgeIcvUserId),
         { icv: {} },
         [pledgeIcvUser.publicKey],
@@ -5625,7 +5739,7 @@ describe.only("zynk-orbit", () => {
     const now = Math.floor(Date.now() / 1000);
     const pledgeLpUserPDA = deriveUserPDA(pledgeLpUserId);
     await program.methods
-      .whitelist(
+      .registerUser(
         Array.from(pledgeLpUserId),
         { lp: {} },
         [pledgeLpUser.publicKey],
@@ -5695,9 +5809,9 @@ describe.only("zynk-orbit", () => {
     const now = Math.floor(Date.now() / 1000);
     const cap = new anchor.BN(50_000_000);
     const pledgeMdUserPDA = deriveUserPDA(pledgeMdUserId);
-    // Whitelist with a tight max_deposit cap of 50M
+    // Register with a tight max_deposit cap of 50M
     await program.methods
-      .whitelist(
+      .registerUser(
         Array.from(pledgeMdUserId),
         { icv: {} },
         [pledgeMdUser.publicKey],
@@ -5775,7 +5889,7 @@ describe.only("zynk-orbit", () => {
     const now = Math.floor(Date.now() / 1000);
     const pledgeNmUserPDA = deriveUserPDA(pledgeNmUserId);
     await program.methods
-      .whitelist(
+      .registerUser(
         Array.from(pledgeNmUserId),
         { icv: {} },
         [pledgeNmUser.publicKey],
@@ -6049,7 +6163,7 @@ describe.only("zynk-orbit", () => {
       const cctpUserPDA = deriveUserPDA(cctpIcvUserId);
 
       await program.methods
-        .whitelist(
+        .registerUser(
           Array.from(cctpIcvUserId),
           { icv: {} },
           [cctpIcvUser.publicKey, cctpIcvUser.publicKey, cctpIcvUser.publicKey],
@@ -6101,7 +6215,7 @@ describe.only("zynk-orbit", () => {
       const cctpUserPDA = deriveUserPDA(cctpNcwUserId);
 
       await program.methods
-        .whitelist(
+        .registerUser(
           Array.from(cctpNcwUserId),
           { ncw: {} },
           [cctpNcwUser.publicKey, cctpNcwUser.publicKey, cctpNcwUser.publicKey],
@@ -6153,7 +6267,7 @@ describe.only("zynk-orbit", () => {
       const cctpUserPDA = deriveUserPDA(cctpIcvUserId);
 
       await program.methods
-        .whitelist(
+        .registerUser(
           Array.from(cctpIcvUserId),
           { icv: {} },
           [cctpIcvUser.publicKey, cctpIcvUser.publicKey, cctpIcvUser.publicKey],
@@ -6213,7 +6327,7 @@ describe.only("zynk-orbit", () => {
       const cctpUserPDA = deriveUserPDA(cctpIcvUserId);
 
       await program.methods
-        .whitelist(
+        .registerUser(
           Array.from(cctpIcvUserId),
           { icv: {} },
           [cctpIcvUser.publicKey, cctpIcvUser.publicKey, cctpIcvUser.publicKey],
@@ -6267,7 +6381,7 @@ describe.only("zynk-orbit", () => {
       const cctpUserPDA = deriveUserPDA(cctpIcvUserId);
 
       await program.methods
-        .whitelist(
+        .registerUser(
           Array.from(cctpIcvUserId),
           { icv: {} },
           [cctpIcvUser.publicKey, cctpIcvUser.publicKey, cctpIcvUser.publicKey],
@@ -6320,7 +6434,7 @@ describe.only("zynk-orbit", () => {
       const cctpUserPDA = deriveUserPDA(cctpIcvUserId);
 
       await program.methods
-        .whitelist(
+        .registerUser(
           Array.from(cctpIcvUserId),
           { icv: {} },
           [primaryUser.publicKey, primaryUser.publicKey, primaryUser.publicKey],

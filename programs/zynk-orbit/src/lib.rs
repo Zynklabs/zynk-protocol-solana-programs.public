@@ -110,6 +110,11 @@ pub struct PositionOperation {
     pub vault_id: [u8; 32],
 }
 
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct ClaimOperation {
+    pub zov_id: [u8; 32],
+}
+
 #[event]
 pub struct TxEvent {
     pub event_name: String,
@@ -347,6 +352,11 @@ pub mod zynk_orbit {
         meta: Option<Vec<EventArg>>,
     ) -> Result<()> {
         require!(amount > 0, OrbitError::ZeroAmount);
+        require!(!positions.is_empty(), OrbitError::EmptyPositions);
+        require!(
+            ctx.remaining_accounts.len() == positions.len() * 4,
+            OrbitError::InvalidPositionOperation
+        );
 
         // Parse partner_id: extract the numeric portion (e.g., "zp_123456::context" -> 123456)
         // for whitelist check. The full partner_id string is hashed for the create_order CPI.
@@ -364,8 +374,8 @@ pub mod zynk_orbit {
                 .ok_or(ProgramError::ArithmeticOverflow)?;
         }
 
-        // Verify the total of all position amounts is less than or equal to the borrow amount
-        require!(total_position_amount <= amount, OrbitError::AmountMismatch);
+        // Every borrowed token must be represented by an Orbit position.
+        require!(total_position_amount == amount, OrbitError::AmountMismatch);
 
         let remaining_accounts = ctx.remaining_accounts;
 
@@ -518,6 +528,16 @@ pub mod zynk_orbit {
             position_account.try_serialize(&mut &mut position_data[..])?;
             drop(position_data);
 
+            if user_type == UserType::NCW {
+                let mut user_data = user_account.try_borrow_mut_data()?;
+                let mut user = User::try_deserialize_unchecked(&mut &user_data[..])?;
+                user.principal_in = user
+                    .principal_in
+                    .checked_add(pos.amount)
+                    .ok_or(ProgramError::ArithmeticOverflow)?;
+                user.try_serialize(&mut &mut user_data[..])?;
+            }
+
             emit!(TxEvent {
                 event_name: "Borrow".to_string(),
                 user_id,
@@ -575,7 +595,6 @@ pub mod zynk_orbit {
         partner_id: [u8; 32],
         order_id: [u8; 32],
         zov_id: [u8; 32],
-        transient_order_id: [u8; 32],
         amount: u64,
         meta: Option<Vec<EventArg>>,
     ) -> Result<()> {
@@ -626,58 +645,8 @@ pub mod zynk_orbit {
 
         // The prepared amount is capped by the remaining order amount
         let prepared_amount = amount.min(remaining_order);
-        let is_full_repay = prepared_amount >= remaining_order;
 
-        // Step 1: CPI to zynk_core::replenish
-        // Replenish always uses the full `amount` (includes fees to be accumulated in ZOV).
-        // Only `prepared_amount` (capped by remaining order) will be sent to ovault for repaying principal.
-        let cpi_program = ctx.accounts.zynk_core_program.to_account_info();
-
-        let replenish_accounts = zynk_core::cpi::accounts::Replenish {
-            config: ctx.accounts.config.to_account_info(),
-            manager: ctx.accounts.manager.to_account_info(),
-            order_tracker: ctx.accounts.order_tracker.to_account_info(),
-            partner_deposit_vault: ctx.accounts.partner_deposit_vault.to_account_info(),
-            pdv_token_account: ctx.accounts.pdv_token_account.to_account_info(),
-            zov_token_account: ctx.accounts.zov_token_account.to_account_info(),
-            mint: ctx.accounts.mint.to_account_info(),
-            token_program: ctx.accounts.token_program.to_account_info(),
-            system_program: ctx.accounts.system_program.to_account_info(),
-        };
-
-        let replenish_ctx = CpiContext::new(cpi_program.clone(), replenish_accounts);
-        zynk_core::cpi::replenish(replenish_ctx, amount, is_full_repay, meta)?;
-
-        // Step 2: CPI to zynk_core::create_order (transient) to move prepared_amount from ZOV to ovault
-        // ovault PDA is the beneficiary (must be whitelisted with allow_transient=true in zynk-core)
-        // ovault_token_account is the beneficiary's token account
-        let create_order_accounts = CreateOrder {
-            config: ctx.accounts.config.to_account_info(),
-            manager: ctx.accounts.manager.to_account_info(),
-            partner_deposit_vault: ctx.accounts.partner_deposit_vault.to_account_info(),
-            pdv_token_account: None,
-            zynk_op_vault: ctx.accounts.zynk_op_vault.to_account_info(),
-            zov_token_account: ctx.accounts.zov_token_account.to_account_info(),
-            beneficiary: ctx.accounts.ovaults_beneficiary_pda.to_account_info(),
-            beneficiary_token_account: ctx.accounts.ovault_token_account.to_account_info(),
-            order_tracker: ctx.accounts.transient_order_tracker.to_account_info(),
-            mint: ctx.accounts.mint.to_account_info(),
-            token_program: ctx.accounts.token_program.to_account_info(),
-            system_program: ctx.accounts.system_program.to_account_info(),
-        };
-
-        let create_order_ctx = CpiContext::new(cpi_program, create_order_accounts);
-        zynk_core::cpi::create_order(
-            create_order_ctx,
-            partner_id,
-            transient_order_id,
-            zov_id,
-            true, // transient = true
-            prepared_amount,
-            None,
-        )?;
-
-        // Step 3: Validate positions from remaining accounts
+        // Validate every position before moving funds across programs.
         let remaining_accounts = ctx.remaining_accounts;
 
         // First pass: validate all users and positions, cache user_type and remaining amount.
@@ -701,7 +670,14 @@ pub mod zynk_orbit {
             let user = User::try_deserialize(&mut &user_data[..])
                 .map_err(|_| zynk_core::CoreError::InvalidAccount)?;
             let user_type = user.user_type;
+            let user_id = user.user_id;
             let user_key = user_account.key();
+            require!(user_account.owner == ctx.program_id, zynk_core::CoreError::InvalidAccount);
+            let (expected_user_key, _) = Pubkey::find_program_address(
+                &[USER_SEED, user_id.as_ref()],
+                ctx.program_id,
+            );
+            require!(user_key == expected_user_key, zynk_core::CoreError::InvalidAccount);
             drop(user_data);
 
             // Validate that this position is not an LP repay.
@@ -714,10 +690,15 @@ pub mod zynk_orbit {
             let position_data = position_pda.data.borrow();
             let position = Position::try_deserialize(&mut &position_data[..])
                 .map_err(|_| zynk_core::CoreError::InvalidAccount)?;
-            require!(
-                position.order_id == order_id,
-                OrbitError::PositionOrderMismatch
+            require!(position_pda.owner == ctx.program_id, zynk_core::CoreError::InvalidAccount);
+            require!(position.order_id == order_id, OrbitError::PositionOrderMismatch);
+            require!(position.partner_id == partner_id, OrbitError::PositionOrderMismatch);
+            require!(position.user_id == user_id, OrbitError::UserIdMismatch);
+            let (expected_position_key, _) = Pubkey::find_program_address(
+                &[POSITION_SEED, order_id.as_ref(), user_id.as_ref()],
+                ctx.program_id,
             );
+            require!(position_pda.key() == expected_position_key, zynk_core::CoreError::InvalidAccount);
             let remaining = position
                 .amount_borrowed
                 .checked_sub(position.amount_repaid)
@@ -732,7 +713,12 @@ pub mod zynk_orbit {
             });
         }
 
-        // Step 4: Distribute prepared_amount across positions using ceiling-based algorithm.
+        let open_position_total = position_infos.iter().try_fold(0u64, |total, info| {
+            total.checked_add(info.remaining).ok_or(ProgramError::ArithmeticOverflow)
+        })?;
+        require!(open_position_total == remaining_order, OrbitError::AmountMismatch);
+
+        // Distribute prepared_amount across positions using ceiling-based algorithm.
         // share = ceil(amount * position.remaining / remaining_total)
         let mut remaining_amount = prepared_amount;
         for info in position_infos.iter_mut() {
@@ -753,7 +739,39 @@ pub mod zynk_orbit {
             info.share = share;
         }
 
-        // Step 5: Transfer from ovault to each position and update/close Position PDAs
+        // Atomically move the gross amount into Core's ZOV and only the open-position
+        // principal into Orbit's distribution vault. Any excess remains in the ZOV.
+        let authority_bump = ctx.bumps.orbit_authority;
+        let authority_seeds: &[&[u8]] = &[
+            zynk_core::ORBIT_CPI_AUTHORITY_SEED,
+            &[authority_bump],
+        ];
+        let core_accounts = zynk_core::cpi::accounts::ReplenishAndRepay {
+            config: ctx.accounts.config.to_account_info(),
+            orbit_authority: ctx.accounts.orbit_authority.to_account_info(),
+            manager: ctx.accounts.manager.to_account_info(),
+            order_tracker: ctx.accounts.order_tracker.to_account_info(),
+            partner_deposit_vault: ctx.accounts.partner_deposit_vault.to_account_info(),
+            pdv_token_account: ctx.accounts.pdv_token_account.to_account_info(),
+            zynk_op_vault: ctx.accounts.zynk_op_vault.to_account_info(),
+            zov_token_account: ctx.accounts.zov_token_account.to_account_info(),
+            destination_token_account: ctx.accounts.ovault_token_account.to_account_info(),
+            mint: ctx.accounts.mint.to_account_info(),
+            token_program: ctx.accounts.token_program.to_account_info(),
+        };
+        zynk_core::cpi::replenish_and_repay(
+            CpiContext::new_with_signer(
+                ctx.accounts.zynk_core_program.to_account_info(),
+                core_accounts,
+                &[authority_seeds],
+            ),
+            zov_id,
+            amount,
+            prepared_amount,
+            meta,
+        )?;
+
+        // Transfer from ovault to each position and update/close Position PDAs
         let ovault_seeds: &[&[u8]] = &[VAULT_SEED, b"orbit", &[ctx.bumps.ovault]];
         let ovault_signer_seeds = &[&ovault_seeds[..]];
 
@@ -836,6 +854,17 @@ pub mod zynk_orbit {
                 closed
             };
 
+            if info.user_type == UserType::NCW {
+                let user_account = &remaining_accounts[base_idx + 1];
+                let mut user_data = user_account.try_borrow_mut_data()?;
+                let mut user = User::try_deserialize_unchecked(&mut &user_data[..])?;
+                user.principal_out = user
+                    .principal_out
+                    .checked_add(info.share)
+                    .ok_or(ProgramError::ArithmeticOverflow)?;
+                user.try_serialize(&mut &mut user_data[..])?;
+            }
+
             // Close the Position PDA if fully repaid
             if is_position_closed {
                 close_account(position_pda, &ctx.accounts.manager)?;
@@ -858,78 +887,200 @@ pub mod zynk_orbit {
         Ok(())
     }
 
-    // ICV users claim their deposited funds after the cliff period is over.
-    // Transfers all funds from the ICV token account (owned by User PDA) to the
-    // destination token account (owned by one of user.wallets).
-    //
-    // TODO: In a future iteration, incorporate pull+repay to settle outstanding
-    // borrowed positions before transferring ICV funds to destination. This will
-    // require:
-    //  - CPI to zynk_core::pull_and_repay
-    //  - Closing the position PDA if fully repaid
-    // Currently, claim only transfers funds held in the ICV token account directly
-    // to the destination token account.
-    pub fn claim(ctx: Context<Claim>, user_id: [u8; 32]) -> Result<()> {
-        let user = &ctx.accounts.user;
-
-        // Validate token mint against zynk-core's whitelisted token mints
-        let config = &ctx.accounts.config;
+    // ICV and NCW users recover unlocked principal. ICV liquid custody is paid
+    // first; supplied open positions may then pull whatever is available from
+    // their matching Core PDVs through replenish_and_repay.
+    pub fn claim<'info>(
+        ctx: Context<'_, '_, '_, 'info, Claim<'info>>,
+        user_id: [u8; 32],
+        operations: Vec<ClaimOperation>,
+    ) -> Result<()> {
         require!(
-            config.whitelisted_token_mints.contains(&ctx.accounts.mint.key()),
-            zynk_core::CoreError::InvalidTokenMint
+            ctx.remaining_accounts.len() == operations.len() * 6,
+            OrbitError::InvalidPositionOperation
         );
 
-        // Verify the signer is one of the whitelisted wallets on this user
+        let user = &ctx.accounts.user;
+        require!(
+            ctx.accounts.config.whitelisted_token_mints.contains(&ctx.accounts.mint.key()),
+            zynk_core::CoreError::InvalidTokenMint
+        );
         require!(
             is_whitelisted_wallet(user, &ctx.accounts.signer.key()),
             zynk_core::CoreError::InvalidAccount
         );
-
-        // Verify cliff period is over
-        let now = Clock::get()?.unix_timestamp;
-        require!(now >= user.cliff_period, OrbitError::CliffPeriodNotOver);
-
-        // Verify that the ICV token account is owned by the User PDA
         require!(
-            ctx.accounts.icv_token_account.owner == user.key(),
-            zynk_core::CoreError::InvalidAccount
+            Clock::get()?.unix_timestamp >= user.cliff_period,
+            OrbitError::CliffPeriodNotOver
         );
-
-        // Verify destination token account belongs to one of user.wallets
         require!(
             is_whitelisted_wallet(user, &ctx.accounts.destination_token_account.owner),
             zynk_core::CoreError::InvalidAccount
         );
 
-        // Transfer ALL funds from ICV token account to destination
-        let icv_balance = ctx.accounts.icv_token_account.amount;
-        require!(icv_balance > 0, OrbitError::ZeroAmount);
+        let claimable = user
+            .principal_in
+            .checked_sub(user.principal_out)
+            .ok_or(ProgramError::ArithmeticOverflow)?;
+        require!(claimable > 0, OrbitError::ZeroAmount);
 
-        let seeds: &[&[u8]] = &[
-            USER_SEED,
-            user_id.as_ref(),
-            &[ctx.bumps.user],
-        ];
-        let signer_seeds = &[&seeds[..]];
+        let mut total_paid = 0u64;
+        if user.user_type == UserType::ICV {
+            let icv_token_account = ctx
+                .accounts
+                .icv_token_account
+                .as_ref()
+                .ok_or(zynk_core::CoreError::InvalidAccount)?;
+            require!(icv_token_account.owner == user.key(), zynk_core::CoreError::InvalidAccount);
+            require!(icv_token_account.mint == ctx.accounts.mint.key(), zynk_core::CoreError::InvalidTokenMint);
 
-        let cpi_accounts = TransferChecked {
-            from: ctx.accounts.icv_token_account.to_account_info(),
-            to: ctx.accounts.destination_token_account.to_account_info(),
-            mint: ctx.accounts.mint.to_account_info(),
-            authority: ctx.accounts.user.to_account_info(),
-        };
-        let cpi_ctx = CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
-            cpi_accounts,
-            signer_seeds,
-        );
-        token_interface::transfer_checked(cpi_ctx, icv_balance, ctx.accounts.mint.decimals)?;
+            let liquid_payment = icv_token_account.amount.min(claimable);
+            if liquid_payment > 0 {
+                let user_seeds: &[&[u8]] = &[
+                    USER_SEED,
+                    user_id.as_ref(),
+                    &[ctx.bumps.user],
+                ];
+                token_interface::transfer_checked(
+                    CpiContext::new_with_signer(
+                        ctx.accounts.token_program.to_account_info(),
+                        TransferChecked {
+                            from: icv_token_account.to_account_info(),
+                            to: ctx.accounts.destination_token_account.to_account_info(),
+                            mint: ctx.accounts.mint.to_account_info(),
+                            authority: ctx.accounts.user.to_account_info(),
+                        },
+                        &[user_seeds],
+                    ),
+                    liquid_payment,
+                    ctx.accounts.mint.decimals,
+                )?;
+                total_paid = liquid_payment;
+            }
+        } else {
+            require!(user.user_type == UserType::NCW, OrbitError::InvalidOperation);
+            require!(ctx.accounts.icv_token_account.is_none(), zynk_core::CoreError::InvalidAccount);
+        }
 
-        // Update user principal_out
+        for (index, operation) in operations.iter().enumerate() {
+            if total_paid >= claimable {
+                break;
+            }
+
+            // [position, core_order_tracker, partner_deposit_vault,
+            //  pdv_token_account, zynk_op_vault, zov_token_account]
+            let base = index * 6;
+            let position_account = &ctx.remaining_accounts[base];
+            let order_tracker_account = &ctx.remaining_accounts[base + 1];
+            let partner_deposit_vault = &ctx.remaining_accounts[base + 2];
+            let pdv_token_account = &ctx.remaining_accounts[base + 3];
+            let zynk_op_vault = &ctx.remaining_accounts[base + 4];
+            let zov_token_account = &ctx.remaining_accounts[base + 5];
+
+            require!(position_account.owner == ctx.program_id, zynk_core::CoreError::InvalidAccount);
+            let position_data = position_account.try_borrow_data()?;
+            let position = Position::try_deserialize(&mut &position_data[..])
+                .map_err(|_| zynk_core::CoreError::InvalidAccount)?;
+            require!(position.user_id == user_id, OrbitError::UserIdMismatch);
+            let (expected_position, _) = Pubkey::find_program_address(
+                &[POSITION_SEED, position.order_id.as_ref(), user_id.as_ref()],
+                ctx.program_id,
+            );
+            require!(position_account.key() == expected_position, zynk_core::CoreError::InvalidAccount);
+            let position_outstanding = position
+                .amount_borrowed
+                .checked_sub(position.amount_repaid)
+                .ok_or(ProgramError::ArithmeticOverflow)?;
+            let position_order_id = position.order_id;
+            let position_partner_id = position.partner_id;
+            drop(position_data);
+
+            if position_outstanding == 0 {
+                continue;
+            }
+
+            let tracker_data = order_tracker_account.try_borrow_data()?;
+            let tracker = zynk_core::OrderTracker::try_deserialize(&mut &tracker_data[..])
+                .map_err(|_| zynk_core::CoreError::InvalidAccount)?;
+            require!(tracker.order_id == position_order_id, OrbitError::PositionOrderMismatch);
+            require!(tracker.partner_id == position_partner_id, OrbitError::PositionOrderMismatch);
+            require!(tracker.mint == ctx.accounts.mint.key(), zynk_core::CoreError::InvalidTokenMint);
+            let core_outstanding = tracker
+                .amount_out
+                .checked_sub(tracker.amount_in)
+                .ok_or(ProgramError::ArithmeticOverflow)?;
+            drop(tracker_data);
+
+            let pdv_data = pdv_token_account.try_borrow_data()?;
+            let pdv = TokenAccount::try_deserialize_unchecked(&mut &pdv_data[..])
+                .map_err(|_| zynk_core::CoreError::InvalidAccount)?;
+            require!(pdv.mint == ctx.accounts.mint.key(), zynk_core::CoreError::InvalidTokenMint);
+            let remaining_claimable = claimable
+                .checked_sub(total_paid)
+                .ok_or(ProgramError::ArithmeticOverflow)?;
+            let recovered = remaining_claimable
+                .min(position_outstanding)
+                .min(core_outstanding)
+                .min(pdv.amount);
+            drop(pdv_data);
+
+            if recovered == 0 {
+                continue;
+            }
+
+            let authority_seeds: &[&[u8]] = &[
+                zynk_core::ORBIT_CPI_AUTHORITY_SEED,
+                &[ctx.bumps.orbit_authority],
+            ];
+            let core_accounts = zynk_core::cpi::accounts::ReplenishAndRepay {
+                config: ctx.accounts.config.to_account_info(),
+                orbit_authority: ctx.accounts.orbit_authority.to_account_info(),
+                manager: ctx.accounts.core_manager.to_account_info(),
+                order_tracker: order_tracker_account.to_account_info(),
+                partner_deposit_vault: partner_deposit_vault.to_account_info(),
+                pdv_token_account: pdv_token_account.to_account_info(),
+                zynk_op_vault: zynk_op_vault.to_account_info(),
+                zov_token_account: zov_token_account.to_account_info(),
+                destination_token_account: ctx.accounts.destination_token_account.to_account_info(),
+                mint: ctx.accounts.mint.to_account_info(),
+                token_program: ctx.accounts.token_program.to_account_info(),
+            };
+            zynk_core::cpi::replenish_and_repay(
+                CpiContext::new_with_signer(
+                    ctx.accounts.zynk_core_program.to_account_info(),
+                    core_accounts,
+                    &[authority_seeds],
+                ),
+                operation.zov_id,
+                recovered,
+                recovered,
+                None,
+            )?;
+
+            let is_closed = {
+                let mut position_data = position_account.try_borrow_mut_data()?;
+                let mut position = Position::try_deserialize_unchecked(&mut &position_data[..])?;
+                position.amount_repaid = position
+                    .amount_repaid
+                    .checked_add(recovered)
+                    .ok_or(ProgramError::ArithmeticOverflow)?;
+                let closed = position.amount_repaid == position.amount_borrowed;
+                position.try_serialize(&mut &mut position_data[..])?;
+                closed
+            };
+            if is_closed {
+                close_account(position_account, &ctx.accounts.core_manager)?;
+            }
+            total_paid = total_paid
+                .checked_add(recovered)
+                .ok_or(ProgramError::ArithmeticOverflow)?;
+        }
+
+        require!(total_paid > 0, OrbitError::ZeroAmount);
         let user = &mut ctx.accounts.user;
         user.principal_out = user
             .principal_out
-            .checked_add(icv_balance)
+            .checked_add(total_paid)
             .ok_or(ProgramError::ArithmeticOverflow)?;
 
         emit!(TxEvent {
@@ -937,9 +1088,9 @@ pub mod zynk_orbit {
             user_id,
             from_owner: ctx.accounts.user.key(),
             to_owner: ctx.accounts.destination_token_account.owner,
-            from: ctx.accounts.icv_token_account.key(),
+            from: ctx.accounts.icv_token_account.as_ref().map(|account| account.key()).unwrap_or_default(),
             to: ctx.accounts.destination_token_account.key(),
-            amount: icv_balance,
+            amount: total_paid,
             token: ctx.accounts.mint.key(),
             domain_separator: DOMAIN_SEPARATOR,
             order_id: [0u8; 32],
@@ -1005,8 +1156,8 @@ pub mod zynk_orbit {
         Ok(())
     }
 
-    pub fn whitelist(
-        ctx: Context<Whitelist>,
+    pub fn register_user(
+        ctx: Context<RegisterUser>,
         user_id: [u8; 32],
         user_type: UserType,
         wallets: [Pubkey; 3],
@@ -1514,14 +1665,14 @@ pub mod zynk_orbit {
 
     /// Reject (cancel) a pending cliff period update request.
     ///
-    /// Any whitelisted wallet of the associated user may reject it.
-    /// The UpdateCliffPeriodRequest PDA is closed and its rent-exempt
-    /// lamports are returned to the signer.
+    /// The Core admin or any whitelisted wallet of the associated user may
+    /// reject the request. Rent is returned to the authorized signer.
     pub fn reject_cliff_period(ctx: Context<RejectCliffPeriod>, user_id: [u8; 32]) -> Result<()> {
-        // Verify the signer is one of the whitelisted wallets on the user
+        let signer = ctx.accounts.signer.key();
         require!(
-            is_whitelisted_wallet(&ctx.accounts.user, &ctx.accounts.signer.key()),
-            zynk_core::CoreError::InvalidAccount
+            signer == ctx.accounts.config.admin
+                || is_whitelisted_wallet(&ctx.accounts.user, &signer),
+            zynk_core::CoreError::Unauthorized
         );
 
         // Close the UpdateCliffPeriodRequest PDA — return lamports to the signer
@@ -1833,7 +1984,7 @@ pub struct Borrow<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(partner_id: [u8; 32], order_id: [u8; 32], zov_id: [u8; 32], transient_order_id: [u8; 32])]
+#[instruction(partner_id: [u8; 32], order_id: [u8; 32], zov_id: [u8; 32])]
 pub struct Repay<'info> {
     #[account(
         mut,
@@ -1891,7 +2042,13 @@ pub struct Repay<'info> {
     #[account(mut)]
     pub pdv_token_account: UncheckedAccount<'info>,
 
-    // --- Transient CreateOrder CPI accounts ---
+    /// CHECK: Orbit-owned capability PDA used to authenticate this CPI to zynk-core.
+    #[account(
+        seeds = [zynk_core::ORBIT_CPI_AUTHORITY_SEED],
+        bump,
+    )]
+    pub orbit_authority: UncheckedAccount<'info>,
+
     /// CHECK: zynk-core ZOV PDA — seed-constrained and CPI-validated.
     #[account(
         seeds = [zynk_core::ZYNK_OP_VAULT_SEED, zov_id.as_ref()],
@@ -1900,18 +2057,6 @@ pub struct Repay<'info> {
     )]
     pub zynk_op_vault: UncheckedAccount<'info>,
 
-    /// CHECK: zynk-core transient order tracker PDA — seed-constrained and created by the CPI.
-    #[account(
-        mut,
-        seeds = [
-            zynk_core::ORDER_TRACKER_SEED,
-            partner_id.as_ref(),
-            transient_order_id.as_ref(),
-        ],
-        seeds::program = ZynkCore::id(),
-        bump,
-    )]
-    pub transient_order_tracker: UncheckedAccount<'info>,
 
     // --- Ovault PDA (signer for ovault → position transfers) ---
     /// CHECK: Ovault - verified by seeds.
@@ -1921,13 +2066,6 @@ pub struct Repay<'info> {
     )]
     pub ovault: UncheckedAccount<'info>,
 
-    /// CHECK: zynk-core beneficiary PDA for ovault — seed-constrained and CPI-validated.
-    #[account(
-        seeds = [zynk_core::BENEFICIARY_SEED, partner_id.as_ref(), ovault.key().as_ref()],
-        seeds::program = ZynkCore::id(),
-        bump,
-    )]
-    pub ovaults_beneficiary_pda: UncheckedAccount<'info>,
     // Remaining accounts (3 per position):
     // [destination_token_account, user, position_pda]
 }
@@ -1985,7 +2123,7 @@ pub struct Disburse<'info> {
     whitelisted_partners: Vec<u32>,
     cctp_recipients: Vec<CctpRecipient>
 )]
-pub struct Whitelist<'info> {
+pub struct RegisterUser<'info> {
     #[account(
         seeds = [zynk_core::CONFIG_SEED],
         seeds::program = ZynkCore::id(),
@@ -2316,7 +2454,14 @@ pub struct ApproveCliffPeriod<'info> {
 #[derive(Accounts)]
 #[instruction(user_id: [u8; 32])]
 pub struct RejectCliffPeriod<'info> {
-    /// CHECK: UpdateCliffPeriodRequest PDA - validated in handler
+    #[account(
+        seeds = [zynk_core::CONFIG_SEED],
+        seeds::program = ZynkCore::id(),
+        bump,
+    )]
+    pub config: Account<'info, zynk_core::Config>,
+
+    /// UpdateCliffPeriodRequest PDA - validated by user ID.
     #[account(
         mut,
         constraint = request.user_id == user_id @ OrbitError::UserIdMismatch
@@ -2330,8 +2475,7 @@ pub struct RejectCliffPeriod<'info> {
     )]
     pub user: Account<'info, User>,
 
-    // maybe admin also must be able to reject
-    /// A whitelisted wallet that is rejecting the cliff period update
+    /// Core admin or a whitelisted user wallet rejecting the update.
     #[account(mut)]
     pub signer: Signer<'info>,
 
@@ -2339,7 +2483,7 @@ pub struct RejectCliffPeriod<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(user_id: [u8; 32])]
+#[instruction(user_id: [u8; 32], operations: Vec<ClaimOperation>)]
 pub struct Claim<'info> {
     #[account(
         seeds = [zynk_core::CONFIG_SEED],
@@ -2352,26 +2496,33 @@ pub struct Claim<'info> {
         mut,
         seeds = [USER_SEED, user_id.as_ref()],
         bump,
-        constraint = user.user_type == UserType::ICV @ OrbitError::InvalidOperation,
+        constraint = user.user_type != UserType::LP @ OrbitError::InvalidOperation,
     )]
     pub user: Account<'info, User>,
 
-    /// ICV token account — owned by User PDA, holds all deposited funds
+    /// ICV custody account. Pass None for NCW claims.
     #[account(mut)]
-    pub icv_token_account: InterfaceAccount<'info, TokenAccount>,
+    pub icv_token_account: Option<InterfaceAccount<'info, TokenAccount>>,
 
     /// Token account to receive claimed funds — must be owned by user.primary_account or user.aux_account
     #[account(mut)]
     pub destination_token_account: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
-        constraint = mint.key() == icv_token_account.mint @ zynk_core::CoreError::InvalidTokenMint,
         constraint = mint.key() == destination_token_account.mint @ zynk_core::CoreError::InvalidTokenMint,
     )]
     pub mint: InterfaceAccount<'info, Mint>,
 
     #[account(mut)]
     pub signer: Signer<'info>,
+
+    /// CHECK: Core manager receives rent from closed Core trackers and Orbit positions.
+    #[account(mut, address = config.manager @ zynk_core::CoreError::Unauthorized)]
+    pub core_manager: UncheckedAccount<'info>,
+
+    /// CHECK: Orbit-owned capability PDA used to authenticate Core CPIs.
+    #[account(seeds = [zynk_core::ORBIT_CPI_AUTHORITY_SEED], bump)]
+    pub orbit_authority: UncheckedAccount<'info>,
 
     pub token_program: Interface<'info, TokenInterface>,
 
