@@ -124,12 +124,28 @@ pub(crate) fn repay<'info>(
     let mut remaining_amount = prepared_amount;
     for info in position_infos.iter_mut() {
         let share = if prepared_amount > 0 {
-            let numerator = prepared_amount
-                .checked_mul(info.remaining)
+            let prepared_128 = prepared_amount as u128;
+            let remaining_info_128 = info.remaining as u128;
+            let remaining_order_128 = remaining_order as u128;
+
+            // Perform intermediate math safely in 128-bit space
+            let numerator = prepared_128
+                .checked_mul(remaining_info_128)
                 .ok_or(ProgramError::ArithmeticOverflow)?;
-            let raw_share = (numerator + remaining_order - 1)
-                .checked_div(remaining_order)
+
+            // Ceiling division: ceil(A / B) = (A + B - 1) / B
+            let numerator_ceil = numerator
+                .checked_add(remaining_order_128.saturating_sub(1))
                 .ok_or(ProgramError::ArithmeticOverflow)?;
+
+            let raw_share_128 = numerator_ceil
+                .checked_div(remaining_order_128)
+                .ok_or(ProgramError::ArithmeticOverflow)?;
+
+            // Safe downcast back to u64
+            let raw_share = u64::try_from(raw_share_128)
+                .map_err(|_| ProgramError::ArithmeticOverflow)?;
+
             raw_share.min(info.remaining).min(remaining_amount)
         } else {
             0
