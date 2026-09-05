@@ -143,25 +143,91 @@ pub(crate) fn borrow<'info>(
         ];
         let position_signer_seeds = &[&position_seeds_with_bump[..]];
 
-        let position_space = 8 + Position::INIT_SPACE;
-        let create_position_ix =
-            anchor_lang::solana_program::system_instruction::create_account(
-                &ctx.accounts.manager.key(),
-                &expected_position_key,
-                Rent::get()?.minimum_balance(position_space),
-                position_space as u64,
-                ctx.program_id,
-            );
+        // let position_space = 8 + Position::INIT_SPACE;
+        // let create_position_ix =
+        //     anchor_lang::solana_program::system_instruction::create_account(
+        //         &ctx.accounts.manager.key(),
+        //         &expected_position_key,
+        //         Rent::get()?.minimum_balance(position_space),
+        //         position_space as u64,
+        //         ctx.program_id,
+        //     );
 
-        anchor_lang::solana_program::program::invoke_signed(
-            &create_position_ix,
-            &[
-                ctx.accounts.manager.to_account_info(),
-                position_pda.to_account_info(),
-                ctx.accounts.system_program.to_account_info(),
-            ],
-            position_signer_seeds,
-        )?;
+        // anchor_lang::solana_program::program::invoke_signed(
+        //     &create_position_ix,
+        //     &[
+        //         ctx.accounts.manager.to_account_info(),
+        //         position_pda.to_account_info(),
+        //         ctx.accounts.system_program.to_account_info(),
+        //     ],
+        //     position_signer_seeds,
+        // )?;
+
+        let position_space = 8 + Position::INIT_SPACE;                                                                                                                                                                                                         
+        let required_lamports = Rent::get()?.minimum_balance(position_space);                                                                                                                                                                                  
+                                                                                                                                                                                                                                                            
+        if position_pda.lamports() == 0 {                                                                                                                                                                                                                      
+            // Happy path: account doesn't exist yet, create it normally.                                                                                                                                                                                      
+            anchor_lang::solana_program::program::invoke_signed(                                                                                                                                                                                               
+                &anchor_lang::solana_program::system_instruction::create_account(                                                                                                                                                                              
+                    &ctx.accounts.manager.key(),                                                                                                                                                                                                               
+                    &expected_position_key,                                                                                                                                                                                                                    
+                    required_lamports,                                                                                                                                                                                                                         
+                    position_space as u64,                                                                                                                                                                                                                     
+                    ctx.program_id,                                                                                                                                                                                                                            
+                ),                                                                                                                                                                                                                                             
+                &[                                                                                                                                                                                                                                             
+                    ctx.accounts.manager.to_account_info(),                                                                                                                                                                                                    
+                    position_pda.to_account_info(),                                                                                                                                                                                                            
+                    ctx.accounts.system_program.to_account_info(),                                                                                                                                                                                             
+                ],                                                                                                                                                                                                                                             
+                position_signer_seeds,                                                                                                                                                                                                                         
+            )?;                                                                                                                                                                                                                                                
+        } else {                                                                                                                                                                                                                                               
+            // Griefing path: account was pre-funded by an attacker.                                                                                                                                                                                           
+            // Top up lamports if needed, then allocate space and assign ownership.                                                                                                                                                                            
+            let current_lamports = position_pda.lamports();                                                                                                                                                                                                    
+            if current_lamports < required_lamports {                                                                                                                                                                                                          
+                anchor_lang::solana_program::program::invoke(                                                                                                                                                                                                  
+                    &anchor_lang::solana_program::system_instruction::transfer(                                                                                                                                                                                
+                        &ctx.accounts.manager.key(),                                                                                                                                                                                                           
+                        &expected_position_key,                                                                                                                                                                                                                
+                        required_lamports - current_lamports,                                                                                                                                                                                                  
+                    ),                                                                                                                                                                                                                                         
+                    &[                                                                                                                                                                                                                                         
+                        ctx.accounts.manager.to_account_info(),                                                                                                                                                                                                
+                        position_pda.to_account_info(),                                                                                                                                                                                                        
+                        ctx.accounts.system_program.to_account_info(),                                                                                                                                                                                         
+                    ],                                                                                                                                                                                                                                         
+                )?;                                                                                                                                                                                                                                            
+            }                                                                                                                                                                                                                                                  
+                                                                                                                                                                                                                                                            
+            // Allocate the data buffer on the pre-funded account.                                                                                                                                                                                             
+            anchor_lang::solana_program::program::invoke_signed(                                                                                                                                                                                               
+                &anchor_lang::solana_program::system_instruction::allocate(                                                                                                                                                                                    
+                    &expected_position_key,                                                                                                                                                                                                                    
+                    position_space as u64,                                                                                                                                                                                                                     
+                ),                                                                                                                                                                                                                                             
+                &[                                                                                                                                                                                                                                             
+                    position_pda.to_account_info(),                                                                                                                                                                                                            
+                    ctx.accounts.system_program.to_account_info(),                                                                                                                                                                                             
+                ],                                                                                                                                                                                                                                             
+                position_signer_seeds,                                                                                                                                                                                                                         
+            )?;                                                                                                                                                                                                                                                
+                                                                                                                                                                                                                                                            
+            // Assign the account to this program.                                                                                                                                                                                                             
+            anchor_lang::solana_program::program::invoke_signed(                                                                                                                                                                                               
+                &anchor_lang::solana_program::system_instruction::assign(                                                                                                                                                                                      
+                    &expected_position_key,                                                                                                                                                                                                                    
+                    ctx.program_id,                                                                                                                                                                                                                            
+                ),                                                                                                                                                                                                                                             
+                &[                                                                                                                                                                                                                                             
+                    position_pda.to_account_info(),                                                                                                                                                                                                            
+                    ctx.accounts.system_program.to_account_info(),                                                                                                                                                                                             
+                ],                                                                                                                                                                                                                                             
+                position_signer_seeds,                                                                                                                                                                                                                         
+            )?;                                                                                                                                                                                                                                                
+        } 
 
         let mut position_data = position_pda.try_borrow_mut_data()?;
         position_data[..8].copy_from_slice(&Position::DISCRIMINATOR);
