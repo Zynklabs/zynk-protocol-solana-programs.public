@@ -1943,6 +1943,7 @@ describe("zynk-orbit", () => {
           Array.from(defaultZovId),
           new anchor.BN(1),
           new anchor.BN(1),
+          [new anchor.BN(1)],
           null
         )
         .accounts({
@@ -1954,10 +1955,16 @@ describe("zynk-orbit", () => {
           pdvTokenAccount: pdvAta,
           zynkOpVault: coreZovPDA,
           zovTokenAccount: zovAta,
-          destinationTokenAccount: ovaultAta,
           mint: tokenMint,
           tokenProgram: TOKEN_PROGRAM_ID,
         } as any)
+        .remainingAccounts([
+          {
+            pubkey: ovaultAta,
+            isWritable: true,
+            isSigner: false,
+          },
+        ])
         .signers([manager])
         .rpc();
       assert.fail("Direct core call must not be able to sign as Orbit's PDA");
@@ -2212,7 +2219,6 @@ describe("zynk-orbit", () => {
       )
       .accounts({
         zovTokenAccount: zovAta,
-        ovaultTokenAccount: ovaultAta,
         mint: tokenMint,
         manager: manager.publicKey,
         tokenProgram: TOKEN_PROGRAM_ID,
@@ -2221,7 +2227,6 @@ describe("zynk-orbit", () => {
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: pdvAta,
         zynkOpVault: coreZovPDA,
-        ovault: ovaultPDA,
       } as any)
       .remainingAccounts([
         { pubkey: borrowIcvTokenAccount, isSigner: false, isWritable: true },
@@ -2264,7 +2269,6 @@ describe("zynk-orbit", () => {
       )
       .accounts({
         zovTokenAccount: zovAta,
-        ovaultTokenAccount: ovaultAta,
         mint: tokenMint,
         manager: manager.publicKey,
         tokenProgram: TOKEN_PROGRAM_ID,
@@ -2273,7 +2277,6 @@ describe("zynk-orbit", () => {
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: pdvAta,
         zynkOpVault: coreZovPDA,
-        ovault: ovaultPDA,
       } as any)
       .remainingAccounts([
         // NCW: destination is borrowNcwUserAta (owned by borrowNcwUser == user.primary_account)
@@ -2329,7 +2332,6 @@ describe("zynk-orbit", () => {
       )
       .accounts({
         zovTokenAccount: zovAta,
-        ovaultTokenAccount: ovaultAta,
         mint: tokenMint,
         manager: manager.publicKey,
         tokenProgram: TOKEN_PROGRAM_ID,
@@ -2338,7 +2340,6 @@ describe("zynk-orbit", () => {
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: pdvAta,
         zynkOpVault: coreZovPDA,
-        ovault: ovaultPDA,
       } as any)
       .remainingAccounts(remainingAccounts)
       .signers([manager])
@@ -2469,7 +2470,6 @@ describe("zynk-orbit", () => {
       )
       .accounts({
         zovTokenAccount: zovAta,
-        ovaultTokenAccount: ovaultAta,
         mint: tokenMint,
         manager: manager.publicKey,
         tokenProgram: TOKEN_PROGRAM_ID,
@@ -2478,7 +2478,6 @@ describe("zynk-orbit", () => {
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: pdvAta,
         zynkOpVault: czovPDA,
-        ovault: ovaultPDA,
       } as any)
       .remainingAccounts([
         { pubkey: multiIcvTokenAccounts[3], isSigner: false, isWritable: true },
@@ -2640,7 +2639,6 @@ describe("zynk-orbit", () => {
         )
         .accounts({
           zovTokenAccount: zovAta,
-          ovaultTokenAccount: ovaultAta,
           mint: tokenMint,
           manager: manager.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
@@ -2649,7 +2647,6 @@ describe("zynk-orbit", () => {
           partnerDepositVault: partnerDepositVaultPDA,
           pdvTokenAccount: pdvAta,
           zynkOpVault: czovPDA,
-          ovault: ovaultPDA,
         } as any)
         .remainingAccounts([
           {
@@ -2778,7 +2775,6 @@ describe("zynk-orbit", () => {
         )
         .accounts({
           zovTokenAccount: invalidZovAta,
-          ovaultTokenAccount: invalidOvaultAta,
           mint: invalidTokenMint,
           manager: manager.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
@@ -2787,7 +2783,6 @@ describe("zynk-orbit", () => {
           partnerDepositVault: partnerDepositVaultPDA,
           pdvTokenAccount: pdvAta,
           zynkOpVault: czovPDA,
-          ovault: ovaultPDA,
         } as any)
         .remainingAccounts([
           {
@@ -2908,7 +2903,6 @@ describe("zynk-orbit", () => {
         )
         .accounts({
           zovTokenAccount: zovAta,
-          ovaultTokenAccount: ovaultAta,
           mint: tokenMint,
           manager: manager.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
@@ -2917,7 +2911,6 @@ describe("zynk-orbit", () => {
           partnerDepositVault: partnerDepositVaultPDA,
           pdvTokenAccount: pdvAta,
           zynkOpVault: czovPDA,
-          ovault: ovaultPDA,
         } as any)
         .remainingAccounts([
           // Wrong destination: borrowIcvTokenAccount is owned by borrowIcvUser's user, not r8PDA
@@ -3050,7 +3043,6 @@ describe("zynk-orbit", () => {
       )
       .accounts({
         zovTokenAccount: zovAta,
-        ovaultTokenAccount: ovaultAta,
         mint: tokenMint,
         manager: manager.publicKey,
         tokenProgram: TOKEN_PROGRAM_ID,
@@ -3059,7 +3051,6 @@ describe("zynk-orbit", () => {
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: pdvAta,
         zynkOpVault: czovPDA,
-        ovault: ovaultPDA,
       } as any)
       .remainingAccounts([
         {
@@ -3314,7 +3305,6 @@ describe("zynk-orbit", () => {
       )
       .accounts({
         zovTokenAccount: zovAta,
-        ovaultTokenAccount: ovaultAta,
         mint: tokenMint,
         manager: manager.publicKey,
         tokenProgram: TOKEN_PROGRAM_ID,
@@ -3323,7 +3313,6 @@ describe("zynk-orbit", () => {
         partnerDepositVault: partnerDepositVaultPDA,
         pdvTokenAccount: pdvAta,
         zynkOpVault: coreZovPDA,
-        ovault: ovaultPDA,
       } as any)
       .remainingAccounts([
         { pubkey: icvTokenAccount, isSigner: false, isWritable: true },
@@ -5169,15 +5158,8 @@ describe("zynk-orbit", () => {
       disburseNcwUser.publicKey,
       tokenMint
     );
-    // vault_id is a 32-byte buffer; spenderPDA = PDA([b"vault", vault_id_32]) owns the source ATA
-    const orbitVaultId = Buffer.alloc(32);
-    orbitVaultId.write("orbit", 0, "utf-8");
-    const [spenderPDA] = PublicKey.findProgramAddressSync(
-      [Buffer.from("vault"), orbitVaultId],
-      program.programId
-    );
     const disburseSourceAta = await gocAtaAndMint(
-      spenderPDA,
+      ovaultPDA,
       tokenMint,
       5_000_000
     );
@@ -5187,7 +5169,7 @@ describe("zynk-orbit", () => {
         .value.amount
     );
     await program.methods
-      .disburse(Array.from(orbitVaultId), disburseAmount)
+      .disburse(disburseAmount)
       .accounts({
         sourceTokenAccount: disburseSourceAta,
         destinationTokenAccount: disburseNcwDestAta,
@@ -5196,6 +5178,7 @@ describe("zynk-orbit", () => {
         manager: manager.publicKey,
         tokenProgram: TOKEN_PROGRAM_ID,
         config: configPDA,
+        ovault: ovaultPDA,
       } as any)
       .signers([manager])
       .rpc();
@@ -5211,7 +5194,7 @@ describe("zynk-orbit", () => {
   });
 
   // DIS-P2: Disburse from ovault to an ICV primary wallet
-  it("Should be able to disburse funds from icv to primary wallet", async () => {
+  it("Should be able to disburse funds from ovault to icv primary wallet", async () => {
     const disburseIcvUserId = Buffer.alloc(32);
     disburseIcvUserId.write("dis_icv_user_1", 0, "utf-8");
     const disburseIcvUser = Keypair.generate();
@@ -5243,15 +5226,8 @@ describe("zynk-orbit", () => {
       disburseIcvUser.publicKey,
       tokenMint
     );
-    // vault_id is a 32-byte buffer; spenderPDA2 = PDA([b"vault", vault_id_32]) owns the source ATA
-    const orbitVaultId2 = Buffer.alloc(32);
-    orbitVaultId2.write("orbit", 0, "utf-8");
-    const [spenderPDA2] = PublicKey.findProgramAddressSync(
-      [Buffer.from("vault"), orbitVaultId2],
-      program.programId
-    );
     const disburseSourceAta2 = await gocAtaAndMint(
-      spenderPDA2,
+      ovaultPDA,
       tokenMint,
       5_000_000
     );
@@ -5261,7 +5237,7 @@ describe("zynk-orbit", () => {
         .value.amount
     );
     await program.methods
-      .disburse(Array.from(orbitVaultId2), disburseAmount2)
+      .disburse(disburseAmount2)
       .accounts({
         sourceTokenAccount: disburseSourceAta2,
         destinationTokenAccount: disburseIcvDestAta,
@@ -5270,6 +5246,7 @@ describe("zynk-orbit", () => {
         manager: manager.publicKey,
         tokenProgram: TOKEN_PROGRAM_ID,
         config: configPDA,
+        ovault: ovaultPDA,
       } as any)
       .signers([manager])
       .rpc();
@@ -5300,11 +5277,9 @@ describe("zynk-orbit", () => {
     const nonWlDisUserPDA = deriveUserPDA(nonWlDisUserId);
     const nonWlDisDestAta = await gocAta(nonWlDisUser.publicKey, tokenMint);
     const dis3OvaultAta = await gocAtaAndMint(ovaultPDA, tokenMint, 1_000_000);
-    const orbitVaultId3 = Buffer.alloc(32);
-    orbitVaultId3.write("orbit", 0, "utf-8");
     try {
       await program.methods
-        .disburse(Array.from(orbitVaultId3), new anchor.BN(500_000))
+        .disburse(new anchor.BN(500_000))
         .accounts({
           sourceTokenAccount: dis3OvaultAta,
           destinationTokenAccount: nonWlDisDestAta,
@@ -5313,6 +5288,7 @@ describe("zynk-orbit", () => {
           manager: manager.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
           config: configPDA,
+          ovault: ovaultPDA,
         } as any)
         .signers([manager])
         .rpc();
@@ -5355,11 +5331,9 @@ describe("zynk-orbit", () => {
       .rpc();
     const dis4DestAta = await gocAta(dis4User.publicKey, tokenMint);
     const dis4OvaultAta = await gocAtaAndMint(ovaultPDA, tokenMint, 1_000_000);
-    const orbitVaultId4 = Buffer.alloc(32);
-    orbitVaultId4.write("orbit", 0, "utf-8");
     try {
       await program.methods
-        .disburse(Array.from(orbitVaultId4), new anchor.BN(500_000))
+        .disburse(new anchor.BN(500_000))
         .accounts({
           sourceTokenAccount: dis4OvaultAta,
           destinationTokenAccount: dis4DestAta,
@@ -5368,6 +5342,7 @@ describe("zynk-orbit", () => {
           manager: admin.publicKey, // admin signs, NOT the protocol manager
           tokenProgram: TOKEN_PROGRAM_ID,
           config: configPDA,
+          ovault: ovaultPDA,
         } as any)
         .signers([admin])
         .rpc();
@@ -5377,6 +5352,59 @@ describe("zynk-orbit", () => {
         err.message,
         "Unauthorized",
         "Error should be Unauthorized when a non-manager tries to disburse"
+      );
+    }
+  });
+
+  // DIS-N3: Cannot disburse from non-ovault source account
+  it("Should not be able to disburse from a source account not owned by ovault", async () => {
+    const dis5UserId = Buffer.alloc(32);
+    dis5UserId.write("dis_non_ovault_1", 0, "utf-8");
+    const dis5User = Keypair.generate();
+    {
+      const sig = await provider.connection.requestAirdrop(
+        dis5User.publicKey,
+        2 * anchor.web3.LAMPORTS_PER_SOL
+      );
+      await provider.connection.confirmTransaction(sig, "confirmed");
+    }
+    const dis5UserPDA = deriveUserPDA(dis5UserId);
+    await program.methods
+      .registerUser(
+        Array.from(dis5UserId),
+        { ncw: {} },
+        [dis5User.publicKey],
+        null,
+        null,
+        [],
+        []
+      )
+      .accounts({ admin: admin.publicKey, config: configPDA } as any)
+      .signers([admin])
+      .rpc();
+    const dis5DestAta = await gocAta(dis5User.publicKey, tokenMint);
+    // Source ATA owned by manager, not ovault
+    const nonOvaultSourceAta = await gocAtaAndMint(manager.publicKey, tokenMint, 1_000_000);
+    try {
+      await program.methods
+        .disburse(new anchor.BN(500_000))
+        .accounts({
+          sourceTokenAccount: nonOvaultSourceAta,
+          destinationTokenAccount: dis5DestAta,
+          user: dis5UserPDA,
+          mint: tokenMint,
+          manager: manager.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          config: configPDA,
+          ovault: ovaultPDA,
+        } as any)
+        .signers([manager])
+        .rpc();
+      assert.fail("Expected transaction to fail because source token account is not owned by ovault");
+    } catch (err: any) {
+      assert.ok(
+        err.message.length > 0,
+        "An error should be thrown when source account is not owned by ovault"
       );
     }
   });

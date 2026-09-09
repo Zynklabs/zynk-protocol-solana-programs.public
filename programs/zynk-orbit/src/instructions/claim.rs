@@ -157,7 +157,6 @@ pub(crate) fn claim<'info>(
             pdv_token_account: pdv_token_account.to_account_info(),
             zynk_op_vault: zynk_op_vault.to_account_info(),
             zov_token_account: zov_token_account.to_account_info(),
-            destination_token_account: ctx.accounts.destination_token_account.to_account_info(),
             mint: ctx.accounts.mint.to_account_info(),
             token_program: ctx.accounts.token_program.to_account_info(),
         };
@@ -166,10 +165,12 @@ pub(crate) fn claim<'info>(
                 ctx.accounts.zynk_core_program.to_account_info(),
                 core_accounts,
                 &[authority_seeds],
-            ),
+            )
+            .with_remaining_accounts(vec![ctx.accounts.destination_token_account.to_account_info()]),
             operation.zov_id,
             recovered,
             recovered,
+            vec![recovered],
             None,
         )?;
 

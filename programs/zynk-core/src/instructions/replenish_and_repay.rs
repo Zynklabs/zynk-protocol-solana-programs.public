@@ -1,14 +1,15 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program_error::ProgramError;
-use anchor_spl::token_interface::{self, TransferChecked};
+use anchor_spl::token_interface::{self, TokenAccount, TransferChecked};
 
 use crate::*;
 
-pub(crate) fn replenish_and_repay(
-    ctx: Context<ReplenishAndRepay>,
+pub(crate) fn replenish_and_repay<'info>(
+    ctx: Context<'_, '_, '_, 'info, ReplenishAndRepay<'info>>,
     zov_id: [u8; 32],
     amount: u64,
     repay_amount: u64,
+    repay_shares: Vec<u64>,
     meta: Option<Vec<EventArg>>,
 ) -> Result<()> {
     require!(!ctx.accounts.config.paused, CoreError::ContractPaused);
@@ -48,21 +49,51 @@ pub(crate) fn replenish_and_repay(
         zov_id.as_ref(),
         &[ctx.bumps.zynk_op_vault],
     ];
-    let repay_accounts = TransferChecked {
-        from: ctx.accounts.zov_token_account.to_account_info(),
-        to: ctx.accounts.destination_token_account.to_account_info(),
-        mint: ctx.accounts.mint.to_account_info(),
-        authority: ctx.accounts.zynk_op_vault.to_account_info(),
-    };
-    token_interface::transfer_checked(
-        CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
-            repay_accounts,
-            &[zov_seeds],
-        ),
-        repay_amount,
-        ctx.accounts.mint.decimals,
-    )?;
+
+    require!(
+        repay_shares.len() == ctx.remaining_accounts.len(),
+        CoreError::InvalidAccount
+    );
+    let total_shares = repay_shares.iter().try_fold(0u64, |acc, &s| {
+        acc.checked_add(s).ok_or(ProgramError::ArithmeticOverflow)
+    })?;
+    require!(total_shares == repay_amount, CoreError::InvalidOrder);
+
+    for (dest_info, &share) in ctx.remaining_accounts.iter().zip(repay_shares.iter()) {
+        if share == 0 {
+            continue;
+        }
+        let dest_data = dest_info.try_borrow_data()?;
+        let dest_token_account = TokenAccount::try_deserialize_unchecked(
+            &mut &dest_data[..],
+        )
+        .map_err(|_| CoreError::InvalidAccount)?;
+        require!(
+            dest_token_account.mint == ctx.accounts.mint.key(),
+            CoreError::InvalidTokenMint
+        );
+        require!(
+            dest_info.key() != ctx.accounts.zov_token_account.key(),
+            CoreError::InvalidAccount
+        );
+        drop(dest_data);
+
+        let repay_accounts = TransferChecked {
+            from: ctx.accounts.zov_token_account.to_account_info(),
+            to: dest_info.to_account_info(),
+            mint: ctx.accounts.mint.to_account_info(),
+            authority: ctx.accounts.zynk_op_vault.to_account_info(),
+        };
+        token_interface::transfer_checked(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                repay_accounts,
+                &[zov_seeds],
+            ),
+            share,
+            ctx.accounts.mint.decimals,
+        )?;
+    }
 
     order_tracker.amount_in = order_tracker
         .amount_in

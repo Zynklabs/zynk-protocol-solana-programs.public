@@ -77,11 +77,11 @@ pub mod zynk_orbit {
         instructions::claim::claim(ctx, user_id, operations)
     }
 
-    /// Disburses a PDA vault balance to a registered user wallet.
+    /// Disburses an Orbit vault (ovault) balance to a registered user wallet.
     ///
     /// Only the Core-configured manager may authorize the transfer.
-    pub fn disburse(ctx: Context<Disburse>, vault_id: [u8; 32], amount: u64) -> Result<()> {
-        instructions::disburse::disburse(ctx, vault_id, amount)
+    pub fn disburse(ctx: Context<Disburse>, amount: u64) -> Result<()> {
+        instructions::disburse::disburse(ctx, amount)
     }
 
     /// Registers a user and initializes their protocol limits and allowlists.

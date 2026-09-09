@@ -186,13 +186,6 @@ pub struct ReplenishAndRepay<'info> {
     pub zov_token_account: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
-        mut,
-        constraint = destination_token_account.mint == mint.key() @ CoreError::InvalidTokenMint,
-        constraint = destination_token_account.key() != zov_token_account.key() @ CoreError::InvalidAccount,
-    )]
-    pub destination_token_account: InterfaceAccount<'info, TokenAccount>,
-
-    #[account(
         constraint = config.whitelisted_token_mints.contains(&mint.key()) @ CoreError::InvalidTokenMint,
         constraint = mint.key() == order_tracker.mint @ CoreError::InvalidTokenMint,
     )]

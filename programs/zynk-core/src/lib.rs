@@ -146,14 +146,22 @@ pub mod zynk_core {
 
     /// Atomically replenishes a ZOV and returns only outstanding principal to Orbit.
     /// The excess `amount - repay_amount` remains in the ZOV.
-    pub fn replenish_and_repay(
-        ctx: Context<ReplenishAndRepay>,
+    pub fn replenish_and_repay<'info>(
+        ctx: Context<'_, '_, '_, 'info, ReplenishAndRepay<'info>>,
         zov_id: [u8; 32],
         amount: u64,
         repay_amount: u64,
+        repay_shares: Vec<u64>,
         meta: Option<Vec<EventArg>>,
     ) -> Result<()> {
-        instructions::replenish_and_repay::replenish_and_repay(ctx, zov_id, amount, repay_amount, meta)
+        instructions::replenish_and_repay::replenish_and_repay(
+            ctx,
+            zov_id,
+            amount,
+            repay_amount,
+            repay_shares,
+            meta,
+        )
     }
 
     /// Records an order executed on an external chain (e.g. EVM) and logs the corresponding event.

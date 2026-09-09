@@ -115,13 +115,6 @@ pub struct Repay<'info> {
     pub zov_token_account: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
-        mut,
-        constraint = ovault_token_account.owner == ovault.key() @ zynk_core::CoreError::InvalidAccount,
-        constraint = ovault_token_account.mint == mint.key() @ zynk_core::CoreError::InvalidTokenMint,
-    )]
-    pub ovault_token_account: InterfaceAccount<'info, TokenAccount>,
-
-    #[account(
         constraint = mint.key() == zov_token_account.mint @ zynk_core::CoreError::InvalidTokenMint,
     )]
     pub mint: InterfaceAccount<'info, Mint>,
@@ -170,19 +163,11 @@ pub struct Repay<'info> {
     )]
     pub zynk_op_vault: UncheckedAccount<'info>,
 
-    /// CHECK: Orbit vault PDA validated by seeds and used as transfer authority.
-    #[account(
-        seeds = [VAULT_SEED, b"orbit"],
-        bump
-    )]
-    pub ovault: UncheckedAccount<'info>,
-
     // Remaining accounts (3 per position):
     // [destination_token_account, user, position_pda]
 }
 
 #[derive(Accounts)]
-#[instruction(vault_id: [u8; 32])]
 pub struct Disburse<'info> {
     #[account(
         seeds = [zynk_core::CONFIG_SEED],
@@ -192,7 +177,10 @@ pub struct Disburse<'info> {
     )]
     pub config: Account<'info, zynk_core::Config>,
 
-    #[account(mut)]
+    #[account(
+        mut,
+        constraint = source_token_account.owner == ovault.key() @ zynk_core::CoreError::InvalidAccount,
+    )]
     pub source_token_account: InterfaceAccount<'info, TokenAccount>,
 
     #[account(mut)]
@@ -205,12 +193,12 @@ pub struct Disburse<'info> {
     )]
     pub mint: InterfaceAccount<'info, Mint>,
 
-    /// CHECK: Vault PDA validated by seeds and used as transfer authority.
+    /// CHECK: Orbit vault PDA validated by seeds and used as transfer authority.
     #[account(
-        seeds = [VAULT_SEED, vault_id.as_ref()],
+        seeds = [VAULT_SEED, b"orbit"],
         bump
     )]
-    pub spender: UncheckedAccount<'info>,
+    pub ovault: UncheckedAccount<'info>,
 
     pub user: Account<'info, User>,
 

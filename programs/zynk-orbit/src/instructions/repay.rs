@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program_error::ProgramError;
-use anchor_spl::token_interface::{self, TokenAccount, TransferChecked};
+use anchor_spl::token_interface::TokenAccount;
 use zynk_core::{self, EventArg};
 
 use crate::*;
@@ -155,47 +155,16 @@ pub(crate) fn repay<'info>(
         info.share = share;
     }
 
-    // Atomically move the gross amount into Core's ZOV and only the open-position
-    // principal into Orbit's distribution vault. Any excess remains in the ZOV.
-    let authority_bump = ctx.bumps.orbit_authority;
-    let authority_seeds: &[&[u8]] = &[
-        zynk_core::ORBIT_CPI_AUTHORITY_SEED,
-        &[authority_bump],
-    ];
-    let core_accounts = zynk_core::cpi::accounts::ReplenishAndRepay {
-        config: ctx.accounts.config.to_account_info(),
-        orbit_authority: ctx.accounts.orbit_authority.to_account_info(),
-        manager: ctx.accounts.manager.to_account_info(),
-        order_tracker: ctx.accounts.order_tracker.to_account_info(),
-        partner_deposit_vault: ctx.accounts.partner_deposit_vault.to_account_info(),
-        pdv_token_account: ctx.accounts.pdv_token_account.to_account_info(),
-        zynk_op_vault: ctx.accounts.zynk_op_vault.to_account_info(),
-        zov_token_account: ctx.accounts.zov_token_account.to_account_info(),
-        destination_token_account: ctx.accounts.ovault_token_account.to_account_info(),
-        mint: ctx.accounts.mint.to_account_info(),
-        token_program: ctx.accounts.token_program.to_account_info(),
-    };
-    zynk_core::cpi::replenish_and_repay(
-        CpiContext::new_with_signer(
-            ctx.accounts.zynk_core_program.to_account_info(),
-            core_accounts,
-            &[authority_seeds],
-        ),
-        zov_id,
-        amount,
-        prepared_amount,
-        meta,
-    )?;
-
-    let ovault_seeds: &[&[u8]] = &[VAULT_SEED, b"orbit", &[ctx.bumps.ovault]];
-    let ovault_signer_seeds = &[&ovault_seeds[..]];
+    let mut shares = Vec::with_capacity(num_positions);
+    let mut cpi_destinations = Vec::with_capacity(num_positions);
 
     for i in 0..num_positions {
         let base_idx = i * 3;
         let dst_token_account: &AccountInfo = &remaining_accounts[base_idx];
-        let position_pda: &AccountInfo = &remaining_accounts[base_idx + 2];
-
         let info = &position_infos[i];
+        shares.push(info.share);
+        cpi_destinations.push(dst_token_account.clone());
+
         if info.share == 0 {
             continue;
         }
@@ -230,24 +199,50 @@ pub(crate) fn repay<'info>(
                 return Err(zynk_core::CoreError::Unauthorized.into());
             }
         }
+    }
 
-        let transfer_accounts = TransferChecked {
-            from: ctx.accounts.ovault_token_account.to_account_info(),
-            to: dst_token_account.to_account_info(),
-            mint: ctx.accounts.mint.to_account_info(),
-            authority: ctx.accounts.ovault.to_account_info(),
-        };
+    // Atomically move the gross amount into Core's ZOV and transfer open-position
+    // principal directly from the ZOV to each position's destination token account.
+    // Any excess remains in the ZOV.
+    let authority_bump = ctx.bumps.orbit_authority;
+    let authority_seeds: &[&[u8]] = &[
+        zynk_core::ORBIT_CPI_AUTHORITY_SEED,
+        &[authority_bump],
+    ];
+    let core_accounts = zynk_core::cpi::accounts::ReplenishAndRepay {
+        config: ctx.accounts.config.to_account_info(),
+        orbit_authority: ctx.accounts.orbit_authority.to_account_info(),
+        manager: ctx.accounts.manager.to_account_info(),
+        order_tracker: ctx.accounts.order_tracker.to_account_info(),
+        partner_deposit_vault: ctx.accounts.partner_deposit_vault.to_account_info(),
+        pdv_token_account: ctx.accounts.pdv_token_account.to_account_info(),
+        zynk_op_vault: ctx.accounts.zynk_op_vault.to_account_info(),
+        zov_token_account: ctx.accounts.zov_token_account.to_account_info(),
+        mint: ctx.accounts.mint.to_account_info(),
+        token_program: ctx.accounts.token_program.to_account_info(),
+    };
+    zynk_core::cpi::replenish_and_repay(
+        CpiContext::new_with_signer(
+            ctx.accounts.zynk_core_program.to_account_info(),
+            core_accounts,
+            &[authority_seeds],
+        )
+        .with_remaining_accounts(cpi_destinations),
+        zov_id,
+        amount,
+        prepared_amount,
+        shares,
+        meta,
+    )?;
 
-        let transfer_ctx = CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
-            transfer_accounts,
-            ovault_signer_seeds,
-        );
-        token_interface::transfer_checked(
-            transfer_ctx,
-            info.share,
-            ctx.accounts.mint.decimals,
-        )?;
+    for i in 0..num_positions {
+        let base_idx = i * 3;
+        let position_pda: &AccountInfo = &remaining_accounts[base_idx + 2];
+
+        let info = &position_infos[i];
+        if info.share == 0 {
+            continue;
+        }
 
         let is_position_closed = {
             let mut position_data = position_pda.try_borrow_mut_data()?;
@@ -281,10 +276,10 @@ pub(crate) fn repay<'info>(
     emit!(TxEvent {
         event_name: "Repay".to_string(),
         user_id: [0u8; 32],
-        from_owner: Pubkey::default(),
-        to_owner: ctx.accounts.ovault.key(),
+        from_owner: ctx.accounts.zynk_op_vault.key(),
+        to_owner: Pubkey::default(),
         from: ctx.accounts.zov_token_account.key(),
-        to: ctx.accounts.ovault_token_account.key(),
+        to: Pubkey::default(),
         amount: prepared_amount,
         token: ctx.accounts.mint.key(),
         domain_separator: DOMAIN_SEPARATOR,

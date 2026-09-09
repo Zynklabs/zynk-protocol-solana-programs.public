@@ -1,11 +1,12 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token_interface::{self, TransferChecked};
 use zynk_core;
 
 use crate::*;
 use crate::utils::*;
 
-pub(crate) fn disburse(ctx: Context<Disburse>, vault_id: [u8; 32], amount: u64) -> Result<()> {
+pub(crate) fn disburse(ctx: Context<Disburse>, amount: u64) -> Result<()> {
+    require!(amount > 0, OrbitError::ZeroAmount);
+
     let user = &mut ctx.accounts.user;
 
     let config = &ctx.accounts.config;
@@ -24,27 +25,23 @@ pub(crate) fn disburse(ctx: Context<Disburse>, vault_id: [u8; 32], amount: u64) 
         zynk_core::CoreError::InvalidAccount
     );
 
-    let seeds: &[&[u8]] = &[VAULT_SEED, vault_id.as_ref(), &[ctx.bumps.spender]];
-    let signer_seeds = &[&seeds[..]];
+    let ovault_bump_ref = [ctx.bumps.ovault];
+    let signer_seeds = &[&[VAULT_SEED, b"orbit", &ovault_bump_ref][..]];
 
-    let cpi_accounts = TransferChecked {
-        from: ctx.accounts.source_token_account.to_account_info(),
-        to: ctx.accounts.destination_token_account.to_account_info(),
-        mint: ctx.accounts.mint.to_account_info(),
-        authority: ctx.accounts.spender.to_account_info(),
-    };
-
-    let cpi_ctx = CpiContext::new_with_signer(
-        ctx.accounts.token_program.to_account_info(),
-        cpi_accounts,
+    transfer_with_signer_seeds(
+        &ctx.accounts.token_program,
+        &ctx.accounts.source_token_account.to_account_info(),
+        &ctx.accounts.destination_token_account.to_account_info(),
+        &ctx.accounts.mint,
+        &ctx.accounts.ovault.to_account_info(),
         signer_seeds,
-    );
-    token_interface::transfer_checked(cpi_ctx, amount, ctx.accounts.mint.decimals)?;
+        amount,
+    )?;
 
     emit!(TxEvent {
         event_name: "Disburse".to_string(),
         user_id: user.user_id,
-        from_owner: ctx.accounts.source_token_account.owner.key(),
+        from_owner: ctx.accounts.ovault.key(),
         to_owner: ctx.accounts.destination_token_account.owner.key(),
         from: ctx.accounts.source_token_account.key(),
         to: ctx.accounts.destination_token_account.key(),
