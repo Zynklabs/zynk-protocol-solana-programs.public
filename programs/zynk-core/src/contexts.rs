@@ -52,27 +52,13 @@ pub struct CreateOrder<'info> {
         bump,
     )]
     pub zynk_op_vault: UncheckedAccount<'info>,
-    #[account(
-        mut,
-        constraint = zov_token_account.owner == zynk_op_vault.key() @ CoreError::InvalidAccount,
-        constraint = zov_token_account.mint == mint.key() @ CoreError::InvalidTokenMint
-    )]
-    pub zov_token_account: InterfaceAccount<'info, TokenAccount>,
+    #[account(mut)]
+    pub zov_token_account: Option<InterfaceAccount<'info, TokenAccount>>,
 
-    #[account(
-        seeds = [BENEFICIARY_SEED, partner_id.as_ref(), beneficiary_token_account.owner.as_ref()],
-        bump,
-        constraint = beneficiary.is_active @ CoreError::InvalidBeneficiary,
-        constraint = beneficiary.public_key == beneficiary_token_account.owner @ CoreError::InvalidBeneficiary,
-    )]
-    pub beneficiary: Account<'info, Beneficiary>,
+    pub beneficiary: Option<Account<'info, Beneficiary>>,
 
-    #[account(
-        mut,
-        constraint = beneficiary_token_account.mint == zov_token_account.mint @ CoreError::InvalidAccount,
-        constraint = beneficiary_token_account.owner != zynk_op_vault.key() @ CoreError::InvalidAccount,
-    )]
-    pub beneficiary_token_account: InterfaceAccount<'info, TokenAccount>,
+    #[account(mut)]
+    pub beneficiary_token_account: Option<InterfaceAccount<'info, TokenAccount>>,
 
     #[account(
         init,

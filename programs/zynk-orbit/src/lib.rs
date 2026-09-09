@@ -240,7 +240,20 @@ pub mod zynk_orbit {
         destination_domain: u32,
         mint_recipient: [u8; 32],
         destination_caller: Option<[u8; 32]>,
+        partner_id: Option<[u8; 32]>,
+        order_id: Option<[u8; 32]>,
+        zov_id: Option<[u8; 32]>,
     ) -> Result<()> {
-        instructions::cctp::cctp(ctx, id, amount, destination_domain, mint_recipient, destination_caller)
+        instructions::cctp::cctp(
+            ctx,
+            id,
+            amount,
+            destination_domain,
+            mint_recipient,
+            destination_caller,
+            partner_id,
+            order_id,
+            zov_id,
+        )
     }
 }

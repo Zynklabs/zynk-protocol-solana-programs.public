@@ -17,18 +17,35 @@ pub(crate) fn pull_and_create_order(
     require!(!config.paused, CoreError::ContractPaused);
     require!(amount > 0, CoreError::InvalidOrder);
 
-    let beneficiary_wallet = ctx.accounts.beneficiary_token_account.owner.key();
     let partner_deposit_vault = &ctx.accounts.partner_deposit_vault;
     let zynk_op_vault = &ctx.accounts.zynk_op_vault;
     let pdv_token_account = ctx.accounts.pdv_token_account.as_ref().ok_or(CoreError::InvalidAccount)?;
+    let zov_token_account = ctx.accounts.zov_token_account.as_ref().ok_or(CoreError::InvalidAccount)?;
+    let beneficiary = ctx.accounts.beneficiary.as_ref().ok_or(CoreError::InvalidBeneficiary)?;
+    let beneficiary_token_account = ctx.accounts.beneficiary_token_account.as_ref().ok_or(CoreError::InvalidAccount)?;
+
+    let (expected_beneficiary, _bump) = Pubkey::find_program_address(
+        &[BENEFICIARY_SEED, partner_id.as_ref(), beneficiary_token_account.owner.as_ref()],
+        &crate::ID,
+    );
+    require!(beneficiary.key() == expected_beneficiary, CoreError::InvalidBeneficiary);
+    require!(beneficiary.is_active, CoreError::InvalidBeneficiary);
+    require!(beneficiary.public_key == beneficiary_token_account.owner, CoreError::InvalidBeneficiary);
+    require!(beneficiary_token_account.mint == zov_token_account.mint, CoreError::InvalidAccount);
+    require!(beneficiary_token_account.owner != zynk_op_vault.key(), CoreError::InvalidAccount);
+
+    require!(zov_token_account.owner == zynk_op_vault.key(), CoreError::InvalidAccount);
+    require!(zov_token_account.mint == ctx.accounts.mint.key(), CoreError::InvalidTokenMint);
 
     require!(pdv_token_account.owner == partner_deposit_vault.key(), CoreError::InvalidAccount);
-    require!(pdv_token_account.mint == ctx.accounts.zov_token_account.mint, CoreError::InvalidTokenMint);
+    require!(pdv_token_account.mint == zov_token_account.mint, CoreError::InvalidTokenMint);
+
+    let beneficiary_wallet = beneficiary_token_account.owner.key();
 
     // Perform token transfer from pdv_token_account to zov_token_account.
     let cpi_accounts = TransferChecked {
         from: pdv_token_account.to_account_info(),
-        to: ctx.accounts.zov_token_account.to_account_info(),
+        to: zov_token_account.to_account_info(),
         mint: ctx.accounts.mint.to_account_info(),
         authority: partner_deposit_vault.to_account_info(),
     };
@@ -48,8 +65,8 @@ pub(crate) fn pull_and_create_order(
 
     // Perform token transfer from zov_token_account to beneficiary_token_account.
     let cpi_accounts = TransferChecked {
-        from: ctx.accounts.zov_token_account.to_account_info(),
-        to: ctx.accounts.beneficiary_token_account.to_account_info(),
+        from: zov_token_account.to_account_info(),
+        to: beneficiary_token_account.to_account_info(),
         mint: ctx.accounts.mint.to_account_info(),
         authority: zynk_op_vault.to_account_info(),
     };

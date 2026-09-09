@@ -703,4 +703,14 @@ pub struct Cctp<'info> {
 
     /// CHECK: Manager-authorized instruction forwards this account as the CCTP CPI target.
     pub cctp_token_messenger_minter_program: UncheckedAccount<'info>,
+
+    /// CHECK: Core order tracker initialized during create_order CPI for ICV transfers.
+    #[account(mut)]
+    pub order_tracker: Option<UncheckedAccount<'info>>,
+
+    /// CHECK: Core partner deposit vault validated during create_order CPI for ICV transfers.
+    pub partner_deposit_vault: Option<UncheckedAccount<'info>>,
+
+    /// CHECK: Core ZOV validated during create_order CPI for ICV transfers.
+    pub zynk_op_vault: Option<UncheckedAccount<'info>>,
 }

@@ -12,6 +12,9 @@ pub(crate) fn cctp<'info>(
     destination_domain: u32,
     mint_recipient: [u8; 32],
     destination_caller: Option<[u8; 32]>,
+    partner_id: Option<[u8; 32]>,
+    order_id: Option<[u8; 32]>,
+    zov_id: Option<[u8; 32]>,
 ) -> Result<()> {
     require!(amount > 0, OrbitError::ZeroAmount);
 
@@ -56,6 +59,58 @@ pub(crate) fn cctp<'info>(
                 .principal_out
                 .checked_add(amount)
                 .ok_or(ProgramError::ArithmeticOverflow)?;
+
+            let p_id = partner_id.ok_or(OrbitError::InvalidOperation)?;
+            let o_id = order_id.ok_or(OrbitError::InvalidOperation)?;
+            let z_id = zov_id.ok_or(OrbitError::InvalidOperation)?;
+
+            let order_tracker = ctx
+                .accounts
+                .order_tracker
+                .as_ref()
+                .ok_or(zynk_core::CoreError::InvalidAccount)?;
+            let partner_deposit_vault = ctx
+                .accounts
+                .partner_deposit_vault
+                .as_ref()
+                .ok_or(zynk_core::CoreError::InvalidAccount)?;
+            let zynk_op_vault = ctx
+                .accounts
+                .zynk_op_vault
+                .as_ref()
+                .ok_or(zynk_core::CoreError::InvalidAccount)?;
+
+            let cpi_program = ctx.accounts.zynk_core_program.to_account_info();
+            let cpi_accounts = zynk_core::cpi::accounts::CreateOrder {
+                config: ctx.accounts.config.to_account_info(),
+                manager: ctx.accounts.manager.to_account_info(),
+                partner_deposit_vault: partner_deposit_vault.to_account_info(),
+                pdv_token_account: None,
+                zynk_op_vault: zynk_op_vault.to_account_info(),
+                zov_token_account: None,
+                beneficiary: None,
+                beneficiary_token_account: None,
+                order_tracker: order_tracker.to_account_info(),
+                mint: ctx.accounts.mint.to_account_info(),
+                token_program: ctx.accounts.token_program.to_account_info(),
+                system_program: ctx.accounts.system_program.to_account_info(),
+            };
+
+            let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
+            let meta = Some(vec![zynk_core::EventArg {
+                key: "txAmount".to_string(),
+                value: amount.to_string(),
+            }]);
+
+            zynk_core::cpi::create_order(
+                cpi_ctx,
+                p_id,
+                o_id,
+                z_id,
+                false,
+                0,
+                meta,
+            )?;
 
             event_user_id = id;
             let bump = ctx.bumps.user.ok_or(zynk_core::CoreError::InvalidAccount)?;

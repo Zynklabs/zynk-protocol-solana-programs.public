@@ -272,12 +272,13 @@ pub(crate) fn borrow<'info>(
         partner_deposit_vault: ctx.accounts.partner_deposit_vault.to_account_info(),
         pdv_token_account: None,
         zynk_op_vault: ctx.accounts.zynk_op_vault.to_account_info(),
-        zov_token_account: ctx.accounts.zov_token_account.to_account_info(),
-        beneficiary: ctx.accounts.beneficiary.to_account_info(),
-        beneficiary_token_account: ctx
-            .accounts
-            .beneficiary_token_account
-            .to_account_info(),
+        zov_token_account: Some(ctx.accounts.zov_token_account.to_account_info()),
+        beneficiary: Some(ctx.accounts.beneficiary.to_account_info()),
+        beneficiary_token_account: Some(
+            ctx.accounts
+                .beneficiary_token_account
+                .to_account_info(),
+        ),
         order_tracker: ctx.accounts.order_tracker.to_account_info(),
         mint: ctx.accounts.mint.to_account_info(),
         token_program: ctx.accounts.token_program.to_account_info(),

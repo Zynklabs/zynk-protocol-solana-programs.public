@@ -5947,6 +5947,9 @@ describe("zynk-orbit", () => {
             new anchor.BN(0),
             destinationDomain,
             cctpRecipient,
+            null,
+            null,
+            null,
             null
           )
           .accounts({
@@ -5960,6 +5963,9 @@ describe("zynk-orbit", () => {
             config: configPDA,
             zynkCoreProgram: core_program.programId,
             cctpTokenMessengerMinterProgram: SystemProgram.programId,
+            orderTracker: null,
+            partnerDepositVault: null,
+            zynkOpVault: null,
           } as any)
           .signers([manager])
           .rpc();
@@ -5986,6 +5992,9 @@ describe("zynk-orbit", () => {
             new anchor.BN(1000),
             destinationDomain,
             cctpRecipient,
+            null,
+            null,
+            null,
             null
           )
           .accounts({
@@ -5999,6 +6008,9 @@ describe("zynk-orbit", () => {
             config: configPDA,
             zynkCoreProgram: core_program.programId,
             cctpTokenMessengerMinterProgram: SystemProgram.programId,
+            orderTracker: null,
+            partnerDepositVault: null,
+            zynkOpVault: null,
           } as any)
           .signers([unauthorizedUser])
           .rpc();
@@ -6017,6 +6029,9 @@ describe("zynk-orbit", () => {
             new anchor.BN(1000),
             destinationDomain,
             cctpRecipient,
+            null,
+            null,
+            null,
             null
           )
           .accounts({
@@ -6030,6 +6045,9 @@ describe("zynk-orbit", () => {
             config: configPDA,
             zynkCoreProgram: core_program.programId,
             cctpTokenMessengerMinterProgram: SystemProgram.programId,
+            orderTracker: null,
+            partnerDepositVault: null,
+            zynkOpVault: null,
           } as any)
           .signers([manager])
           .rpc();
@@ -6053,6 +6071,9 @@ describe("zynk-orbit", () => {
             new anchor.BN(0),
             destinationDomain,
             cctpRecipient,
+            null,
+            null,
+            null,
             null
           )
           .accounts({
@@ -6066,6 +6087,9 @@ describe("zynk-orbit", () => {
             config: configPDA,
             zynkCoreProgram: core_program.programId,
             cctpTokenMessengerMinterProgram: SystemProgram.programId,
+            orderTracker: null,
+            partnerDepositVault: null,
+            zynkOpVault: null,
           } as any)
           .signers([manager])
           .rpc();
@@ -6097,7 +6121,10 @@ describe("zynk-orbit", () => {
             new anchor.BN(1000),
             destinationDomain,
             cctpRecipient,
-            cctpCaller
+            cctpCaller,
+            null,
+            null,
+            null
           )
           .accounts({
             sourceTokenAccount: spenderAta,
@@ -6110,6 +6137,9 @@ describe("zynk-orbit", () => {
             config: configPDA,
             zynkCoreProgram: core_program.programId,
             cctpTokenMessengerMinterProgram: SystemProgram.programId,
+            orderTracker: null,
+            partnerDepositVault: null,
+            zynkOpVault: null,
           } as any)
           .signers([unauthorizedUser])
           .rpc();
@@ -6133,6 +6163,9 @@ describe("zynk-orbit", () => {
             new anchor.BN(1000),
             destinationDomain,
             cctpRecipient,
+            null,
+            null,
+            null,
             null
           )
           .accounts({
@@ -6146,6 +6179,9 @@ describe("zynk-orbit", () => {
             config: configPDA,
             zynkCoreProgram: core_program.programId,
             cctpTokenMessengerMinterProgram: SystemProgram.programId,
+            orderTracker: null,
+            partnerDepositVault: null,
+            zynkOpVault: null,
           } as any)
           .signers([manager])
           .rpc();
@@ -6186,6 +6222,9 @@ describe("zynk-orbit", () => {
             new anchor.BN(0),
             destinationDomain,
             cctpRecipient,
+            null,
+            null,
+            null,
             null
           )
           .accounts({
@@ -6199,6 +6238,9 @@ describe("zynk-orbit", () => {
             config: configPDA,
             zynkCoreProgram: core_program.programId,
             cctpTokenMessengerMinterProgram: SystemProgram.programId,
+            orderTracker: null,
+            partnerDepositVault: null,
+            zynkOpVault: null,
           } as any)
           .signers([manager])
           .rpc();
@@ -6237,6 +6279,9 @@ describe("zynk-orbit", () => {
             new anchor.BN(1000),
             destinationDomain,
             cctpRecipient,
+            null,
+            null,
+            null,
             null
           )
           .accounts({
@@ -6250,6 +6295,9 @@ describe("zynk-orbit", () => {
             config: configPDA,
             zynkCoreProgram: core_program.programId,
             cctpTokenMessengerMinterProgram: SystemProgram.programId,
+            orderTracker: null,
+            partnerDepositVault: null,
+            zynkOpVault: null,
           } as any)
           .signers([manager])
           .rpc();
@@ -6289,6 +6337,9 @@ describe("zynk-orbit", () => {
             new anchor.BN(1000),
             destinationDomain,
             cctpRecipient,
+            null,
+            null,
+            null,
             null
           )
           .accounts({
@@ -6302,6 +6353,9 @@ describe("zynk-orbit", () => {
             config: configPDA,
             zynkCoreProgram: core_program.programId,
             cctpTokenMessengerMinterProgram: SystemProgram.programId,
+            orderTracker: null,
+            partnerDepositVault: null,
+            zynkOpVault: null,
           } as any)
           .signers([manager])
           .rpc();
@@ -6351,6 +6405,9 @@ describe("zynk-orbit", () => {
             new anchor.BN(1000),
             destinationDomain,
             cctpRecipient,
+            null,
+            null,
+            null,
             null
           )
           .accounts({
@@ -6364,6 +6421,9 @@ describe("zynk-orbit", () => {
             config: configPDA,
             zynkCoreProgram: core_program.programId,
             cctpTokenMessengerMinterProgram: SystemProgram.programId,
+            orderTracker: null,
+            partnerDepositVault: null,
+            zynkOpVault: null,
           } as any)
           .signers([nonManager])
           .rpc();
@@ -6404,6 +6464,9 @@ describe("zynk-orbit", () => {
             new anchor.BN(1000),
             destinationDomain,
             cctpRecipient,
+            null,
+            null,
+            null,
             null
           )
           .accounts({
@@ -6417,6 +6480,9 @@ describe("zynk-orbit", () => {
             config: configPDA,
             zynkCoreProgram: core_program.programId,
             cctpTokenMessengerMinterProgram: SystemProgram.programId,
+            orderTracker: null,
+            partnerDepositVault: null,
+            zynkOpVault: null,
           } as any)
           .signers([manager])
           .rpc();
@@ -6469,6 +6535,14 @@ describe("zynk-orbit", () => {
       assert.deepEqual(userAccount.cctpRecipients, [recipient]);
 
       const assertReachesCpi = async (destinationCaller: number[] | null) => {
+        // Derive a fresh order tracker for each CPI attempt
+        const cctpOrderId = generateOrderId();
+        const cctpPartnerId = Buffer.alloc(32);
+        cctpPartnerId.write(zynkPartnerId, 0, "utf-8");
+        const [cctpOrderTrackerPDA] = PublicKey.findProgramAddressSync(
+          [Buffer.from("order_tracker"), cctpPartnerId, cctpOrderId],
+          core_program.programId
+        );
         try {
           await program.methods
             .cctp(
@@ -6476,7 +6550,10 @@ describe("zynk-orbit", () => {
               new anchor.BN(1000),
               destinationDomain,
               cctpRecipient,
-              destinationCaller
+              destinationCaller,
+              Array.from(cctpPartnerId),
+              Array.from(cctpOrderId),
+              Array.from(defaultZovId)
             )
             .accounts({
               sourceTokenAccount: cctpIcvAta,
@@ -6489,6 +6566,9 @@ describe("zynk-orbit", () => {
               config: configPDA,
               zynkCoreProgram: core_program.programId,
               cctpTokenMessengerMinterProgram: SystemProgram.programId,
+              orderTracker: cctpOrderTrackerPDA,
+              partnerDepositVault: partnerDepositVaultPDA,
+              zynkOpVault: zynkOpVault,
             } as any)
             .signers([manager])
             .rpc();
@@ -6536,7 +6616,10 @@ describe("zynk-orbit", () => {
             new anchor.BN(1000),
             destinationDomain,
             cctpRecipient,
-            cctpCaller
+            cctpCaller,
+            null,
+            null,
+            null
           )
           .accounts({
             sourceTokenAccount: ovaultAta,
@@ -6549,6 +6632,9 @@ describe("zynk-orbit", () => {
             config: configPDA,
             zynkCoreProgram: core_program.programId,
             cctpTokenMessengerMinterProgram: SystemProgram.programId,
+            orderTracker: null,
+            partnerDepositVault: null,
+            zynkOpVault: null,
           } as any)
           .signers([manager])
           .rpc();
@@ -6574,6 +6660,9 @@ describe("zynk-orbit", () => {
             new anchor.BN(1000),
             destinationDomain,
             cctpRecipient,
+            null,
+            null,
+            null,
             null
           )
           .accounts({
@@ -6587,6 +6676,9 @@ describe("zynk-orbit", () => {
             config: configPDA,
             zynkCoreProgram: core_program.programId,
             cctpTokenMessengerMinterProgram: SystemProgram.programId,
+            orderTracker: null,
+            partnerDepositVault: null,
+            zynkOpVault: null,
           } as any)
           .signers([manager])
           .rpc();
