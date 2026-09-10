@@ -96,6 +96,8 @@ pub(crate) fn pull_and_create_order(
         order_tracker.beneficiary_wallet = beneficiary_wallet;
         order_tracker.partner_deposit_vault = partner_deposit_vault.key();
         order_tracker.mint = ctx.accounts.mint.key();
+        order_tracker.amount_borrowed = 0;
+        order_tracker.amount_repaid = 0;
     }
 
     emit!(OrderCreated {

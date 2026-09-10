@@ -96,6 +96,13 @@ pub struct Borrow<'info> {
     #[account(mut)]
     pub manager: Signer<'info>,
 
+    /// CHECK: Orbit-owned capability PDA used to authenticate create_order CPI to zynk-core.
+    #[account(
+        seeds = [zynk_core::ORBIT_CPI_AUTHORITY_SEED],
+        bump,
+    )]
+    pub orbit_authority: UncheckedAccount<'info>,
+
     // Remaining accounts (4 per position):
     // [source_token_account, authority_account, user, position_pda]
 }

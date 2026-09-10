@@ -116,9 +116,10 @@ pub mod zynk_core {
         zov_id: [u8; 32],
         transient: bool,
         amount: u64,
+        position_borrowed_amount: u64,
         meta: Option<Vec<EventArg>>
     ) -> Result<()> {
-        instructions::create_order::create_order(ctx, partner_id, order_id, zov_id, transient, amount, meta)
+        instructions::create_order::create_order(ctx, partner_id, order_id, zov_id, transient, amount, position_borrowed_amount, meta)
     }
 
     /// Replenishes an existing order by transferring tokens into the Zynk Operational vault.
