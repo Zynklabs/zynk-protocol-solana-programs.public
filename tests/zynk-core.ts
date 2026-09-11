@@ -4090,17 +4090,6 @@ describe("zynk-core", () => {
       .signers([admin])
       .rpc();
 
-    // Revoke timelock to clean up the account
-    await program.methods
-      .revokeTimelock()
-      .accounts({
-        config: configPDA,
-        timelock: timelockPDA,
-        authority: admin.publicKey,
-      })
-      .signers([admin])
-      .rpc();
-
     // Close the order
     await program.methods
       .closeOrders(null)
@@ -4633,20 +4622,10 @@ describe("zynk-core", () => {
     configAccount = await program.account.config.fetch(configPDA);
     assert.ok(!configAccount.paused, "Expected program to be unpaused!");
 
-    // Revoke / clean up timelock PDA
-    await program.methods
-      .revokeTimelock()
-      .accounts({
-        config: configPDA,
-        timelock: timelockPDA,
-        authority: admin.publicKey,
-      })
-      .signers([admin])
-      .rpc();
-
+    // The handler closes the timelock PDA automatically upon execution.
     try {
       await program.account.timelock.fetch(timelockPDA);
-      assert.fail("Timelock account should be closed after revoke");
+      assert.fail("Timelock account should be closed after unpause");
     } catch (error) {
       assert.include(
         error.message,
@@ -4821,17 +4800,6 @@ describe("zynk-core", () => {
       "Admin should be updated to newAdmin"
     );
 
-    // Clean up timelock PDA
-    await program.methods
-      .revokeTimelock()
-      .accounts({
-        config: configPDA,
-        timelock: actionTimelockPDA,
-        authority: guardian.publicKey,
-      })
-      .signers([guardian])
-      .rpc();
-
     // Restore admin back to original admin
     await program.methods
       .requestTimelock(action, admin.publicKey)
@@ -4869,16 +4837,6 @@ describe("zynk-core", () => {
       configAccount.admin.equals(admin.publicKey),
       "Admin should be restored"
     );
-
-    await program.methods
-      .revokeTimelock()
-      .accounts({
-        config: configPDA,
-        timelock: actionTimelockPDA,
-        authority: guardian.publicKey,
-      })
-      .signers([guardian])
-      .rpc();
   });
 
   it("Should be able to update manager via multi-signer timelock: manager requests, admin acks, guardian executes", async () => {
@@ -4935,17 +4893,6 @@ describe("zynk-core", () => {
       "Manager should be updated to newManager"
     );
 
-    // Clean up timelock PDA
-    await program.methods
-      .revokeTimelock()
-      .accounts({
-        config: configPDA,
-        timelock: actionTimelockPDA,
-        authority: admin.publicKey,
-      })
-      .signers([admin])
-      .rpc();
-
     // Restore manager back to original manager
     await program.methods
       .requestTimelock(action, manager.publicKey)
@@ -4983,16 +4930,6 @@ describe("zynk-core", () => {
       configAccount.manager.equals(manager.publicKey),
       "Manager should be restored"
     );
-
-    await program.methods
-      .revokeTimelock()
-      .accounts({
-        config: configPDA,
-        timelock: actionTimelockPDA,
-        authority: admin.publicKey,
-      })
-      .signers([admin])
-      .rpc();
   });
 
   it("Should not be able to execute UpdateGuardian before ETA even if acked (requires eta && ack)", async () => {
