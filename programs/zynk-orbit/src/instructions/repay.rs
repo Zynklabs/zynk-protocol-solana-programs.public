@@ -64,8 +64,10 @@ pub(crate) fn repay<'info>(
     struct PositionInfo {
         user_type: UserType,
         user_key: Pubkey,
+        user_id: [u8; 32],
         remaining: u64,
         share: u64,
+        dest_owner: Pubkey,
     }
     let mut position_infos = Vec::with_capacity(num_positions);
 
@@ -113,10 +115,12 @@ pub(crate) fn repay<'info>(
         drop(position_data);
 
         position_infos.push(PositionInfo {
-            user_type: user_type,
+            user_type,
             user_key,
+            user_id,
             remaining,
             share: 0,
+            dest_owner: Pubkey::default(),
         });
     }
 
@@ -207,7 +211,7 @@ pub(crate) fn repay<'info>(
     for i in 0..num_positions {
         let base_idx = i * 3;
         let dst_token_account: &AccountInfo = &remaining_accounts[base_idx];
-        let info = &position_infos[i];
+        let info = &mut position_infos[i];
         shares.push(info.share);
         cpi_destinations.push(dst_token_account.clone());
 
@@ -223,6 +227,7 @@ pub(crate) fn repay<'info>(
                 .map_err(|_| zynk_core::CoreError::InvalidAccount)?;
             token_account.owner
         };
+        info.dest_owner = dst_token_authority;
 
         match info.user_type {
             UserType::NCW => {
@@ -317,20 +322,20 @@ pub(crate) fn repay<'info>(
         if is_position_closed {
             close_account(position_pda, &ctx.accounts.manager)?;
         }
-    }
 
-    emit!(TxEvent {
-        event_name: "Repay".to_string(),
-        user_id: [0u8; 32],
-        from_owner: ctx.accounts.zynk_op_vault.key(),
-        to_owner: Pubkey::default(),
-        from: ctx.accounts.zov_token_account.key(),
-        to: Pubkey::default(),
-        amount: total_repay_for_core,
-        token: ctx.accounts.mint.key(),
-        domain_separator: DOMAIN_SEPARATOR,
-        order_id,
-    });
+        emit!(TxEvent {
+            event_name: "Repay".to_string(),
+            user_id: info.user_id,
+            from_owner: ctx.accounts.zov_token_account.owner,
+            to_owner: info.dest_owner,
+            from: ctx.accounts.zov_token_account.key(),
+            to: remaining_accounts[base_idx].key(),
+            amount: info.share,
+            token: ctx.accounts.mint.key(),
+            domain_separator: DOMAIN_SEPARATOR,
+            order_id,
+        });
+    }
 
     Ok(())
 }
