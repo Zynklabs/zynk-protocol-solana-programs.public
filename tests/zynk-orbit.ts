@@ -3645,10 +3645,11 @@ describe("zynk-orbit", () => {
 
     // Clean up — reject so later tests start clean
     await program.methods
-      .rejectWithdraw(Array.from(lpUserId))
+      .revokeWithdraw(Array.from(lpUserId))
       .accounts({
         request: lpWithdrawRequestPDA,
-        admin: admin.publicKey,
+        user: deriveUserPDA(lpUserId),
+        signer: admin.publicKey,
         config: configPDA,
       } as any)
       .signers([admin])
@@ -3932,10 +3933,11 @@ describe("zynk-orbit", () => {
 
     // Clean up
     await program.methods
-      .rejectWithdraw(Array.from(lb2UserId))
+      .revokeWithdraw(Array.from(lb2UserId))
       .accounts({
         request: lb2TestPDA,
-        admin: admin.publicKey,
+        user: lb2UserPDA,
+        signer: admin.publicKey,
         config: configPDA,
       } as any)
       .signers([admin])
@@ -4018,15 +4020,16 @@ describe("zynk-orbit", () => {
       "Request should exist before rejection"
     );
 
-    // Reject as the admin (only admin can reject withdraw requests)
+    // Reject as the primary account holder
     await program.methods
-      .rejectWithdraw(Array.from(icvUserId))
+      .revokeWithdraw(Array.from(icvUserId))
       .accounts({
         request: withdrawRequestPDA,
-        admin: admin.publicKey,
+        user: deriveUserPDA(icvUserId),
+        signer: icvUser.publicKey,
         config: configPDA,
       } as any)
-      .signers([admin])
+      .signers([icvUser])
       .rpc();
 
     const reqInfo = await provider.connection.getAccountInfo(
@@ -4056,13 +4059,14 @@ describe("zynk-orbit", () => {
       .signers([icvUser])
       .rpc();
 
-    // Attempt rejection with a non-admin wallet (manager) — must fail with Unauthorized
+    // Attempt rejection with a wallet that is neither admin nor the user
     try {
       await program.methods
-        .rejectWithdraw(Array.from(icvUserId))
+        .revokeWithdraw(Array.from(icvUserId))
         .accounts({
           request: withdrawRequestPDA,
-          admin: manager.publicKey, // wrong — not the admin
+          user: deriveUserPDA(icvUserId),
+          signer: manager.publicKey,
           config: configPDA,
         } as any)
         .signers([manager])
@@ -4079,10 +4083,11 @@ describe("zynk-orbit", () => {
 
     // Clean up: admin rejects the pending request
     await program.methods
-      .rejectWithdraw(Array.from(icvUserId))
+      .revokeWithdraw(Array.from(icvUserId))
       .accounts({
         request: withdrawRequestPDA,
-        admin: admin.publicKey,
+        user: deriveUserPDA(icvUserId),
+        signer: admin.publicKey,
         config: configPDA,
       } as any)
       .signers([admin])

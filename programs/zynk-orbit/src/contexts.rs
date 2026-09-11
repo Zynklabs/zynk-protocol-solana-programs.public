@@ -498,21 +498,31 @@ pub struct ApproveWithdraw<'info> {
 }
 
 #[derive(Accounts)]
-pub struct RejectWithdraw<'info> {
+#[instruction(user_id: [u8; 32])]
+pub struct RevokeWithdraw<'info> {
     #[account(
         seeds = [zynk_core::CONFIG_SEED],
         seeds::program = ZynkCore::id(),
         bump,
-        has_one = admin @ zynk_core::CoreError::Unauthorized
     )]
     pub config: Account<'info, zynk_core::Config>,
 
-    /// CHECK: The admin-authorized handler closes this supplied request account.
-    #[account(mut)]
-    pub request: UncheckedAccount<'info>,
+    #[account(
+        mut,
+        seeds = [WITHDRAW_REQUEST_SEED, user_id.as_ref()],
+        bump,
+        constraint = request.user_id == user_id @ OrbitError::UserIdMismatch
+    )]
+    pub request: Account<'info, WithdrawRequest>,
+
+    #[account(
+        seeds = [USER_SEED, user_id.as_ref()],
+        bump,
+    )]
+    pub user: Account<'info, User>,
 
     #[account(mut)]
-    pub admin: Signer<'info>,
+    pub signer: Signer<'info>,
 
     pub system_program: Program<'info, System>,
 
