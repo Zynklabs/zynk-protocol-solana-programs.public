@@ -10,6 +10,7 @@ pub(crate) fn create_order(
     zov_id: [u8; 32],
     transient: bool,
     amount: u64,
+    borrowed_amount: u64,
     meta: Option<Vec<EventArg>>
 ) -> Result<()> {
     // Check if program is paused.
@@ -91,6 +92,19 @@ pub(crate) fn create_order(
         }
     }
 
+    // Determine position_borrowed based on whether the call is from Orbit.
+    // Only when the Orbit authority PDA is present (and validated by Anchor)
+    // do we honour the supplied borrowed_amount.
+    let is_orbit_call = ctx.accounts.orbit_authority.is_some();
+    let effective_borrowed = if is_orbit_call {
+        require!(borrowed_amount <= effective_amount, CoreError::InvalidOrder);
+        borrowed_amount
+    } else {
+        // Non-Orbit callers must not set a position borrowed amount.
+        require!(borrowed_amount == 0, CoreError::InvalidOrder);
+        0
+    };
+
     let order_tracker = &mut ctx.accounts.order_tracker;
     if transient {
         close_account(order_tracker, &ctx.accounts.manager)?;
@@ -102,6 +116,8 @@ pub(crate) fn create_order(
         order_tracker.beneficiary_wallet = beneficiary_wallet;
         order_tracker.partner_deposit_vault = partner_deposit_vault;
         order_tracker.mint = ctx.accounts.mint.key();
+        order_tracker.amount_borrowed = effective_borrowed;
+        order_tracker.amount_repaid = 0;
     }
 
     emit!(OrderCreated {

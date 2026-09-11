@@ -48,6 +48,8 @@ pub struct OrderTracker {
     pub beneficiary_wallet: Pubkey,
     pub partner_deposit_vault: Pubkey,
     pub mint: Pubkey,
+    pub amount_borrowed: u64,
+    pub amount_repaid: u64,
 }
 
 #[account]

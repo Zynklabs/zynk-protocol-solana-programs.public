@@ -75,6 +75,14 @@ pub struct CreateOrder<'info> {
     pub mint: InterfaceAccount<'info, Mint>,
     pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
+
+    #[account(
+        signer,
+        seeds = [ORBIT_CPI_AUTHORITY_SEED],
+        seeds::program = ZYNK_ORBIT_ID,
+        bump,
+    )]
+    pub orbit_authority: Option<UncheckedAccount<'info>>,
 }
 
 #[derive(Accounts)]
@@ -234,7 +242,6 @@ pub struct RecordOrder<'info> {
     pub system_program: Program<'info, System>,
 }
 
-
 #[derive(Accounts)]
 #[instruction(partner_id: [u8; 32], public_key: Pubkey)]
 pub struct WhitelistBeneficiary<'info> {
@@ -391,7 +398,6 @@ pub struct SignTimelock<'info> {
     )]
     pub authority: Signer<'info>,
 }
-
 
 #[derive(Accounts)]
 pub struct Pause<'info> {

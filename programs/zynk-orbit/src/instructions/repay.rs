@@ -17,7 +17,6 @@ pub(crate) fn repay<'info>(
     // Each position is supplied as
     // [destination_token_account, user, position_pda].
     let num_positions = ctx.remaining_accounts.len() / 3;
-    require!(num_positions > 0, OrbitError::EmptyPositions);
     require!(
         ctx.remaining_accounts.len() % 3 == 0,
         OrbitError::InvalidPositionOperation
@@ -44,10 +43,17 @@ pub(crate) fn repay<'info>(
     );
     let amount_out = order_tracker.amount_out;
     let amount_in = order_tracker.amount_in;
+    let amount_borrowed = order_tracker.amount_borrowed;
+    let amount_repaid_tracker = order_tracker.amount_repaid;
     drop(order_tracker_data);
 
     let remaining_order = amount_out
         .checked_sub(amount_in)
+        .ok_or(ProgramError::ArithmeticOverflow)?;
+
+    // Aggregate position outstanding across ALL positions (not just supplied ones).
+    let aggregate_position_outstanding = amount_borrowed
+        .checked_sub(amount_repaid_tracker)
         .ok_or(ProgramError::ArithmeticOverflow)?;
 
     let prepared_amount = amount.min(remaining_order);
@@ -114,19 +120,59 @@ pub(crate) fn repay<'info>(
         });
     }
 
-    let open_position_total = position_infos.iter().try_fold(0u64, |total, info| {
+    // Sum of outstanding amounts for the supplied positions only.
+    let supplied_position_total = position_infos.iter().try_fold(0u64, |total, info| {
         total.checked_add(info.remaining).ok_or(ProgramError::ArithmeticOverflow)
     })?;
-    require!(open_position_total == remaining_order, OrbitError::AmountMismatch);
+
+    // Cap the amount that goes to position repayments: cannot exceed supplied
+    // position total, cannot exceed aggregate position outstanding, cannot exceed
+    // the prepared amount.
+    let position_repay_cap = supplied_position_total
+        .min(aggregate_position_outstanding)
+        .min(prepared_amount);
+
+    // Determine how much goes to ZOV settlement (excess after position repays).
+    // ZOV settlement is only allowed when ALL position debt is fully repaid.
+    let position_repay_amount;
+    let zov_settlement;
+    if prepared_amount > position_repay_cap {
+        let excess = prepared_amount
+            .checked_sub(position_repay_cap)
+            .ok_or(ProgramError::ArithmeticOverflow)?;
+
+        // remaining unsupplied position debt after this repayment
+        let remaining_unsupplied_debt = aggregate_position_outstanding
+            .checked_sub(position_repay_cap)
+            .ok_or(ProgramError::ArithmeticOverflow)?;
+
+        if remaining_unsupplied_debt == 0 {
+            // All position debt is settled; excess can go to ZOV.
+            position_repay_amount = position_repay_cap;
+            zov_settlement = excess;
+        } else {
+            // There are still open positions not supplied in this call.
+            // Excess cannot go to ZOV — cap the total at position repay cap.
+            position_repay_amount = position_repay_cap;
+            zov_settlement = 0;
+        }
+    } else {
+        position_repay_amount = prepared_amount;
+        zov_settlement = 0;
+    }
+
+    let total_repay_for_core = position_repay_amount
+        .checked_add(zov_settlement)
+        .ok_or(ProgramError::ArithmeticOverflow)?;
 
     // Allocate proportionally with ceiling division while capping each share
     // by both the position balance and the undistributed amount.
-    let mut remaining_amount = prepared_amount;
+    let mut remaining_amount = position_repay_amount;
     for info in position_infos.iter_mut() {
-        let share = if prepared_amount > 0 {
-            let prepared_128 = prepared_amount as u128;
+        let share = if position_repay_amount > 0 && supplied_position_total > 0 {
+            let prepared_128 = position_repay_amount as u128;
             let remaining_info_128 = info.remaining as u128;
-            let remaining_order_128 = remaining_order as u128;
+            let total_128 = supplied_position_total as u128;
 
             // Perform intermediate math safely in 128-bit space
             let numerator = prepared_128
@@ -135,11 +181,11 @@ pub(crate) fn repay<'info>(
 
             // Ceiling division: ceil(A / B) = (A + B - 1) / B
             let numerator_ceil = numerator
-                .checked_add(remaining_order_128.saturating_sub(1))
+                .checked_add(total_128.saturating_sub(1))
                 .ok_or(ProgramError::ArithmeticOverflow)?;
 
             let raw_share_128 = numerator_ceil
-                .checked_div(remaining_order_128)
+                .checked_div(total_128)
                 .ok_or(ProgramError::ArithmeticOverflow)?;
 
             // Safe downcast back to u64
@@ -230,7 +276,7 @@ pub(crate) fn repay<'info>(
         .with_remaining_accounts(cpi_destinations),
         zov_id,
         amount,
-        prepared_amount,
+        total_repay_for_core,
         shares,
         meta,
     )?;
@@ -280,7 +326,7 @@ pub(crate) fn repay<'info>(
         to_owner: Pubkey::default(),
         from: ctx.accounts.zov_token_account.key(),
         to: Pubkey::default(),
-        amount: prepared_amount,
+        amount: total_repay_for_core,
         token: ctx.accounts.mint.key(),
         domain_separator: DOMAIN_SEPARATOR,
         order_id,

@@ -424,9 +424,11 @@ describe("zynk-core", () => {
           Array.from(defaultZovId),
           true, // transient
           amount,
+          new anchor.BN(0),
           null
         )
         .accounts({
+          orbitAuthority: null,
           config: configPDA,
           manager: manager.publicKey,
           partnerDepositVault: partnerDepositVaultPDA,
@@ -478,6 +480,7 @@ describe("zynk-core", () => {
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -570,6 +573,7 @@ describe("zynk-core", () => {
           null
         )
         .accounts({
+          orbitAuthority: null,
           config: configPDA,
           manager: manager.publicKey,
           partnerDepositVault: partnerDepositVaultPDA,
@@ -621,6 +625,7 @@ describe("zynk-core", () => {
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -697,9 +702,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -806,9 +813,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
+        new anchor.BN(0),
         meta
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -851,9 +860,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false, // !transient
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -960,9 +971,11 @@ describe("zynk-core", () => {
           Array.from(defaultZovId),
           false,
           amount,
+          new anchor.BN(0),
           null
         )
         .accounts({
+          orbitAuthority: null,
           config: configPDA,
           manager: manager.publicKey,
           partnerDepositVault: partnerDepositVaultPDA,
@@ -1110,6 +1123,7 @@ describe("zynk-core", () => {
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -1211,6 +1225,7 @@ describe("zynk-core", () => {
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -1307,9 +1322,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         true, // transient
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -1404,9 +1421,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         true, // transient
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -1489,9 +1508,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false, // !transient
         new anchor.BN(1000000000000),
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -1762,9 +1783,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount.muln(2),
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -2024,9 +2047,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -2158,9 +2183,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -2248,9 +2275,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -2339,9 +2368,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -2438,6 +2469,7 @@ describe("zynk-core", () => {
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -2518,6 +2550,7 @@ describe("zynk-core", () => {
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -2588,9 +2621,11 @@ describe("zynk-core", () => {
           Array.from(defaultZovId),
           false,
           amount,
+          new anchor.BN(0),
           null
         )
         .accounts({
+          orbitAuthority: null,
           config: configPDA,
           manager: manager.publicKey,
           pdvTokenAccount: atas.partnerDepositTokenAccountInvalid, // Using invalid token
@@ -2632,6 +2667,7 @@ describe("zynk-core", () => {
           null
         )
         .accounts({
+          orbitAuthority: null,
           config: configPDA,
           manager: manager.publicKey,
           partnerDepositVault: partnerDepositVaultPDA,
@@ -2676,6 +2712,7 @@ describe("zynk-core", () => {
           null
         )
         .accounts({
+          orbitAuthority: null,
           config: configPDA,
           manager: manager.publicKey,
           partnerDepositVault: partnerDepositVaultPDA,
@@ -2717,9 +2754,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -2802,9 +2841,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -2908,6 +2949,7 @@ describe("zynk-core", () => {
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -3010,6 +3052,7 @@ describe("zynk-core", () => {
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -3096,9 +3139,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -3185,9 +3230,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -3702,6 +3749,7 @@ describe("zynk-core", () => {
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -3727,9 +3775,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -3854,9 +3904,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -3990,9 +4042,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -4145,9 +4199,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -4241,9 +4297,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
