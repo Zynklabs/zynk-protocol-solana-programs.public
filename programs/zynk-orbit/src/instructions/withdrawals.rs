@@ -48,6 +48,9 @@ pub(crate) fn request_withdraw(
         public_key: ctx.accounts.signer.key(),
         domain_separator: DOMAIN_SEPARATOR,
         partners: Vec::new(),
+        signer: ctx.accounts.signer.key(),
+        timestamp: Clock::get()?.unix_timestamp,
+        value: amount as i64,
     });
     Ok(())
 }
@@ -147,6 +150,8 @@ pub(crate) fn approve_withdraw(
         token: ctx.accounts.mint.key(),
         domain_separator: DOMAIN_SEPARATOR,
         order_id: [0u8; 32],
+        signer: ctx.accounts.admin.key(),
+        timestamp: Clock::get()?.unix_timestamp,
     });
 
     Ok(())
@@ -171,6 +176,9 @@ pub(crate) fn revoke_withdraw(ctx: Context<RevokeWithdraw>, user_id: [u8; 32]) -
         public_key: ctx.accounts.signer.key(),
         domain_separator: DOMAIN_SEPARATOR,
         partners: Vec::new(),
+        signer: ctx.accounts.signer.key(),
+        timestamp: Clock::get()?.unix_timestamp,
+        value: 0,
     });
 
     Ok(())

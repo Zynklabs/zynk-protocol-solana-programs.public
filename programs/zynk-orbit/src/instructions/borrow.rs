@@ -262,6 +262,8 @@ pub(crate) fn borrow<'info>(
             token: ctx.accounts.mint.key(),
             domain_separator: DOMAIN_SEPARATOR,
             order_id,
+            signer: ctx.accounts.manager.key(),
+            timestamp: Clock::get()?.unix_timestamp,
         });
     }
 

@@ -16,7 +16,9 @@ pub(crate) fn whitelist_beneficiary(ctx: Context<WhitelistBeneficiary>, partner_
         partner_id,
         public_key,
         is_active,
-        domain_separator: DOMAIN_SEPARATOR
+        domain_separator: DOMAIN_SEPARATOR,
+        signer: ctx.accounts.authority.key(),
+        allow_transient,
     });
 
     Ok(())
@@ -33,7 +35,9 @@ pub(crate) fn toggle_beneficiary(ctx: Context<ToggleBeneficiary>) -> Result<()> 
         partner_id: beneficiary.partner_id,
         public_key: beneficiary.public_key,
         is_active,
-        domain_separator: DOMAIN_SEPARATOR
+        domain_separator: DOMAIN_SEPARATOR,
+        signer: ctx.accounts.authority.key(),
+        allow_transient: beneficiary.allow_transient,
     });
 
     Ok(())
@@ -47,7 +51,9 @@ pub(crate) fn revoke_beneficiary(ctx: Context<RevokeBeneficiary>) -> Result<()> 
         partner_id: beneficiary.partner_id,
         public_key: beneficiary.public_key,
         is_active: false,
-        domain_separator: DOMAIN_SEPARATOR
+        domain_separator: DOMAIN_SEPARATOR,
+        signer: ctx.accounts.authority.key(),
+        allow_transient: beneficiary.allow_transient,
     });
 
     Ok(())

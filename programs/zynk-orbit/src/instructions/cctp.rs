@@ -166,6 +166,8 @@ pub(crate) fn cctp<'info>(
         mint_recipient,
         destination_caller: dest_caller_bytes,
         domain_separator: DOMAIN_SEPARATOR,
+        signer: ctx.accounts.manager.key(),
+        timestamp: Clock::get()?.unix_timestamp,
     });
 
     Ok(())

@@ -56,6 +56,10 @@ pub(crate) fn register_user(
         public_key: wallets[0],
         domain_separator: DOMAIN_SEPARATOR,
         partners: user.whitelisted_partners.clone(),
+        signer: ctx.accounts.admin.key(),
+        timestamp: Clock::get()?.unix_timestamp,
+        // Emit the cliff period that was set; i64::MAX means "no cliff".
+        value: user.cliff_period,
     });
 
     Ok(())
@@ -81,6 +85,9 @@ pub(crate) fn update_wallets(
         public_key: wallets[0],
         domain_separator: DOMAIN_SEPARATOR,
         partners: Vec::new(),
+        signer: ctx.accounts.admin.key(),
+        timestamp: Clock::get()?.unix_timestamp,
+        value: 0,
     });
 
     Ok(())
@@ -124,6 +131,9 @@ pub(crate) fn update_partner_whitelist(
         public_key: user.wallets[0],
         domain_separator: DOMAIN_SEPARATOR,
         partners: user.whitelisted_partners.clone(),
+        signer: ctx.accounts.admin.key(),
+        timestamp: Clock::get()?.unix_timestamp,
+        value: partner_id as i64,
     });
 
     Ok(())
@@ -131,7 +141,7 @@ pub(crate) fn update_partner_whitelist(
 
 pub(crate) fn update_cctp_recipient(
     ctx: Context<UpdateCctpRecipient>,
-    _user_id: [u8; 32],
+    user_id: [u8; 32],
     action: WhitelistAction,
     recipient: CctpRecipient,
 ) -> Result<()> {
@@ -154,6 +164,18 @@ pub(crate) fn update_cctp_recipient(
             user.cctp_recipients.swap_remove(position);
         }
     }
+
+    emit!(AxEvent {
+        event_name: "CctpRecipientUpdated".to_string(),
+        user_id,
+        public_key: ctx.accounts.admin.key(),
+        domain_separator: DOMAIN_SEPARATOR,
+        partners: Vec::new(),
+        signer: ctx.accounts.admin.key(),
+        timestamp: Clock::get()?.unix_timestamp,
+        // destination_domain identifies which chain's recipient changed.
+        value: recipient.destination_domain as i64,
+    });
 
     Ok(())
 }
@@ -189,6 +211,9 @@ pub(crate) fn update_max_principal(
         public_key: user.wallets[0],
         domain_separator: DOMAIN_SEPARATOR,
         partners: Vec::new(),
+        signer: ctx.accounts.admin.key(),
+        timestamp: Clock::get()?.unix_timestamp,
+        value: max_principal as i64,
     });
     Ok(())
 }
