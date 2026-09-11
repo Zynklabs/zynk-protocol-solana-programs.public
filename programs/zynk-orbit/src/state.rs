@@ -61,7 +61,7 @@ impl User {
 #[derive(InitSpace)]
 pub struct WithdrawRequest {
     pub user_id: [u8; 32],
-    pub amount: u32,
+    pub amount: u64,
     pub destination: Pubkey,
 }
 

@@ -10,7 +10,8 @@ pub(crate) fn create_order(
     zov_id: [u8; 32],
     transient: bool,
     amount: u64,
-    meta: Option<Vec<EventArg>>
+    borrowed_amount: u64,
+    meta: Option<Vec<EventArg>>,
 ) -> Result<()> {
     // Check if program is paused.
     let config = &ctx.accounts.config;
@@ -18,19 +19,31 @@ pub(crate) fn create_order(
     let partner_deposit_vault = ctx.accounts.partner_deposit_vault.key();
     let zynk_op_vault = ctx.accounts.zynk_op_vault.key();
 
-    let (beneficiary_wallet, allow_transient) = match (&ctx.accounts.beneficiary, &ctx.accounts.beneficiary_token_account) {
+    let (beneficiary_wallet, allow_transient) = match (
+        &ctx.accounts.beneficiary,
+        &ctx.accounts.beneficiary_token_account,
+    ) {
         (Some(beneficiary), Some(bta)) => {
             let (expected_beneficiary, _bump) = Pubkey::find_program_address(
                 &[BENEFICIARY_SEED, partner_id.as_ref(), bta.owner.as_ref()],
                 &crate::ID,
             );
-            require!(beneficiary.key() == expected_beneficiary, CoreError::InvalidBeneficiary);
+            require!(
+                beneficiary.key() == expected_beneficiary,
+                CoreError::InvalidBeneficiary
+            );
             require!(beneficiary.is_active, CoreError::InvalidBeneficiary);
-            require!(beneficiary.public_key == bta.owner, CoreError::InvalidBeneficiary);
+            require!(
+                beneficiary.public_key == bta.owner,
+                CoreError::InvalidBeneficiary
+            );
             if let Some(ref zov_ta) = ctx.accounts.zov_token_account {
                 require!(bta.mint == zov_ta.mint, CoreError::InvalidAccount);
             } else {
-                require!(bta.mint == ctx.accounts.mint.key(), CoreError::InvalidAccount);
+                require!(
+                    bta.mint == ctx.accounts.mint.key(),
+                    CoreError::InvalidAccount
+                );
             }
             require!(bta.owner != zynk_op_vault, CoreError::InvalidAccount);
             (bta.owner.key(), beneficiary.allow_transient)
@@ -42,17 +55,28 @@ pub(crate) fn create_order(
         _ => return err!(CoreError::InvalidBeneficiary),
     };
 
-    require!(
-        allow_transient || !transient,
-        CoreError::InvalidBeneficiary
-    );
+    require!(allow_transient || !transient, CoreError::InvalidBeneficiary);
 
     let mut effective_amount = amount;
     if amount != 0 {
-        let zov_token_account = ctx.accounts.zov_token_account.as_ref().ok_or(CoreError::InvalidAccount)?;
-        let bta = ctx.accounts.beneficiary_token_account.as_ref().ok_or(CoreError::InvalidAccount)?;
-        require!(zov_token_account.owner == zynk_op_vault, CoreError::InvalidAccount);
-        require!(zov_token_account.mint == ctx.accounts.mint.key(), CoreError::InvalidTokenMint);
+        let zov_token_account = ctx
+            .accounts
+            .zov_token_account
+            .as_ref()
+            .ok_or(CoreError::InvalidAccount)?;
+        let bta = ctx
+            .accounts
+            .beneficiary_token_account
+            .as_ref()
+            .ok_or(CoreError::InvalidAccount)?;
+        require!(
+            zov_token_account.owner == zynk_op_vault,
+            CoreError::InvalidAccount
+        );
+        require!(
+            zov_token_account.mint == ctx.accounts.mint.key(),
+            CoreError::InvalidTokenMint
+        );
 
         // Perform token transfer from zov_token_account to beneficiary_token_account.
         let cpi_accounts = TransferChecked {
@@ -76,8 +100,14 @@ pub(crate) fn create_order(
         token_interface::transfer_checked(cpi_ctx, amount, ctx.accounts.mint.decimals)?;
     } else {
         if let Some(ref zov_token_account) = ctx.accounts.zov_token_account {
-            require!(zov_token_account.owner == zynk_op_vault, CoreError::InvalidAccount);
-            require!(zov_token_account.mint == ctx.accounts.mint.key(), CoreError::InvalidTokenMint);
+            require!(
+                zov_token_account.owner == zynk_op_vault,
+                CoreError::InvalidAccount
+            );
+            require!(
+                zov_token_account.mint == ctx.accounts.mint.key(),
+                CoreError::InvalidTokenMint
+            );
         }
         if let Some(ref meta_args) = meta {
             effective_amount = match meta_args
@@ -91,6 +121,19 @@ pub(crate) fn create_order(
         }
     }
 
+    // Determine position_borrowed based on whether the call is from Orbit.
+    // Only when the Orbit authority PDA is present (and validated by Anchor)
+    // do we honour the supplied borrowed_amount.
+    let is_orbit_call = ctx.accounts.orbit_authority.is_some();
+    let effective_borrowed = if is_orbit_call {
+        require!(borrowed_amount <= effective_amount, CoreError::InvalidOrder);
+        borrowed_amount
+    } else {
+        // Non-Orbit callers must not set a position borrowed amount.
+        require!(borrowed_amount == 0, CoreError::InvalidOrder);
+        0
+    };
+
     let order_tracker = &mut ctx.accounts.order_tracker;
     if transient {
         close_account(order_tracker, &ctx.accounts.manager)?;
@@ -102,6 +145,8 @@ pub(crate) fn create_order(
         order_tracker.beneficiary_wallet = beneficiary_wallet;
         order_tracker.partner_deposit_vault = partner_deposit_vault;
         order_tracker.mint = ctx.accounts.mint.key();
+        order_tracker.amount_borrowed = effective_borrowed;
+        order_tracker.amount_repaid = 0;
     }
 
     emit!(OrderCreated {

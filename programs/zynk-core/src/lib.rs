@@ -1,15 +1,15 @@
 use anchor_lang::prelude::*;
 
-mod contexts;
 mod constants;
+mod contexts;
 mod error;
 mod events;
 mod instructions;
 mod state;
 mod utils;
 
-pub use contexts::*;
 pub use constants::*;
+pub use contexts::*;
 pub use error::*;
 pub use events::*;
 pub use state::*;
@@ -44,11 +44,10 @@ pub mod zynk_core {
         ctx: Context<Initialize>,
         admin: Pubkey,
         guardian: Pubkey,
-        whitelisted_token_mints: Vec<Pubkey>
+        whitelisted_token_mints: Vec<Pubkey>,
     ) -> Result<()> {
         instructions::initialize::initialize(ctx, admin, guardian, whitelisted_token_mints)
     }
-
 
     /// Pulls tokens from a partner deposit vault, forwards them to a beneficiary,
     /// and creates a corresponding order.
@@ -81,9 +80,11 @@ pub mod zynk_core {
         zov_id: [u8; 32],
         transient: bool,
         amount: u64,
-        meta: Option<Vec<EventArg>>
+        meta: Option<Vec<EventArg>>,
     ) -> Result<()> {
-        instructions::pull_and_create_order::pull_and_create_order(ctx, partner_id, order_id, zov_id, transient, amount, meta)
+        instructions::pull_and_create_order::pull_and_create_order(
+            ctx, partner_id, order_id, zov_id, transient, amount, meta,
+        )
     }
 
     /// Creates an order and optionally transfers tokens from the Zynk Operational vault
@@ -116,9 +117,19 @@ pub mod zynk_core {
         zov_id: [u8; 32],
         transient: bool,
         amount: u64,
-        meta: Option<Vec<EventArg>>
+        borrowed_amount: u64,
+        meta: Option<Vec<EventArg>>,
     ) -> Result<()> {
-        instructions::create_order::create_order(ctx, partner_id, order_id, zov_id, transient, amount, meta)
+        instructions::create_order::create_order(
+            ctx,
+            partner_id,
+            order_id,
+            zov_id,
+            transient,
+            amount,
+            borrowed_amount,
+            meta,
+        )
     }
 
     /// Replenishes an existing order by transferring tokens into the Zynk Operational vault.
@@ -139,7 +150,7 @@ pub mod zynk_core {
         ctx: Context<Replenish>,
         amount: u64,
         close_order: bool,
-        meta: Option<Vec<EventArg>>
+        meta: Option<Vec<EventArg>>,
     ) -> Result<()> {
         instructions::replenish::replenish(ctx, amount, close_order, meta)
     }
@@ -194,7 +205,18 @@ pub mod zynk_core {
         domain_separator: Option<u64>,
         meta: Option<Vec<EventArg>>,
     ) -> Result<()> {
-        instructions::record_order::record_order(ctx, partner_id, order_id, token, zynk_op_vault, partner_deposit_vault, beneficiary_wallet, amount, domain_separator, meta)
+        instructions::record_order::record_order(
+            ctx,
+            partner_id,
+            order_id,
+            token,
+            zynk_op_vault,
+            partner_deposit_vault,
+            beneficiary_wallet,
+            amount,
+            domain_separator,
+            meta,
+        )
     }
 
     /// Closes multiple order tracker accounts in a single instruction.
@@ -215,9 +237,18 @@ pub mod zynk_core {
     //////////////////// beneficiary whitelist /////////////////////
     ////////////////////////////////////////////////////////////////
 
-
-    pub fn whitelist_beneficiary(ctx: Context<WhitelistBeneficiary>, partner_id: [u8; 32], public_key: Pubkey, allow_transient: bool) -> Result<()> {
-        instructions::beneficiaries::whitelist_beneficiary(ctx, partner_id, public_key, allow_transient)
+    pub fn whitelist_beneficiary(
+        ctx: Context<WhitelistBeneficiary>,
+        partner_id: [u8; 32],
+        public_key: Pubkey,
+        allow_transient: bool,
+    ) -> Result<()> {
+        instructions::beneficiaries::whitelist_beneficiary(
+            ctx,
+            partner_id,
+            public_key,
+            allow_transient,
+        )
     }
 
     pub fn toggle_beneficiary(ctx: Context<ToggleBeneficiary>) -> Result<()> {
@@ -252,9 +283,6 @@ pub mod zynk_core {
     ) -> Result<()> {
         instructions::token_whitelist::update_whitelisted_token_mint(ctx, action, mint)
     }
-
-
-
 
     /// Requests a timelocked administrative action.
     ///

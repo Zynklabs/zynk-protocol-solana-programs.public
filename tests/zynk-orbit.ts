@@ -227,6 +227,11 @@ describe("zynk-orbit", () => {
   );
 
   // ── zynk-orbit PDAs ───────────────────────────────────────────────────────
+  const [orbitAuthorityPDA] = PublicKey.findProgramAddressSync(
+    [Buffer.from("orbit<>core")],
+    program.programId
+  );
+
   // ovault – orbit's internal vault, beneficiary for repay transient create_order
   const [ovaultPDA] = PublicKey.findProgramAddressSync(
     [Buffer.from("vault"), Buffer.from("orbit")],
@@ -1440,6 +1445,7 @@ describe("zynk-orbit", () => {
           null
         )
         .accounts({
+          orbitAuthority: orbitAuthorityPDA,
           zovTokenAccount: zovAta,
           mint: tokenMint,
           manager: manager.publicKey,
@@ -1558,6 +1564,7 @@ describe("zynk-orbit", () => {
           null
         )
         .accounts({
+          orbitAuthority: orbitAuthorityPDA,
           zovTokenAccount: zovAta,
           mint: tokenMint,
           manager: manager.publicKey,
@@ -1662,6 +1669,7 @@ describe("zynk-orbit", () => {
           null
         )
         .accounts({
+          orbitAuthority: orbitAuthorityPDA,
           zovTokenAccount: zovAta,
           mint: tokenMint,
           manager: manager.publicKey,
@@ -1720,6 +1728,7 @@ describe("zynk-orbit", () => {
           null
         )
         .accounts({
+          orbitAuthority: orbitAuthorityPDA,
           zovTokenAccount: zovAta,
           mint: tokenMint,
           manager: admin.publicKey, // admin signs — NOT the protocol manager
@@ -1779,6 +1788,7 @@ describe("zynk-orbit", () => {
           null
         )
         .accounts({
+          orbitAuthority: orbitAuthorityPDA,
           zovTokenAccount: zovAta,
           mint: tokenMint,
           manager: manager.publicKey,
@@ -1839,6 +1849,7 @@ describe("zynk-orbit", () => {
           null
         )
         .accounts({
+          orbitAuthority: orbitAuthorityPDA,
           zovTokenAccount: zovAta,
           mint: tokenMint,
           manager: manager.publicKey,
@@ -1895,6 +1906,7 @@ describe("zynk-orbit", () => {
         null
       )
       .accounts({
+        orbitAuthority: orbitAuthorityPDA,
         zovTokenAccount: zovAta,
         mint: tokenMint,
         manager: manager.publicKey,
@@ -2024,6 +2036,7 @@ describe("zynk-orbit", () => {
         null
       )
       .accounts({
+        orbitAuthority: orbitAuthorityPDA,
         zovTokenAccount: zovAta,
         mint: tokenMint,
         manager: manager.publicKey,
@@ -2153,6 +2166,7 @@ describe("zynk-orbit", () => {
         null
       )
       .accounts({
+        orbitAuthority: orbitAuthorityPDA,
         zovTokenAccount: zovAta,
         mint: tokenMint,
         manager: manager.publicKey,
@@ -2436,6 +2450,7 @@ describe("zynk-orbit", () => {
         null
       )
       .accounts({
+        orbitAuthority: orbitAuthorityPDA,
         zovTokenAccount: zovAta,
         mint: tokenMint,
         manager: manager.publicKey,
@@ -2523,10 +2538,67 @@ describe("zynk-orbit", () => {
       pos4Data.amountBorrowed,
       "user[4] stays open"
     );
+
+    // Supplying only position 3 while position 4 remains open must not settle
+    // the extra replenishment against the order. The gross 20M is pulled, 10M
+    // closes position 3, and the unsupplied-position excess remains in the ZOV.
+    const zovBeforeSubsetClose = BigInt(
+      (await provider.connection.getTokenAccountBalance(zovAta)).value.amount
+    );
+    const pdvBeforeSubsetClose = BigInt(
+      (await provider.connection.getTokenAccountBalance(pdvAta)).value.amount
+    );
+    await program.methods
+      .repay(
+        Array.from(borrowPartnerIdBytes),
+        Array.from(pOId),
+        Array.from(defaultZovId),
+        new anchor.BN(20_000_000),
+        null
+      )
+      .accounts({
+        zovTokenAccount: zovAta,
+        mint: tokenMint,
+        manager: manager.publicKey,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        config: configPDA,
+        orderTracker: pOTPDA,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: pdvAta,
+        zynkOpVault: czovPDA,
+      } as any)
+      .remainingAccounts([
+        { pubkey: multiIcvTokenAccounts[3], isSigner: false, isWritable: true },
+        { pubkey: r3, isSigner: false, isWritable: true },
+        { pubkey: p3, isSigner: false, isWritable: true },
+      ])
+      .signers([manager])
+      .rpc();
+
+    const zovAfterSubsetClose = BigInt(
+      (await provider.connection.getTokenAccountBalance(zovAta)).value.amount
+    );
+    const pdvAfterSubsetClose = BigInt(
+      (await provider.connection.getTokenAccountBalance(pdvAta)).value.amount
+    );
+    assert.equal(pdvBeforeSubsetClose - pdvAfterSubsetClose, 20_000_000n);
+    assert.equal(zovAfterSubsetClose - zovBeforeSubsetClose, 10_000_000n);
+    assert.isNull(
+      await provider.connection.getAccountInfo(p3),
+      "supplied position should close"
+    );
+    assert.isNotNull(
+      await provider.connection.getAccountInfo(p4),
+      "unsupplied position must remain open"
+    );
+    assert.isNotNull(
+      await provider.connection.getAccountInfo(pOTPDA),
+      "order tracker must remain open while an unsupplied position has debt"
+    );
   });
 
-  // ── R-N1 : Sum of position remaining ≠ remaining order → AmountMismatch ──
-  it("Should not be able to repay if sum of amount of all positions is not equal to remaining amount in order tracker", async () => {
+  // ── R-N1 : Subset positions can be repaid in separate calls ──────────────
+  it("Should be able to repay with a subset of positions and then repay the rest in a separate call", async () => {
     const nowTs = Math.floor(Date.now() / 1000);
     const futureCliff = new anchor.BN(nowTs + 365 * 24 * 60 * 60);
     const singleAmount = new anchor.BN(15_000_000);
@@ -2603,6 +2675,7 @@ describe("zynk-orbit", () => {
         null
       )
       .accounts({
+        orbitAuthority: orbitAuthorityPDA,
         zovTokenAccount: zovAta,
         mint: tokenMint,
         manager: manager.publicKey,
@@ -2627,48 +2700,68 @@ describe("zynk-orbit", () => {
       .signers([manager])
       .rpc();
 
-    // Repay with only 1 position (15M) while remaining_order = 30M → AmountMismatch
-    try {
-      await program.methods
-        .repay(
-          Array.from(borrowPartnerIdBytes),
-          Array.from(orderId),
-          Array.from(defaultZovId),
-          singleAmount,
-          null
-        )
-        .accounts({
-          zovTokenAccount: zovAta,
-          mint: tokenMint,
-          manager: manager.publicKey,
-          tokenProgram: TOKEN_PROGRAM_ID,
-          config: configPDA,
-          orderTracker: orderTrackerPDA,
-          partnerDepositVault: partnerDepositVaultPDA,
-          pdvTokenAccount: pdvAta,
-          zynkOpVault: czovPDA,
-        } as any)
-        .remainingAccounts([
-          {
-            pubkey: multiIcvTokenAccounts[5],
-            isSigner: false,
-            isWritable: true,
-          },
-          { pubkey: r5, isSigner: false, isWritable: true },
-          { pubkey: pos5, isSigner: false, isWritable: true },
-        ])
-        .signers([manager])
-        .rpc();
-      assert.fail(
-        "Expected AmountMismatch when only subset of positions supplied"
-      );
-    } catch (err: any) {
-      assert.include(
-        err.message,
-        "AmountMismatch",
-        "Error should be AmountMismatch when sum of position remaining ≠ remaining order"
-      );
-    }
+    // First settle position 5 only; position 6 remains open with its debt.
+    await program.methods
+      .repay(
+        Array.from(borrowPartnerIdBytes),
+        Array.from(orderId),
+        Array.from(defaultZovId),
+        singleAmount,
+        null
+      )
+      .accounts({
+        zovTokenAccount: zovAta,
+        mint: tokenMint,
+        manager: manager.publicKey,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        config: configPDA,
+        orderTracker: orderTrackerPDA,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: pdvAta,
+        zynkOpVault: czovPDA,
+      } as any)
+      .remainingAccounts([
+        { pubkey: multiIcvTokenAccounts[5], isSigner: false, isWritable: true },
+        { pubkey: r5, isSigner: false, isWritable: true },
+        { pubkey: pos5, isSigner: false, isWritable: true },
+      ])
+      .signers([manager])
+      .rpc();
+
+    assert.isNull(await provider.connection.getAccountInfo(pos5));
+    assert.isNotNull(await provider.connection.getAccountInfo(pos6));
+
+    // Position 6 is the last outstanding debt, so the 1M excess may settle
+    // the order while the 15M principal closes this final position.
+    await program.methods
+      .repay(
+        Array.from(borrowPartnerIdBytes),
+        Array.from(orderId),
+        Array.from(defaultZovId),
+        new anchor.BN(16_000_000),
+        null
+      )
+      .accounts({
+        zovTokenAccount: zovAta,
+        mint: tokenMint,
+        manager: manager.publicKey,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        config: configPDA,
+        orderTracker: orderTrackerPDA,
+        partnerDepositVault: partnerDepositVaultPDA,
+        pdvTokenAccount: pdvAta,
+        zynkOpVault: czovPDA,
+      } as any)
+      .remainingAccounts([
+        { pubkey: multiIcvTokenAccounts[6], isSigner: false, isWritable: true },
+        { pubkey: r6, isSigner: false, isWritable: true },
+        { pubkey: pos6, isSigner: false, isWritable: true },
+      ])
+      .signers([manager])
+      .rpc();
+
+    assert.isNull(await provider.connection.getAccountInfo(pos6));
+    assert.isNull(await provider.connection.getAccountInfo(orderTrackerPDA));
   });
 
   // ── R-N2 : Wrong mint token → error ──────────────────────────────────────
@@ -2737,6 +2830,7 @@ describe("zynk-orbit", () => {
         null
       )
       .accounts({
+        orbitAuthority: orbitAuthorityPDA,
         zovTokenAccount: zovAta,
         mint: tokenMint,
         manager: manager.publicKey,
@@ -2872,6 +2966,7 @@ describe("zynk-orbit", () => {
         null
       )
       .accounts({
+        orbitAuthority: orbitAuthorityPDA,
         zovTokenAccount: zovAta,
         mint: tokenMint,
         manager: manager.publicKey,
@@ -2999,6 +3094,7 @@ describe("zynk-orbit", () => {
         null
       )
       .accounts({
+        orbitAuthority: orbitAuthorityPDA,
         zovTokenAccount: zovAta,
         mint: tokenMint,
         manager: manager.publicKey,
@@ -3247,6 +3343,7 @@ describe("zynk-orbit", () => {
         null
       )
       .accounts({
+        orbitAuthority: orbitAuthorityPDA,
         zovTokenAccount: zovAta,
         mint: tokenMint,
         manager: manager.publicKey,
@@ -3341,7 +3438,7 @@ describe("zynk-orbit", () => {
         .requestWithdraw(
           Array.from(ncwUserId),
           ncwUser.publicKey, // destination
-          1_000 // amount (small, well within any balance)
+          new anchor.BN(1_000) // amount (small, well within any balance)
         )
         .accounts({
           signer: ncwUser.publicKey,
@@ -3365,7 +3462,11 @@ describe("zynk-orbit", () => {
 
     try {
       await program.methods
-        .requestWithdraw(Array.from(icvUserId), icvUser.publicKey, excessAmount)
+        .requestWithdraw(
+          Array.from(icvUserId),
+          icvUser.publicKey,
+          new anchor.BN(excessAmount)
+        )
         .accounts({
           signer: icvUser.publicKey,
         } as any)
@@ -3390,7 +3491,7 @@ describe("zynk-orbit", () => {
         .requestWithdraw(
           Array.from(icvUserId),
           icvUser.publicKey, // destination
-          1_000_000
+          new anchor.BN(1_000_000)
         )
         .accounts({
           signer: manager.publicKey, // wrong signer
@@ -3418,7 +3519,11 @@ describe("zynk-orbit", () => {
     );
 
     await program.methods
-      .requestWithdraw(Array.from(icvUserId), icvUser.publicKey, withdrawAmount)
+      .requestWithdraw(
+        Array.from(icvUserId),
+        icvUser.publicKey,
+        new anchor.BN(withdrawAmount)
+      )
       .accounts({
         signer: icvUser.publicKey,
       } as any)
@@ -3448,7 +3553,11 @@ describe("zynk-orbit", () => {
     // icvUser's withdraw request was just created in W-P1 and is still pending.
     try {
       await program.methods
-        .requestWithdraw(Array.from(icvUserId), icvUser.publicKey, 5_000_000)
+        .requestWithdraw(
+          Array.from(icvUserId),
+          icvUser.publicKey,
+          new anchor.BN(5_000_000)
+        )
         .accounts({
           signer: icvUser.publicKey,
         } as any)
@@ -3506,7 +3615,11 @@ describe("zynk-orbit", () => {
     );
 
     await program.methods
-      .requestWithdraw(Array.from(lpUserId), lpUser.publicKey, lpWithdrawAmt)
+      .requestWithdraw(
+        Array.from(lpUserId),
+        lpUser.publicKey,
+        new anchor.BN(lpWithdrawAmt)
+      )
       .accounts({
         signer: lpUser.publicKey,
       } as any)
@@ -3677,7 +3790,11 @@ describe("zynk-orbit", () => {
       program.programId
     );
     await program.methods
-      .requestWithdraw(Array.from(lb2UserId), lb2User.publicKey, 20_000_000)
+      .requestWithdraw(
+        Array.from(lb2UserId),
+        lb2User.publicKey,
+        new anchor.BN(20_000_000)
+      )
       .accounts({ signer: lb2User.publicKey } as any)
       .signers([lb2User])
       .rpc();
@@ -3729,7 +3846,11 @@ describe("zynk-orbit", () => {
       program.programId
     );
     await program.methods
-      .requestWithdraw(Array.from(lb2UserId), lb2User.publicKey, 20_000_000)
+      .requestWithdraw(
+        Array.from(lb2UserId),
+        lb2User.publicKey,
+        new anchor.BN(20_000_000)
+      )
       .accounts({ signer: lb2User.publicKey } as any)
       .signers([lb2User])
       .rpc();
@@ -3771,7 +3892,11 @@ describe("zynk-orbit", () => {
       program.programId
     );
     await program.methods
-      .requestWithdraw(Array.from(lb2UserId), lb2User.publicKey, 20_000_000)
+      .requestWithdraw(
+        Array.from(lb2UserId),
+        lb2User.publicKey,
+        new anchor.BN(20_000_000)
+      )
       .accounts({ signer: lb2User.publicKey } as any)
       .signers([lb2User])
       .rpc();
@@ -3875,7 +4000,11 @@ describe("zynk-orbit", () => {
     const withdrawAmount = 5_000_000;
 
     await program.methods
-      .requestWithdraw(Array.from(icvUserId), icvUser.publicKey, withdrawAmount)
+      .requestWithdraw(
+        Array.from(icvUserId),
+        icvUser.publicKey,
+        new anchor.BN(withdrawAmount)
+      )
       .accounts({ signer: icvUser.publicKey } as any)
       .signers([icvUser])
       .rpc();
@@ -3918,7 +4047,11 @@ describe("zynk-orbit", () => {
     );
 
     await program.methods
-      .requestWithdraw(Array.from(icvUserId), icvUser.publicKey, 3_000_000)
+      .requestWithdraw(
+        Array.from(icvUserId),
+        icvUser.publicKey,
+        new anchor.BN(3_000_000)
+      )
       .accounts({ signer: icvUser.publicKey } as any)
       .signers([icvUser])
       .rpc();
@@ -4763,6 +4896,7 @@ describe("zynk-orbit", () => {
         null
       )
       .accounts({
+        orbitAuthority: orbitAuthorityPDA,
         zovTokenAccount: zovAta,
         mint: tokenMint,
         manager: manager.publicKey,
@@ -5384,7 +5518,11 @@ describe("zynk-orbit", () => {
       .rpc();
     const dis5DestAta = await gocAta(dis5User.publicKey, tokenMint);
     // Source ATA owned by manager, not ovault
-    const nonOvaultSourceAta = await gocAtaAndMint(manager.publicKey, tokenMint, 1_000_000);
+    const nonOvaultSourceAta = await gocAtaAndMint(
+      manager.publicKey,
+      tokenMint,
+      1_000_000
+    );
     try {
       await program.methods
         .disburse(new anchor.BN(500_000))
@@ -5400,7 +5538,9 @@ describe("zynk-orbit", () => {
         } as any)
         .signers([manager])
         .rpc();
-      assert.fail("Expected transaction to fail because source token account is not owned by ovault");
+      assert.fail(
+        "Expected transaction to fail because source token account is not owned by ovault"
+      );
     } catch (err: any) {
       assert.ok(
         err.message.length > 0,

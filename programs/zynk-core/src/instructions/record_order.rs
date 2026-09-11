@@ -50,6 +50,8 @@ pub(crate) fn record_order(
         order_tracker.partner_id = partner_id;
         order_tracker.order_id = order_id;
         order_tracker.amount_out = amount;
+        order_tracker.amount_borrowed = 0;
+        order_tracker.amount_repaid = 0;
 
         emit!(OrderCreated {
             order_id,

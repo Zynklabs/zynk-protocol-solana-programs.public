@@ -175,7 +175,7 @@ pub mod zynk_orbit {
         ctx: Context<RequestWithdraw>,
         user_id: [u8; 32],
         destination: Pubkey,
-        amount: u32,
+        amount: u64,
     ) -> Result<()> {
         instructions::withdrawals::request_withdraw(ctx, user_id, destination, amount)
     }

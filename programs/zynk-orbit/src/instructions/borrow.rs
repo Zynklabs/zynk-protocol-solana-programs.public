@@ -35,7 +35,7 @@ pub(crate) fn borrow<'info>(
             .ok_or(ProgramError::ArithmeticOverflow)?;
     }
 
-    require!(total_position_amount == amount, OrbitError::AmountMismatch);
+    require!(total_position_amount <= amount, OrbitError::AmountMismatch);
 
     let remaining_accounts = ctx.remaining_accounts;
 
@@ -265,6 +265,12 @@ pub(crate) fn borrow<'info>(
         });
     }
 
+    let authority_bump = ctx.bumps.orbit_authority;
+    let authority_seeds: &[&[u8]] = &[
+        zynk_core::ORBIT_CPI_AUTHORITY_SEED,
+        &[authority_bump],
+    ];
+
     let cpi_program = ctx.accounts.zynk_core_program.to_account_info();
     let cpi_accounts = CreateOrder {
         config: ctx.accounts.config.to_account_info(),
@@ -283,9 +289,15 @@ pub(crate) fn borrow<'info>(
         mint: ctx.accounts.mint.to_account_info(),
         token_program: ctx.accounts.token_program.to_account_info(),
         system_program: ctx.accounts.system_program.to_account_info(),
+        orbit_authority: Some(ctx.accounts.orbit_authority.to_account_info()),
     };
 
-    let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
+    let signer_seeds = &[authority_seeds];
+    let cpi_ctx = CpiContext::new_with_signer(
+        cpi_program,
+        cpi_accounts,
+        signer_seeds,
+    );
     zynk_core::cpi::create_order(
         cpi_ctx,
         partner_id_bytes,
@@ -293,6 +305,7 @@ pub(crate) fn borrow<'info>(
         zov_id,
         false, // transient = false
         amount,
+        total_position_amount,
         meta,
     )?;
 

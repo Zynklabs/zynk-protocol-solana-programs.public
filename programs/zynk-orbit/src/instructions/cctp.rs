@@ -94,6 +94,7 @@ pub(crate) fn cctp<'info>(
                 mint: ctx.accounts.mint.to_account_info(),
                 token_program: ctx.accounts.token_program.to_account_info(),
                 system_program: ctx.accounts.system_program.to_account_info(),
+                orbit_authority: None,
             };
 
             let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
@@ -108,6 +109,7 @@ pub(crate) fn cctp<'info>(
                 o_id,
                 z_id,
                 false,
+                0,
                 0,
                 meta,
             )?;
