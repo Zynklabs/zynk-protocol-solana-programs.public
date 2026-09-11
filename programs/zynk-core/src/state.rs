@@ -68,6 +68,8 @@ pub struct OrderTracker {
     pub partner_deposit_vault: Pubkey,
     /// The SPL token mint used for this order.
     pub mint: Pubkey,
+    pub amount_borrowed: u64,
+    pub amount_repaid: u64,
 }
 
 /// PDA account representing a pending governance action under a time-lock.

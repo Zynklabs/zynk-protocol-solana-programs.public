@@ -23,6 +23,12 @@ pub(crate) fn replenish_and_repay<'info>(
         .ok_or(CoreError::InvalidOrder)?;
     require!(repay_amount <= outstanding, CoreError::InvalidOrder);
 
+    // Compute position-level and ZOV-level outstanding amounts.
+    let position_outstanding = order_tracker
+        .amount_borrowed
+        .checked_sub(order_tracker.amount_repaid)
+        .ok_or(CoreError::InvalidOrder)?;
+
     let pdv_seeds: &[&[u8]] = &[
         PARTNER_DEPOSIT_VAULT_SEED,
         order_tracker.partner_id.as_ref(),
@@ -57,7 +63,42 @@ pub(crate) fn replenish_and_repay<'info>(
     let total_shares = repay_shares.iter().try_fold(0u64, |acc, &s| {
         acc.checked_add(s).ok_or(ProgramError::ArithmeticOverflow)
     })?;
-    require!(total_shares == repay_amount, CoreError::InvalidOrder);
+
+    // total_shares is the amount going to position holders.
+    // It must not exceed the aggregate position outstanding.
+    require!(
+        total_shares <= position_outstanding,
+        CoreError::InvalidOrder
+    );
+
+    // The remainder (repay_amount - total_shares) settles direct-ZOV debt.
+    let zov_settlement = repay_amount
+        .checked_sub(total_shares)
+        .ok_or(ProgramError::ArithmeticOverflow)?;
+
+    if zov_settlement > 0 {
+        // ZOV settlement is only permitted when all position debt is fully repaid
+        // by this transaction (i.e., total_shares == position_outstanding).
+        require!(
+            total_shares == position_outstanding,
+            CoreError::InvalidOrder
+        );
+
+        // ZOV borrowed = amount_out - amount_borrowed.
+        // ZOV already repaid = amount_in - amount_repaid.
+        // ZOV outstanding = ZOV borrowed - ZOV already repaid.
+        let zov_borrowed = order_tracker
+            .amount_out
+            .checked_sub(order_tracker.amount_borrowed)
+            .ok_or(ProgramError::ArithmeticOverflow)?;
+        let zov_already_repaid = order_tracker
+            .amount_in
+            .checked_sub(order_tracker.amount_repaid)
+            .ok_or(ProgramError::ArithmeticOverflow)?;
+        let zov_outstanding = zov_borrowed
+            .checked_sub(zov_already_repaid)
+            .ok_or(ProgramError::ArithmeticOverflow)?;
+    }
 
     for (dest_info, &share) in ctx.remaining_accounts.iter().zip(repay_shares.iter()) {
         if share == 0 {
@@ -95,6 +136,13 @@ pub(crate) fn replenish_and_repay<'info>(
         )?;
     }
 
+    // Update position repaid tracking.
+    order_tracker.amount_repaid = order_tracker
+        .amount_repaid
+        .checked_add(total_shares)
+        .ok_or(ProgramError::ArithmeticOverflow)?;
+
+    // Update overall order repaid tracking (position shares + ZOV settlement).
     order_tracker.amount_in = order_tracker
         .amount_in
         .checked_add(repay_amount)

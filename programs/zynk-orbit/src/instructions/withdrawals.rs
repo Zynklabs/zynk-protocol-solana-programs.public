@@ -9,7 +9,7 @@ pub(crate) fn request_withdraw(
     ctx: Context<RequestWithdraw>,
     user_id: [u8; 32],
     destination: Pubkey,
-    amount: u32,
+    amount: u64,
 ) -> Result<()> {
     require!(amount != 0, OrbitError::ZeroAmount);
 
@@ -33,7 +33,7 @@ pub(crate) fn request_withdraw(
             .principal_in
             .checked_sub(signer_user.principal_out)
             .ok_or(ProgramError::ArithmeticOverflow)?
-            >= amount as u64,
+            >= amount,
         OrbitError::InsufficientBalance
     );
 
@@ -71,7 +71,7 @@ pub(crate) fn approve_withdraw(
 
     user.principal_out = user
         .principal_out
-        .checked_add(withdraw_request.amount as u64)
+        .checked_add(withdraw_request.amount)
         .ok_or(ProgramError::ArithmeticOverflow)?;
 
     require!(
@@ -80,7 +80,7 @@ pub(crate) fn approve_withdraw(
     );
 
     require!(
-        ctx.accounts.source_token_account.amount >= withdraw_request.amount as u64,
+        ctx.accounts.source_token_account.amount >= withdraw_request.amount,
         OrbitError::InsufficientTokenBalance
     );
 
@@ -123,7 +123,7 @@ pub(crate) fn approve_withdraw(
                 &ctx.accounts.mint,
                 &ovault.to_account_info(),
                 signer_seeds,
-                withdraw_request.amount as u64,
+                withdraw_request.amount,
             )?;
         }
         UserType::NCW => {
