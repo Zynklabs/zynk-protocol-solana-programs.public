@@ -2,6 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program::{
     hash::hash,
     instruction::AccountMeta,
+    program_error::ProgramError,
     pubkey::Pubkey,
     system_program::ID as SYSTEM_PROGRAM_ID,
 };
@@ -9,7 +10,8 @@ use anchor_spl::token_interface::{self, Mint, TokenInterface, TransferChecked};
 
 use crate::{OrbitError, User};
 
-/// Closes a program-owned account and transfers its lamports to `to`.
+/// Closes an account and transfers all lamports to the given destination,
+/// assigning the account to the system program, and resizing its data to zero length.
 pub fn close_account<'a, 'b>(
     from: impl ToAccountInfo<'a>,
     to: impl ToAccountInfo<'b>,
@@ -17,8 +19,12 @@ pub fn close_account<'a, 'b>(
     let from = from.to_account_info();
     let to = to.to_account_info();
 
-    let to_lamports = to.lamports();
-    **to.lamports.borrow_mut() = to_lamports.checked_add(from.lamports()).unwrap();
+
+    let to_lamports = to
+        .lamports()
+        .checked_add(from.lamports())
+        .ok_or(ProgramError::ArithmeticOverflow)?;
+    **to.lamports.borrow_mut() = to_lamports;
     **from.lamports.borrow_mut() = 0;
 
     from.assign(&SYSTEM_PROGRAM_ID);
