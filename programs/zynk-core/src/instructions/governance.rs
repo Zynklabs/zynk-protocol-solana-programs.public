@@ -99,9 +99,15 @@ pub(crate) fn execute_request(ctx: Context<SignTimelock>) -> Result<()> {
         _ => return Err(error!(CoreError::InvalidAction)),
     }
 
+    // Capture fields before closing the account, as close_account zeroes the data.
+    let action_u8 = timelock.action;
+    let timelock_key = timelock.key();
+
+    close_account(timelock, &ctx.accounts.authority)?;
+
     emit!(Action {
-        action: timelock.action,
-        timelock: timelock.key(),
+        action: action_u8,
+        timelock: timelock_key,
         status: ActionStatus::Executed,
         timestamp,
         signer: authority,
@@ -125,9 +131,15 @@ pub(crate) fn unpause(ctx: Context<SignTimelock>) -> Result<()> {
 
     config.paused = false;
 
+    // Capture fields before closing the account, as close_account zeroes the data.
+    let action_u8 = timelock.action;
+    let timelock_key = timelock.key();
+
+    close_account(timelock, &ctx.accounts.authority)?;
+
     emit!(Action {
-        action: timelock.action,
-        timelock: timelock.key(),
+        action: action_u8,
+        timelock: timelock_key,
         status: ActionStatus::Executed,
         timestamp,
         signer: authority,
