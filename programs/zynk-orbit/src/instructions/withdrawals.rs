@@ -152,22 +152,23 @@ pub(crate) fn approve_withdraw(
     Ok(())
 }
 
-pub(crate) fn reject_withdraw(ctx: Context<RejectWithdraw>, user_id: [u8; 32]) -> Result<()> {
-    let config = &ctx.accounts.config;
+pub(crate) fn revoke_withdraw(ctx: Context<RevokeWithdraw>, user_id: [u8; 32]) -> Result<()> {
+    let signer = ctx.accounts.signer.key();
     require!(
-        ctx.accounts.admin.key() == config.admin,
+        signer == ctx.accounts.config.admin
+            || is_whitelisted_wallet(&ctx.accounts.user, &signer),
         zynk_core::CoreError::Unauthorized
     );
 
     close_account(
         ctx.accounts.request.to_account_info(),
-        ctx.accounts.admin.to_account_info(),
+        ctx.accounts.signer.to_account_info(),
     )?;
 
     emit!(AxEvent {
-        event_name: "WithdrawRejected".to_string(),
+        event_name: "WithdrawRevoked".to_string(),
         user_id,
-        public_key: ctx.accounts.admin.key(),
+        public_key: ctx.accounts.signer.key(),
         domain_separator: DOMAIN_SEPARATOR,
         partners: Vec::new(),
     });

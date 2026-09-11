@@ -62,14 +62,17 @@ pub fn validate_unique_token_mints(token_mints: &[Pubkey]) -> Result<()> {
 }
 
 
-/// Closes an account and transfers lamports to the given destination.
-/// Also zeroes out the account data to prevent reuse.
+/// Closes an account and transfers all lamports to the given destination,
+/// assigning the account to the system program, and resizing its data to zero length.
 pub fn close_account<'a, 'b>(from: impl ToAccountInfo<'a>, to: impl ToAccountInfo<'b>) -> Result<()> {
     let from = from.to_account_info();
     let to = to.to_account_info();
 
-    let to_lamports = to.lamports();
-    **to.lamports.borrow_mut() = to_lamports.checked_add(from.lamports()).unwrap();
+    let to_lamports = to
+        .lamports()
+        .checked_add(from.lamports())
+        .ok_or(ProgramError::ArithmeticOverflow)?;
+    **to.lamports.borrow_mut() = to_lamports;
     **from.lamports.borrow_mut() = 0;
 
     from.assign(&SYSTEM_PROGRAM_ID);

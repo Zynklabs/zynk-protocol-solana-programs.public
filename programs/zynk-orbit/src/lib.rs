@@ -191,12 +191,13 @@ pub mod zynk_orbit {
         instructions::withdrawals::approve_withdraw(ctx, user_id)
     }
 
-    /// Rejects a pending principal withdrawal request.
+    /// Revokes a pending principal withdrawal request.
     ///
-    /// Only the Core-configured admin may reject the request. Closing it returns
-    /// the account rent to the admin without changing user principal accounting.
-    pub fn reject_withdraw(ctx: Context<RejectWithdraw>, user_id: [u8; 32]) -> Result<()> {
-        instructions::withdrawals::reject_withdraw(ctx, user_id)
+    /// The Core admin or any whitelisted wallet of the associated user may
+    /// revoke the request. Closing it returns the account rent to the signer
+    /// without changing user principal accounting.
+    pub fn revoke_withdraw(ctx: Context<RevokeWithdraw>, user_id: [u8; 32]) -> Result<()> {
+        instructions::withdrawals::revoke_withdraw(ctx, user_id)
     }
 
     /// Applies a pending cliff-period update.

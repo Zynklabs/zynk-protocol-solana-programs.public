@@ -498,21 +498,31 @@ pub struct ApproveWithdraw<'info> {
 }
 
 #[derive(Accounts)]
-pub struct RejectWithdraw<'info> {
+#[instruction(user_id: [u8; 32])]
+pub struct RevokeWithdraw<'info> {
     #[account(
         seeds = [zynk_core::CONFIG_SEED],
         seeds::program = ZynkCore::id(),
         bump,
-        has_one = admin @ zynk_core::CoreError::Unauthorized
     )]
     pub config: Account<'info, zynk_core::Config>,
 
-    /// CHECK: The admin-authorized handler closes this supplied request account.
-    #[account(mut)]
-    pub request: UncheckedAccount<'info>,
+    #[account(
+        mut,
+        seeds = [WITHDRAW_REQUEST_SEED, user_id.as_ref()],
+        bump,
+        constraint = request.user_id == user_id @ OrbitError::UserIdMismatch
+    )]
+    pub request: Account<'info, WithdrawRequest>,
+
+    #[account(
+        seeds = [USER_SEED, user_id.as_ref()],
+        bump,
+    )]
+    pub user: Account<'info, User>,
 
     #[account(mut)]
-    pub admin: Signer<'info>,
+    pub signer: Signer<'info>,
 
     pub system_program: Program<'info, System>,
 
@@ -591,8 +601,13 @@ pub struct Claim<'info> {
     )]
     pub user: Account<'info, User>,
 
-    /// ICV custody account. Pass None for NCW claims.
-    #[account(mut)]
+    /// ICV custody ATA of the User PDA for `mint`. Pass None for NCW claims.
+    #[account(
+        mut,
+        associated_token::mint = mint,
+        associated_token::authority = user,
+        associated_token::token_program = token_program,
+    )]
     pub icv_token_account: Option<InterfaceAccount<'info, TokenAccount>>,
 
     #[account(mut)]
