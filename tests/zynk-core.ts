@@ -3750,6 +3750,7 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({

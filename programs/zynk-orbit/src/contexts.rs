@@ -524,6 +524,8 @@ pub struct RejectWithdraw<'info> {
 pub struct ApproveCliffPeriod<'info> {
     #[account(
         mut,
+        seeds = [USER_UPDATE_REQUEST_SEED, user_id.as_ref()],
+        bump,
         constraint = request.user_id == user_id @ OrbitError::UserIdMismatch
     )]
     pub request: Account<'info, UpdateCliffPeriodRequest >,
@@ -553,6 +555,8 @@ pub struct RejectCliffPeriod<'info> {
 
     #[account(
         mut,
+        seeds = [USER_UPDATE_REQUEST_SEED, user_id.as_ref()],
+        bump,
         constraint = request.user_id == user_id @ OrbitError::UserIdMismatch
     )]
     pub request: Account<'info, UpdateCliffPeriodRequest >,

@@ -7,7 +7,7 @@ use crate::utils::*;
 pub(crate) fn disburse(ctx: Context<Disburse>, amount: u64) -> Result<()> {
     require!(amount > 0, OrbitError::ZeroAmount);
 
-    let user = &mut ctx.accounts.user;
+    let user = &ctx.accounts.user;
 
     let config = &ctx.accounts.config;
     require!(
