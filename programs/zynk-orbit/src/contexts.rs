@@ -601,8 +601,13 @@ pub struct Claim<'info> {
     )]
     pub user: Account<'info, User>,
 
-    /// ICV custody account. Pass None for NCW claims.
-    #[account(mut)]
+    /// ICV custody ATA of the User PDA for `mint`. Pass None for NCW claims.
+    #[account(
+        mut,
+        associated_token::mint = mint,
+        associated_token::authority = user,
+        associated_token::token_program = token_program,
+    )]
     pub icv_token_account: Option<InterfaceAccount<'info, TokenAccount>>,
 
     #[account(mut)]
