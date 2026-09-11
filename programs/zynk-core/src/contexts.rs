@@ -338,6 +338,9 @@ pub struct UpdateWhitelistedTokenMint<'info> {
     )]
     pub authority: Signer<'info>,
 
+    /// CHECK: Validated in handler when action is Add
+    pub mint: Option<AccountInfo<'info>>,
+
     pub system_program: Program<'info, System>,
 }
 

@@ -32,4 +32,6 @@ pub enum CoreError {
     TokenMintAlreadyWhitelisted,
     #[msg("Token mint is not whitelisted")]
     TokenMintNotWhitelisted,
+    #[msg("Fee-bearing mints are not supported")]
+    FeeBearingMintNotSupported,
 }

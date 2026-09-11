@@ -21,6 +21,9 @@ pub(crate) fn initialize(
     require!(whitelisted_token_mints.len() > 0, CoreError::EmptyWhitelistedTokenMints);
     for token_mint in whitelisted_token_mints.iter() {
         validate_address(token_mint)?;
+        if let Some(acc) = ctx.remaining_accounts.iter().find(|a| a.key == token_mint) {
+            validate_not_fee_bearing(acc)?;
+        }
     }
     validate_unique_token_mints(&whitelisted_token_mints)?;
     config.whitelisted_token_mints = whitelisted_token_mints;

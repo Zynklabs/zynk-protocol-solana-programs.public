@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 
 pub const DOMAIN_SEPARATOR: u64 = 115111123810997;
-pub const INITIAL_MANAGER: Pubkey = pubkey!("FnN6veEuyCr3R88iHxZYFRPwq22CZQwPMXzaTomeWWX5");
+pub const INITIAL_MANAGER: Pubkey = pubkey!("CMyxj35ckba59ELYaRsi7bxNghrnTkkwxR2nAoGM2yfQ");
 pub const ZYNK_ORBIT_ID: Pubkey = pubkey!("ZYNKopsYjG6gaGqdwz8HLAgvCAEFwCET56kRQKkjxfc");
 pub const ORBIT_CPI_AUTHORITY_SEED: &[u8] = b"orbit<>core";
 

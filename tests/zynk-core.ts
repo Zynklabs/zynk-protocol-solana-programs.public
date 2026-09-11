@@ -15,6 +15,10 @@ import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   getOrCreateAssociatedTokenAccount,
   createAssociatedTokenAccount,
+  ExtensionType,
+  getMintLen,
+  createInitializeTransferFeeConfigInstruction,
+  createInitializeMintInstruction,
 } from "@solana/spl-token";
 import { ZynkCore } from "../target/types/zynk_core";
 import { assert, expect } from "chai";
@@ -5293,6 +5297,7 @@ describe("zynk-core", () => {
       .accounts({
         config: configPDA,
         authority: admin.publicKey,
+        mint: newMint,
         systemProgram: SystemProgram.programId,
       } as any)
       .signers([admin])
@@ -5324,6 +5329,7 @@ describe("zynk-core", () => {
       .accounts({
         config: configPDA,
         authority: guardian.publicKey,
+        mint: newMint,
         systemProgram: SystemProgram.programId,
       } as any)
       .signers([guardian])
@@ -5346,6 +5352,7 @@ describe("zynk-core", () => {
         .accounts({
           config: configPDA,
           authority: admin.publicKey,
+          mint: existingMint,
           systemProgram: SystemProgram.programId,
         } as any)
         .signers([admin])
@@ -5363,6 +5370,7 @@ describe("zynk-core", () => {
         .accounts({
           config: configPDA,
           authority: admin.publicKey,
+          mint: null,
           systemProgram: SystemProgram.programId,
         } as any)
         .signers([admin])
@@ -5397,6 +5405,7 @@ describe("zynk-core", () => {
         .accounts({
           config: configPDA,
           authority: unauthorized.publicKey,
+          mint: newMint,
           systemProgram: SystemProgram.programId,
         } as any)
         .signers([unauthorized])
@@ -5424,6 +5433,7 @@ describe("zynk-core", () => {
       .accounts({
         config: configPDA,
         authority: admin.publicKey,
+        mint: tempMint,
         systemProgram: SystemProgram.programId,
       } as any)
       .signers([admin])
@@ -5438,6 +5448,7 @@ describe("zynk-core", () => {
       .accounts({
         config: configPDA,
         authority: admin.publicKey,
+        mint: null,
         systemProgram: SystemProgram.programId,
       } as any)
       .signers([admin])
@@ -5448,6 +5459,119 @@ describe("zynk-core", () => {
     assert.isFalse(
       configAfter.whitelistedTokenMints.some((m) => m.equals(tempMint))
     );
+  });
+
+  it("Should fail when adding a fee-bearing Token-2022 mint (TransferFeeConfig) to the whitelist", async () => {
+    const feeMintKeypair = Keypair.generate();
+    const extensions = [ExtensionType.TransferFeeConfig];
+    const mintLen = getMintLen(extensions);
+    const lamports =
+      await provider.connection.getMinimumBalanceForRentExemption(mintLen);
+
+    const feeTx = new anchor.web3.Transaction().add(
+      SystemProgram.createAccount({
+        fromPubkey: manager.publicKey,
+        newAccountPubkey: feeMintKeypair.publicKey,
+        space: mintLen,
+        lamports,
+        programId: TOKEN_2022_PROGRAM_ID,
+      }),
+      createInitializeTransferFeeConfigInstruction(
+        feeMintKeypair.publicKey,
+        admin.publicKey,
+        admin.publicKey,
+        100, // 1% fee
+        BigInt(1_000_000), // max fee
+        TOKEN_2022_PROGRAM_ID
+      ),
+      createInitializeMintInstruction(
+        feeMintKeypair.publicKey,
+        6,
+        admin.publicKey,
+        null,
+        TOKEN_2022_PROGRAM_ID
+      )
+    );
+    await anchor.web3.sendAndConfirmTransaction(provider.connection, feeTx, [
+      manager,
+      feeMintKeypair,
+    ]);
+
+    try {
+      await program.methods
+        .updateWhitelistedTokenMint({ add: {} }, feeMintKeypair.publicKey)
+        .accounts({
+          config: configPDA,
+          authority: admin.publicKey,
+          mint: feeMintKeypair.publicKey,
+          systemProgram: SystemProgram.programId,
+        } as any)
+        .signers([admin])
+        .rpc();
+      assert.fail("Expected fee-bearing mint admission to fail");
+    } catch (error: any) {
+      assert.include(
+        error.message,
+        "FeeBearingMintNotSupported",
+        "Expected FeeBearingMintNotSupported error"
+      );
+    }
+  });
+
+  it("Should successfully add a non-fee-bearing Token-2022 mint to the whitelist", async () => {
+    const t22MintKeypair = Keypair.generate();
+    const t22MintLen = getMintLen([]);
+    const t22Lamports =
+      await provider.connection.getMinimumBalanceForRentExemption(t22MintLen);
+
+    const t22Tx = new anchor.web3.Transaction().add(
+      SystemProgram.createAccount({
+        fromPubkey: manager.publicKey,
+        newAccountPubkey: t22MintKeypair.publicKey,
+        space: t22MintLen,
+        lamports: t22Lamports,
+        programId: TOKEN_2022_PROGRAM_ID,
+      }),
+      createInitializeMintInstruction(
+        t22MintKeypair.publicKey,
+        6,
+        admin.publicKey,
+        null,
+        TOKEN_2022_PROGRAM_ID
+      )
+    );
+    await anchor.web3.sendAndConfirmTransaction(provider.connection, t22Tx, [
+      manager,
+      t22MintKeypair,
+    ]);
+
+    await program.methods
+      .updateWhitelistedTokenMint({ add: {} }, t22MintKeypair.publicKey)
+      .accounts({
+        config: configPDA,
+        authority: admin.publicKey,
+        mint: t22MintKeypair.publicKey,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .signers([admin])
+      .rpc();
+
+    let cfg = await program.account.config.fetch(configPDA);
+    assert.isTrue(
+      cfg.whitelistedTokenMints.some((m) => m.equals(t22MintKeypair.publicKey))
+    );
+
+    // Clean up
+    await program.methods
+      .updateWhitelistedTokenMint({ remove: {} }, t22MintKeypair.publicKey)
+      .accounts({
+        config: configPDA,
+        authority: admin.publicKey,
+        mint: null,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .signers([admin])
+      .rpc();
   });
 
   it("Should fail when removing a token mint that is not whitelisted", async () => {
@@ -5467,6 +5591,7 @@ describe("zynk-core", () => {
         .accounts({
           config: configPDA,
           authority: admin.publicKey,
+          mint: null,
           systemProgram: SystemProgram.programId,
         } as any)
         .signers([admin])
@@ -5493,6 +5618,7 @@ describe("zynk-core", () => {
         .accounts({
           config: configPDA,
           authority: unauthorized.publicKey,
+          mint: null,
           systemProgram: SystemProgram.programId,
         } as any)
         .signers([unauthorized])
@@ -5500,6 +5626,34 @@ describe("zynk-core", () => {
       assert.fail("Expected transaction to fail");
     } catch (error: any) {
       assert.include(error.message, "Unauthorized");
+    }
+  });
+
+  it("Should fail when adding a token mint without providing its account", async () => {
+    const orphanMintKeypair = Keypair.generate();
+    const orphanMint = await createMint(
+      provider.connection,
+      manager,
+      admin.publicKey,
+      null,
+      6,
+      orphanMintKeypair
+    );
+
+    try {
+      await program.methods
+        .updateWhitelistedTokenMint({ add: {} }, orphanMint)
+        .accounts({
+          config: configPDA,
+          authority: admin.publicKey,
+          mint: null,
+          systemProgram: SystemProgram.programId,
+        } as any)
+        .signers([admin])
+        .rpc();
+      assert.fail("Expected transaction to fail when mint account is omitted");
+    } catch (error: any) {
+      assert.include(error.message, "InvalidTokenMint");
     }
   });
 });
