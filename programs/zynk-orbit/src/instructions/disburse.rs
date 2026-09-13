@@ -49,6 +49,8 @@ pub(crate) fn disburse(ctx: Context<Disburse>, amount: u64) -> Result<()> {
         token: ctx.accounts.mint.key(),
         domain_separator: DOMAIN_SEPARATOR,
         order_id: [0u8; 32],
+        signer: ctx.accounts.manager.key(),
+        timestamp: Clock::get()?.unix_timestamp,
     });
 
     Ok(())

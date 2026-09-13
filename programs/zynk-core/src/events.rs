@@ -25,6 +25,9 @@ pub struct Action {
     pub timestamp: i64,
     /// The authority that signed the state-changing transaction.
     pub signer: Pubkey,
+    /// The target address being set by this governance action (e.g. new admin/manager/guardian).
+    /// `Pubkey::default()` for actions that carry no address payload (e.g. Unpause).
+    pub value: Pubkey,
 }
 
 /// Emitted whenever a beneficiary is whitelisted, toggled, or revoked.
@@ -40,6 +43,10 @@ pub struct BeneficiaryAction {
     pub is_active: bool,
     /// Chain domain separator for cross-chain event indexing.
     pub domain_separator: u64,
+    /// The admin/guardian wallet that signed this action.
+    pub signer: Pubkey,
+    /// Whether this beneficiary is permitted to receive transient (non-persistent) orders.
+    pub allow_transient: bool,
 }
 
 /// Emitted when a new order is created, either persistent or transient.

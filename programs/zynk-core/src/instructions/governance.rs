@@ -23,6 +23,7 @@ pub(crate) fn request_timelock(
         status: ActionStatus::Initiated,
         timestamp,
         signer: authority,
+        value: timelock.value,
     });
 
     Ok(())
@@ -34,14 +35,20 @@ pub(crate) fn revoke_timelock(ctx: Context<SignTimelock>) -> Result<()> {
 
     require!(timelock.req_by != authority.key(), CoreError::Unauthorized);
 
+    // Capture fields before close_account zeroes the account data.
+    let action_u8 = timelock.action;
+    let timelock_key = timelock.key();
+    let timelock_value = timelock.value;
+
     close_account(timelock, authority)?;
 
     emit!(Action {
-        action: timelock.action,
-        timelock: timelock.key(),
+        action: action_u8,
+        timelock: timelock_key,
         status: ActionStatus::Revoked,
         timestamp: Clock::get()?.unix_timestamp,
         signer: authority.key(),
+        value: timelock_value,
     });
 
     Ok(())
@@ -62,6 +69,7 @@ pub(crate) fn ack_timelock(ctx: Context<SignTimelock>) -> Result<()> {
         status: ActionStatus::Acked,
         timestamp: Clock::get()?.unix_timestamp,
         signer: authority,
+        value: timelock.value,
     });
 
     Ok(())
@@ -111,6 +119,7 @@ pub(crate) fn execute_request(ctx: Context<SignTimelock>) -> Result<()> {
         status: ActionStatus::Executed,
         timestamp,
         signer: authority,
+        value,
     });
 
     Ok(())
@@ -143,6 +152,8 @@ pub(crate) fn unpause(ctx: Context<SignTimelock>) -> Result<()> {
         status: ActionStatus::Executed,
         timestamp,
         signer: authority,
+        // Unpause carries no address payload.
+        value: Pubkey::default(),
     });
 
     Ok(())

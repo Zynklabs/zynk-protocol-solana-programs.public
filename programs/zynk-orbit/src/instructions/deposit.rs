@@ -61,6 +61,8 @@ pub(crate) fn deposit(ctx: Context<Deposit>, user_id: [u8; 32], amount: u64) -> 
         token: ctx.accounts.mint.key(),
         domain_separator: DOMAIN_SEPARATOR,
         order_id: [0u8; 32],
+        signer: ctx.accounts.signer.key(),
+        timestamp: Clock::get()?.unix_timestamp,
     });
 
     Ok(())
