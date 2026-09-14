@@ -488,6 +488,11 @@ pub struct ApproveWithdraw<'info> {
     )]
     pub ovault: Option<UncheckedAccount<'info>>,
 
+    #[account(
+        constraint = config.whitelisted_token_mints.contains(&mint.key()) @ zynk_core::CoreError::InvalidTokenMint,
+        constraint = mint.key() == source_token_account.mint @ zynk_core::CoreError::InvalidTokenMint,
+        constraint = mint.key() == destination_token_account.mint @ zynk_core::CoreError::InvalidTokenMint,
+    )]
     pub mint: InterfaceAccount<'info, Mint>,
 
     pub token_program: Interface<'info, TokenInterface>,
