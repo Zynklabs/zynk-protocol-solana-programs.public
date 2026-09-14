@@ -8,8 +8,6 @@ use crate::utils::*;
 
 pub(crate) fn repay<'info>(
     ctx: Context<'_, '_, '_, 'info, Repay<'info>>,
-    partner_id: [u8; 32],
-    order_id: [u8; 32],
     zov_id: [u8; 32],
     amount: u64,
     meta: Option<Vec<EventArg>>,
@@ -34,9 +32,7 @@ pub(crate) fn repay<'info>(
         zynk_core::CoreError::InvalidTokenMint
     );
 
-    let order_tracker_data = ctx.accounts.order_tracker.try_borrow_data()?;
-    let order_tracker = zynk_core::OrderTracker::try_deserialize(&mut &order_tracker_data[..])
-        .map_err(|_| zynk_core::CoreError::InvalidAccount)?;
+    let order_tracker = &ctx.accounts.order_tracker;
     require!(
         ctx.accounts.mint.key() == order_tracker.mint,
         zynk_core::CoreError::InvalidTokenMint
@@ -45,7 +41,8 @@ pub(crate) fn repay<'info>(
     let amount_in = order_tracker.amount_in;
     let amount_borrowed = order_tracker.amount_borrowed;
     let amount_repaid_tracker = order_tracker.amount_repaid;
-    drop(order_tracker_data);
+    let partner_id = order_tracker.partner_id;
+    let order_id = order_tracker.order_id;
 
     let remaining_order = amount_out
         .checked_sub(amount_in)

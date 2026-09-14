@@ -55,13 +55,11 @@ pub mod zynk_orbit {
     /// fully repaid positions and the corresponding Core order are closed.
     pub fn repay<'info>(
         ctx: Context<'_, '_, '_, 'info, Repay<'info>>,
-        partner_id: [u8; 32],
-        order_id: [u8; 32],
         zov_id: [u8; 32],
         amount: u64,
         meta: Option<Vec<EventArg>>,
     ) -> Result<()> {
-        instructions::repay::repay(ctx, partner_id, order_id, zov_id, amount, meta)
+        instructions::repay::repay(ctx, zov_id, amount, meta)
     }
 
     /// Claims unlocked principal for an ICV or NCW user.
