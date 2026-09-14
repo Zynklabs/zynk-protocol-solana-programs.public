@@ -305,17 +305,6 @@ pub(crate) fn repay<'info>(
             closed
         };
 
-        if info.user_type == UserType::NCW {
-            let user_account = &remaining_accounts[base_idx + 1];
-            let mut user_data = user_account.try_borrow_mut_data()?;
-            let mut user = User::try_deserialize_unchecked(&mut &user_data[..])?;
-            user.principal_out = user
-                .principal_out
-                .checked_add(info.share)
-                .ok_or(ProgramError::ArithmeticOverflow)?;
-            user.try_serialize(&mut &mut user_data[..])?;
-        }
-
         if is_position_closed {
             close_account(position_pda, &ctx.accounts.manager)?;
         }
