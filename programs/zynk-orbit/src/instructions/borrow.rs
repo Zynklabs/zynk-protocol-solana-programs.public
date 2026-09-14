@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::{hash::hash, program_error::ProgramError};
+use anchor_lang::solana_program::program_error::ProgramError;
 use anchor_spl::token_interface::TokenAccount;
 use zynk_core::{self, cpi::accounts::CreateOrder, EventArg};
 
@@ -25,7 +25,7 @@ pub(crate) fn borrow<'info>(
     // The numeric prefix is used for Orbit authorization; Core receives the
     // hash of the complete partner identifier.
     let partner_number = extract_partner_number(&partner_id)?;
-    let partner_id_bytes = hash(partner_id.as_bytes()).to_bytes();
+    let partner_id_bytes = hashed(&partner_id);
 
     let mut total_position_amount: u64 = 0;
     for pos in &positions {
@@ -220,16 +220,6 @@ pub(crate) fn borrow<'info>(
         };
         position_account.try_serialize(&mut &mut position_data[..])?;
         drop(position_data);
-
-        if user_type == UserType::NCW {
-            let mut user_data = user_account.try_borrow_mut_data()?;
-            let mut user = User::try_deserialize_unchecked(&mut &user_data[..])?;
-            user.principal_in = user
-                .principal_in
-                .checked_add(pos.amount)
-                .ok_or(ProgramError::ArithmeticOverflow)?;
-            user.try_serialize(&mut &mut user_data[..])?;
-        }
 
         emit!(TxEvent {
             event_name: "Borrow".to_string(),

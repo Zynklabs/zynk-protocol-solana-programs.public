@@ -108,7 +108,7 @@ pub struct Borrow<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(partner_id: [u8; 32], order_id: [u8; 32], zov_id: [u8; 32])]
+#[instruction(zov_id: [u8; 32])]
 pub struct Repay<'info> {
     #[account(
         seeds = [zynk_core::CONFIG_SEED],
@@ -137,15 +137,15 @@ pub struct Repay<'info> {
     /// CHECK: Core order tracker validated by Core program seeds and the CPI.
     #[account(
         mut,
-        seeds = [zynk_core::ORDER_TRACKER_SEED, partner_id.as_ref(), order_id.as_ref()],
+        seeds = [zynk_core::ORDER_TRACKER_SEED, order_tracker.partner_id.as_ref(), order_tracker.order_id.as_ref()],
         seeds::program = ZynkCore::id(),
         bump,
     )]
-    pub order_tracker: UncheckedAccount<'info>,
+    pub order_tracker: Account<'info, zynk_core::OrderTracker>,
 
     /// CHECK: Core partner deposit vault validated by Core program seeds and the CPI.
     #[account(
-        seeds = [zynk_core::PARTNER_DEPOSIT_VAULT_SEED, partner_id.as_ref()],
+        seeds = [zynk_core::PARTNER_DEPOSIT_VAULT_SEED, order_tracker.partner_id.as_ref()],
         seeds::program = ZynkCore::id(),
         bump,
     )]
@@ -488,6 +488,11 @@ pub struct ApproveWithdraw<'info> {
     )]
     pub ovault: Option<UncheckedAccount<'info>>,
 
+    #[account(
+        constraint = config.whitelisted_token_mints.contains(&mint.key()) @ zynk_core::CoreError::InvalidTokenMint,
+        constraint = mint.key() == source_token_account.mint @ zynk_core::CoreError::InvalidTokenMint,
+        constraint = mint.key() == destination_token_account.mint @ zynk_core::CoreError::InvalidTokenMint,
+    )]
     pub mint: InterfaceAccount<'info, Mint>,
 
     pub token_program: Interface<'info, TokenInterface>,

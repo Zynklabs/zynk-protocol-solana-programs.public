@@ -54,6 +54,23 @@ pub(crate) fn extract_partner_number(partner_id: &str) -> Result<u32> {
     Ok(num)
 }
 
+/// Derives a 32-byte on-chain identifier from any string input.
+///
+/// Computes the SHA-256 digest of `s`, hex-encodes it into a 64-character lowercase
+/// string, then copies the first 32 hex character bytes into the returned array.
+/// Use this wherever `zynk-core` expects a hex-encoded identifier (e.g. `partner_id`
+/// in `OrderTracker` seeds).
+pub(crate) fn hashed(s: &str) -> [u8; 32] {
+    let digest = hash(s.as_bytes()).to_bytes();
+    let mut hex_string = String::with_capacity(64);
+    for byte in digest.iter() {
+        hex_string.push_str(&format!("{:02x}", byte));
+    }
+    let mut res = [0u8; 32];
+    res.copy_from_slice(&hex_string.as_bytes()[..32]);
+    res
+}
+
 /// Transfers tokens from a source to a destination using a PDA authority with signer seeds.
 pub(crate) fn transfer_with_signer_seeds<'info>(
     token_program: &Interface<'info, TokenInterface>,
