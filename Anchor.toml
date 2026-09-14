@@ -3,10 +3,12 @@ seeds = false
 skip-lint = false
 
 [programs.localnet]
-zynk_core = "CDhMbu6bYMLPxCEDv4V7AXBvgx4gqaMfLit4JTZFtd6y"
+zynk_core = "ZYNKctWoaYeAdN9szq1joeu6rRPf7LK72pUurkcBpBY"
+zynk_orbit = "ZYNKopsYjG6gaGqdwz8HLAgvCAEFwCET56kRQKkjxfc"
 
 [programs.devnet]
-zynk_core = "CDhMbu6bYMLPxCEDv4V7AXBvgx4gqaMfLit4JTZFtd6y"
+zynk_core = "ZynkcJyxiBTs9ePTQzHh7ckDDnwrLjuNVUbisF6hC7K"
+zynk_orbit = "Zynko1Dup7Cv2quEqLRuCs9Ds8vwELrWZk4eTLFXVCL"
 
 [registry]
 url = "https://api.apr.dev"

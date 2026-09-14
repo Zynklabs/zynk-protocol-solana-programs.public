@@ -2900,8 +2900,17 @@ dependencies = [
 
 [[package]]
 name = "zynk-core"
-version = "3.0.0"
+version = "4.2.0"
 dependencies = [
  "anchor-lang",
  "anchor-spl",
+]
+
+[[package]]
+name = "zynk-orbit"
+version = "1.0.0"
+dependencies = [
+ "anchor-lang",
+ "anchor-spl",
+ "zynk-core",
 ]
