@@ -35,7 +35,7 @@ pub(crate) fn borrow<'info>(
             .ok_or(ProgramError::ArithmeticOverflow)?;
     }
 
-    require!(total_position_amount == amount, OrbitError::AmountMismatch);
+    require!(total_position_amount <= amount, OrbitError::AmountMismatch);
 
     let remaining_accounts = ctx.remaining_accounts;
 
@@ -144,24 +144,70 @@ pub(crate) fn borrow<'info>(
         let position_signer_seeds = &[&position_seeds_with_bump[..]];
 
         let position_space = 8 + Position::INIT_SPACE;
-        let create_position_ix =
-            anchor_lang::solana_program::system_instruction::create_account(
-                &ctx.accounts.manager.key(),
-                &expected_position_key,
-                Rent::get()?.minimum_balance(position_space),
-                position_space as u64,
-                ctx.program_id,
-            );
+        let required_lamports = Rent::get()?.minimum_balance(position_space);
 
-        anchor_lang::solana_program::program::invoke_signed(
-            &create_position_ix,
-            &[
-                ctx.accounts.manager.to_account_info(),
-                position_pda.to_account_info(),
-                ctx.accounts.system_program.to_account_info(),
-            ],
-            position_signer_seeds,
-        )?;
+        if position_pda.lamports() == 0 {
+            // Happy path: account doesn't exist yet, create it normally.
+            anchor_lang::solana_program::program::invoke_signed(
+                &anchor_lang::solana_program::system_instruction::create_account(
+                    &ctx.accounts.manager.key(),
+                    &expected_position_key,
+                    required_lamports,
+                    position_space as u64,
+                    ctx.program_id,
+                ),
+                &[
+                    ctx.accounts.manager.to_account_info(),
+                    position_pda.to_account_info(),
+                    ctx.accounts.system_program.to_account_info(),
+                ],
+                position_signer_seeds,
+            )?;
+        } else {
+            // Griefing path: account was pre-funded by an attacker.
+            // Top up lamports if needed, then allocate space and assign ownership.
+            let current_lamports = position_pda.lamports();
+            if current_lamports < required_lamports {
+                anchor_lang::solana_program::program::invoke(
+                    &anchor_lang::solana_program::system_instruction::transfer(
+                        &ctx.accounts.manager.key(),
+                        &expected_position_key,
+                        required_lamports - current_lamports,
+                    ),
+                    &[
+                        ctx.accounts.manager.to_account_info(),
+                        position_pda.to_account_info(),
+                        ctx.accounts.system_program.to_account_info(),
+                    ],
+                )?;
+            }
+
+            // Allocate the data buffer on the pre-funded account.
+            anchor_lang::solana_program::program::invoke_signed(
+                &anchor_lang::solana_program::system_instruction::allocate(
+                    &expected_position_key,
+                    position_space as u64,
+                ),
+                &[
+                    position_pda.to_account_info(),
+                    ctx.accounts.system_program.to_account_info(),
+                ],
+                position_signer_seeds,
+            )?;
+
+            // Assign the account to this program.
+            anchor_lang::solana_program::program::invoke_signed(
+                &anchor_lang::solana_program::system_instruction::assign(
+                    &expected_position_key,
+                    ctx.program_id,
+                ),
+                &[
+                    position_pda.to_account_info(),
+                    ctx.accounts.system_program.to_account_info(),
+                ],
+                position_signer_seeds,
+            )?;
+        }
 
         let mut position_data = position_pda.try_borrow_mut_data()?;
         position_data[..8].copy_from_slice(&Position::DISCRIMINATOR);
@@ -196,8 +242,16 @@ pub(crate) fn borrow<'info>(
             token: ctx.accounts.mint.key(),
             domain_separator: DOMAIN_SEPARATOR,
             order_id,
+            signer: ctx.accounts.manager.key(),
+            timestamp: Clock::get()?.unix_timestamp,
         });
     }
+
+    let authority_bump = ctx.bumps.orbit_authority;
+    let authority_seeds: &[&[u8]] = &[
+        zynk_core::ORBIT_CPI_AUTHORITY_SEED,
+        &[authority_bump],
+    ];
 
     let cpi_program = ctx.accounts.zynk_core_program.to_account_info();
     let cpi_accounts = CreateOrder {
@@ -206,19 +260,26 @@ pub(crate) fn borrow<'info>(
         partner_deposit_vault: ctx.accounts.partner_deposit_vault.to_account_info(),
         pdv_token_account: None,
         zynk_op_vault: ctx.accounts.zynk_op_vault.to_account_info(),
-        zov_token_account: ctx.accounts.zov_token_account.to_account_info(),
-        beneficiary: ctx.accounts.beneficiary.to_account_info(),
-        beneficiary_token_account: ctx
-            .accounts
-            .beneficiary_token_account
-            .to_account_info(),
+        zov_token_account: Some(ctx.accounts.zov_token_account.to_account_info()),
+        beneficiary: Some(ctx.accounts.beneficiary.to_account_info()),
+        beneficiary_token_account: Some(
+            ctx.accounts
+                .beneficiary_token_account
+                .to_account_info(),
+        ),
         order_tracker: ctx.accounts.order_tracker.to_account_info(),
         mint: ctx.accounts.mint.to_account_info(),
         token_program: ctx.accounts.token_program.to_account_info(),
         system_program: ctx.accounts.system_program.to_account_info(),
+        orbit_authority: Some(ctx.accounts.orbit_authority.to_account_info()),
     };
 
-    let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
+    let signer_seeds = &[authority_seeds];
+    let cpi_ctx = CpiContext::new_with_signer(
+        cpi_program,
+        cpi_accounts,
+        signer_seeds,
+    );
     zynk_core::cpi::create_order(
         cpi_ctx,
         partner_id_bytes,
@@ -226,6 +287,7 @@ pub(crate) fn borrow<'info>(
         zov_id,
         false, // transient = false
         amount,
+        total_position_amount,
         meta,
     )?;
 

@@ -1,15 +1,15 @@
 use anchor_lang::prelude::*;
 
-mod contexts;
 mod constants;
+mod contexts;
 mod error;
 mod events;
 mod instructions;
 mod state;
 mod utils;
 
-pub use contexts::*;
 pub use constants::*;
+pub use contexts::*;
 pub use error::*;
 pub use events::*;
 pub use state::*;
@@ -44,11 +44,10 @@ pub mod zynk_core {
         ctx: Context<Initialize>,
         admin: Pubkey,
         guardian: Pubkey,
-        whitelisted_token_mints: Vec<Pubkey>
+        whitelisted_token_mints: Vec<Pubkey>,
     ) -> Result<()> {
         instructions::initialize::initialize(ctx, admin, guardian, whitelisted_token_mints)
     }
-
 
     /// Pulls tokens from a partner deposit vault, forwards them to a beneficiary,
     /// and creates a corresponding order.
@@ -81,9 +80,11 @@ pub mod zynk_core {
         zov_id: [u8; 32],
         transient: bool,
         amount: u64,
-        meta: Option<Vec<EventArg>>
+        meta: Option<Vec<EventArg>>,
     ) -> Result<()> {
-        instructions::pull_and_create_order::pull_and_create_order(ctx, partner_id, order_id, zov_id, transient, amount, meta)
+        instructions::pull_and_create_order::pull_and_create_order(
+            ctx, partner_id, order_id, zov_id, transient, amount, meta,
+        )
     }
 
     /// Creates an order and optionally transfers tokens from the Zynk Operational vault
@@ -116,9 +117,19 @@ pub mod zynk_core {
         zov_id: [u8; 32],
         transient: bool,
         amount: u64,
-        meta: Option<Vec<EventArg>>
+        borrowed_amount: u64,
+        meta: Option<Vec<EventArg>>,
     ) -> Result<()> {
-        instructions::create_order::create_order(ctx, partner_id, order_id, zov_id, transient, amount, meta)
+        instructions::create_order::create_order(
+            ctx,
+            partner_id,
+            order_id,
+            zov_id,
+            transient,
+            amount,
+            borrowed_amount,
+            meta,
+        )
     }
 
     /// Replenishes an existing order by transferring tokens into the Zynk Operational vault.
@@ -139,21 +150,53 @@ pub mod zynk_core {
         ctx: Context<Replenish>,
         amount: u64,
         close_order: bool,
-        meta: Option<Vec<EventArg>>
+        meta: Option<Vec<EventArg>>,
     ) -> Result<()> {
         instructions::replenish::replenish(ctx, amount, close_order, meta)
     }
 
-    /// Atomically replenishes a ZOV and returns only outstanding principal to Orbit.
-    /// The excess `amount - repay_amount` remains in the ZOV.
-    pub fn replenish_and_repay(
-        ctx: Context<ReplenishAndRepay>,
+    /// Atomically replenishes a ZOV from a partner deposit vault and distributes outstanding
+    /// principal back to Orbit lenders in a single transaction.
+    ///
+    /// # Arguments
+    /// * `ctx` - The [`ReplenishAndRepay`] context containing all required accounts.
+    /// * `zov_id` - The unique identifier of the ZOV to replenish (32 bytes, hashed off-chain).
+    /// * `amount` - The total amount of tokens to transfer from the partner deposit vault into the ZOV.
+    /// * `repay_amount` - The portion of `amount` to distribute back to Orbit lenders; must be ≤ `amount`.
+    /// * `repay_shares` - A per-lender breakdown of `repay_amount`; must sum exactly to `repay_amount`
+    ///   and match the length of `remaining_accounts`.
+    /// * `meta` - Optional metadata emitted with the event.
+    ///
+    /// # Behavior
+    /// - Fails if the contract is paused or any amount is zero.
+    /// - Validates that `repay_amount ≤ outstanding` balance on the order.
+    /// - Transfers `amount` from the partner deposit vault into the ZOV token account.
+    /// - Distributes `repay_amount` from the ZOV to each Orbit lender account according to `repay_shares`.
+    /// - Updates `amount_in` on the `OrderTracker`; closes the tracker if the order is fully repaid.
+    /// - Emits an `OrderReplenished` event.
+    ///
+    /// # Errors
+    /// - `ContractPaused` if the program is paused.
+    /// - `InvalidOrder` if amounts are invalid or exceed the outstanding balance.
+    /// - `InvalidAccount` if remaining accounts count does not match `repay_shares` length,
+    ///    or if a destination account is the ZOV itself.
+    /// - `InvalidTokenMint` if a destination token account mint does not match the order mint.
+    pub fn replenish_and_repay<'info>(
+        ctx: Context<'_, '_, '_, 'info, ReplenishAndRepay<'info>>,
         zov_id: [u8; 32],
         amount: u64,
         repay_amount: u64,
+        repay_shares: Vec<u64>,
         meta: Option<Vec<EventArg>>,
     ) -> Result<()> {
-        instructions::replenish_and_repay::replenish_and_repay(ctx, zov_id, amount, repay_amount, meta)
+        instructions::replenish_and_repay::replenish_and_repay(
+            ctx,
+            zov_id,
+            amount,
+            repay_amount,
+            repay_shares,
+            meta,
+        )
     }
 
     /// Records an order executed on an external chain (e.g. EVM) and logs the corresponding event.
@@ -186,7 +229,18 @@ pub mod zynk_core {
         domain_separator: Option<u64>,
         meta: Option<Vec<EventArg>>,
     ) -> Result<()> {
-        instructions::record_order::record_order(ctx, partner_id, order_id, token, zynk_op_vault, partner_deposit_vault, beneficiary_wallet, amount, domain_separator, meta)
+        instructions::record_order::record_order(
+            ctx,
+            partner_id,
+            order_id,
+            token,
+            zynk_op_vault,
+            partner_deposit_vault,
+            beneficiary_wallet,
+            amount,
+            domain_separator,
+            meta,
+        )
     }
 
     /// Closes multiple order tracker accounts in a single instruction.
@@ -208,14 +262,43 @@ pub mod zynk_core {
     ////////////////////////////////////////////////////////////////
 
 
+    /// Registers a beneficiary wallet for a given partner and makes it eligible to receive funds.
+    ///
+    /// # Arguments
+    /// * `ctx` - The [`WhitelistBeneficiary`] context containing the beneficiary PDA and authority.
+    /// * `partner_id` - The unique identifier of the partner (32 bytes, hashed off-chain).
+    /// * `public_key` - The wallet address to whitelist as a beneficiary.
+    /// * `allow_transient` - Whether this beneficiary may receive funds via transient orders.
+    ///
+    /// # Behavior
+    /// - Initializes the beneficiary PDA with the provided details.
+    /// - Sets the beneficiary as active immediately upon registration.
+    /// - Emits a `BeneficiaryAction::whitelist` event.
     pub fn whitelist_beneficiary(ctx: Context<WhitelistBeneficiary>, partner_id: [u8; 32], public_key: Pubkey, allow_transient: bool) -> Result<()> {
         instructions::beneficiaries::whitelist_beneficiary(ctx, partner_id, public_key, allow_transient)
     }
 
+    /// Toggles the active state of an existing beneficiary.
+    ///
+    /// # Arguments
+    /// * `ctx` - The [`ToggleBeneficiary`] context containing the beneficiary PDA and authority.
+    ///
+    /// # Behavior
+    /// - Flips `is_active` on the beneficiary account.
+    /// - An inactive beneficiary cannot receive funds until re-activated.
+    /// - Emits a `BeneficiaryAction::toggle` event.
     pub fn toggle_beneficiary(ctx: Context<ToggleBeneficiary>) -> Result<()> {
         instructions::beneficiaries::toggle_beneficiary(ctx)
     }
 
+    /// Permanently removes a beneficiary by closing its PDA account.
+    ///
+    /// # Arguments
+    /// * `ctx` - The [`RevokeBeneficiary`] context containing the beneficiary PDA and authority.
+    ///
+    /// # Behavior
+    /// - Closes the beneficiary PDA, returning lamports to the authority.
+    /// - Emits a `BeneficiaryAction::revoke` event with `is_active: false`.
     pub fn revoke_beneficiary(ctx: Context<RevokeBeneficiary>) -> Result<()> {
         instructions::beneficiaries::revoke_beneficiary(ctx)
     }
@@ -244,9 +327,6 @@ pub mod zynk_core {
     ) -> Result<()> {
         instructions::token_whitelist::update_whitelisted_token_mint(ctx, action, mint)
     }
-
-
-
 
     /// Requests a timelocked administrative action.
     ///
@@ -303,7 +383,7 @@ pub mod zynk_core {
     /// - Validates timelock execution conditions based on action type.
     /// - Requires acknowledgment for guardian updates.
     /// - Updates the corresponding configuration field.
-    /// - Marks the timelock action as executed.
+    /// - Closes the timelock account.
     /// - Emits an `Action::Executed` event.
     pub fn execute_request(ctx: Context<SignTimelock>) -> Result<()> {
         instructions::governance::execute_request(ctx)
@@ -318,7 +398,7 @@ pub mod zynk_core {
     /// - Ensures the action corresponds to `Unpause`.
     /// - Requires ETA expiration or prior acknowledgment.
     /// - Sets the contract paused state to `false`.
-    /// - Marks the timelock action as executed.
+    /// - Closes the timelock account.
     /// - Emits an `Action::Executed` event.
     pub fn unpause(ctx: Context<SignTimelock>) -> Result<()> {
         instructions::governance::unpause(ctx)

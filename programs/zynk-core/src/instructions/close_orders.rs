@@ -3,7 +3,7 @@ use anchor_lang::prelude::*;
 use crate::*;
 
 pub(crate) fn close_orders(ctx: Context<CloseOrders>, meta: Option<Vec<EventArg>>) -> Result<()> {
-    let config = &mut ctx.accounts.config;
+    let config = &ctx.accounts.config;
     require!(!config.paused, CoreError::ContractPaused);
 
     let mut seen_accounts = Vec::<Pubkey>::new();

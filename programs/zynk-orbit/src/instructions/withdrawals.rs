@@ -9,7 +9,7 @@ pub(crate) fn request_withdraw(
     ctx: Context<RequestWithdraw>,
     user_id: [u8; 32],
     destination: Pubkey,
-    amount: u32,
+    amount: u64,
 ) -> Result<()> {
     require!(amount != 0, OrbitError::ZeroAmount);
 
@@ -33,7 +33,7 @@ pub(crate) fn request_withdraw(
             .principal_in
             .checked_sub(signer_user.principal_out)
             .ok_or(ProgramError::ArithmeticOverflow)?
-            >= amount as u64,
+            >= amount,
         OrbitError::InsufficientBalance
     );
 
@@ -48,6 +48,9 @@ pub(crate) fn request_withdraw(
         public_key: ctx.accounts.signer.key(),
         domain_separator: DOMAIN_SEPARATOR,
         partners: Vec::new(),
+        signer: ctx.accounts.signer.key(),
+        timestamp: Clock::get()?.unix_timestamp,
+        value: amount as i64,
     });
     Ok(())
 }
@@ -71,7 +74,7 @@ pub(crate) fn approve_withdraw(
 
     user.principal_out = user
         .principal_out
-        .checked_add(withdraw_request.amount as u64)
+        .checked_add(withdraw_request.amount)
         .ok_or(ProgramError::ArithmeticOverflow)?;
 
     require!(
@@ -80,7 +83,7 @@ pub(crate) fn approve_withdraw(
     );
 
     require!(
-        ctx.accounts.source_token_account.amount >= withdraw_request.amount as u64,
+        ctx.accounts.source_token_account.amount >= withdraw_request.amount,
         OrbitError::InsufficientTokenBalance
     );
 
@@ -123,7 +126,7 @@ pub(crate) fn approve_withdraw(
                 &ctx.accounts.mint,
                 &ovault.to_account_info(),
                 signer_seeds,
-                withdraw_request.amount as u64,
+                withdraw_request.amount,
             )?;
         }
         UserType::NCW => {
@@ -147,29 +150,35 @@ pub(crate) fn approve_withdraw(
         token: ctx.accounts.mint.key(),
         domain_separator: DOMAIN_SEPARATOR,
         order_id: [0u8; 32],
+        signer: ctx.accounts.admin.key(),
+        timestamp: Clock::get()?.unix_timestamp,
     });
 
     Ok(())
 }
 
-pub(crate) fn reject_withdraw(ctx: Context<RejectWithdraw>, user_id: [u8; 32]) -> Result<()> {
-    let config = &ctx.accounts.config;
+pub(crate) fn revoke_withdraw(ctx: Context<RevokeWithdraw>, user_id: [u8; 32]) -> Result<()> {
+    let signer = ctx.accounts.signer.key();
     require!(
-        ctx.accounts.admin.key() == config.admin,
+        signer == ctx.accounts.config.admin
+            || is_whitelisted_wallet(&ctx.accounts.user, &signer),
         zynk_core::CoreError::Unauthorized
     );
 
     close_account(
         ctx.accounts.request.to_account_info(),
-        ctx.accounts.admin.to_account_info(),
+        ctx.accounts.signer.to_account_info(),
     )?;
 
     emit!(AxEvent {
-        event_name: "WithdrawRejected".to_string(),
+        event_name: "WithdrawRevoked".to_string(),
         user_id,
-        public_key: ctx.accounts.admin.key(),
+        public_key: ctx.accounts.signer.key(),
         domain_separator: DOMAIN_SEPARATOR,
         partners: Vec::new(),
+        signer: ctx.accounts.signer.key(),
+        timestamp: Clock::get()?.unix_timestamp,
+        value: 0,
     });
 
     Ok(())

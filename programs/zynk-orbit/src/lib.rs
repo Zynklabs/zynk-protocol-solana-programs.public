@@ -77,11 +77,11 @@ pub mod zynk_orbit {
         instructions::claim::claim(ctx, user_id, operations)
     }
 
-    /// Disburses a PDA vault balance to a registered user wallet.
+    /// Disburses an Orbit vault (ovault) balance to a registered user wallet.
     ///
     /// Only the Core-configured manager may authorize the transfer.
-    pub fn disburse(ctx: Context<Disburse>, vault_id: [u8; 32], amount: u64) -> Result<()> {
-        instructions::disburse::disburse(ctx, vault_id, amount)
+    pub fn disburse(ctx: Context<Disburse>, amount: u64) -> Result<()> {
+        instructions::disburse::disburse(ctx, amount)
     }
 
     /// Registers a user and initializes their protocol limits and allowlists.
@@ -175,7 +175,7 @@ pub mod zynk_orbit {
         ctx: Context<RequestWithdraw>,
         user_id: [u8; 32],
         destination: Pubkey,
-        amount: u32,
+        amount: u64,
     ) -> Result<()> {
         instructions::withdrawals::request_withdraw(ctx, user_id, destination, amount)
     }
@@ -191,12 +191,13 @@ pub mod zynk_orbit {
         instructions::withdrawals::approve_withdraw(ctx, user_id)
     }
 
-    /// Rejects a pending principal withdrawal request.
+    /// Revokes a pending principal withdrawal request.
     ///
-    /// Only the Core-configured admin may reject the request. Closing it returns
-    /// the account rent to the admin without changing user principal accounting.
-    pub fn reject_withdraw(ctx: Context<RejectWithdraw>, user_id: [u8; 32]) -> Result<()> {
-        instructions::withdrawals::reject_withdraw(ctx, user_id)
+    /// The Core admin or any whitelisted wallet of the associated user may
+    /// revoke the request. Closing it returns the account rent to the signer
+    /// without changing user principal accounting.
+    pub fn revoke_withdraw(ctx: Context<RevokeWithdraw>, user_id: [u8; 32]) -> Result<()> {
+        instructions::withdrawals::revoke_withdraw(ctx, user_id)
     }
 
     /// Applies a pending cliff-period update.
@@ -230,17 +231,35 @@ pub mod zynk_orbit {
     /// Burns tokens through Circle CCTP for transfer to another domain.
     ///
     /// The Core-configured manager may transfer from the Orbit vault, a derived
-    /// spender vault, or an ICV User PDA. ICV transfers require an elapsed cliff
-    /// and an allowed recipient or deployment-time destination caller, and are
-    /// recorded in `principal_out`.
+    /// spender vault, or an ICV User PDA.
+    /// ICV transfers require an allowed recipient and are recorded in `principal_out`.
     pub fn cctp<'info>(
         ctx: Context<'_, '_, '_, 'info, Cctp<'info>>,
         id: [u8; 32],
         amount: u64,
         destination_domain: u32,
         mint_recipient: [u8; 32],
+        max_fee: u64,
+        min_finality_threshold: u32,
         destination_caller: Option<[u8; 32]>,
+        hook_data: Option<Vec<u8>>,
+        partner_id: Option<[u8; 32]>,
+        order_id: Option<[u8; 32]>,
+        zov_id: Option<[u8; 32]>,
     ) -> Result<()> {
-        instructions::cctp::cctp(ctx, id, amount, destination_domain, mint_recipient, destination_caller)
+        instructions::cctp::cctp(
+            ctx,
+            id,
+            amount,
+            destination_domain,
+            mint_recipient,
+            max_fee,
+            min_finality_threshold,
+            destination_caller,
+            hook_data,
+            partner_id,
+            order_id,
+            zov_id,
+        )
     }
 }

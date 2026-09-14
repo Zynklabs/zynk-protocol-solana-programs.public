@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program_error::ProgramError;
-use anchor_spl::token_interface::{self, TokenAccount, TransferChecked};
+use anchor_spl::token_interface::TokenAccount;
 use zynk_core::{self, EventArg};
 
 use crate::*;
@@ -17,7 +17,6 @@ pub(crate) fn repay<'info>(
     // Each position is supplied as
     // [destination_token_account, user, position_pda].
     let num_positions = ctx.remaining_accounts.len() / 3;
-    require!(num_positions > 0, OrbitError::EmptyPositions);
     require!(
         ctx.remaining_accounts.len() % 3 == 0,
         OrbitError::InvalidPositionOperation
@@ -44,10 +43,17 @@ pub(crate) fn repay<'info>(
     );
     let amount_out = order_tracker.amount_out;
     let amount_in = order_tracker.amount_in;
+    let amount_borrowed = order_tracker.amount_borrowed;
+    let amount_repaid_tracker = order_tracker.amount_repaid;
     drop(order_tracker_data);
 
     let remaining_order = amount_out
         .checked_sub(amount_in)
+        .ok_or(ProgramError::ArithmeticOverflow)?;
+
+    // Aggregate position outstanding across ALL positions (not just supplied ones).
+    let aggregate_position_outstanding = amount_borrowed
+        .checked_sub(amount_repaid_tracker)
         .ok_or(ProgramError::ArithmeticOverflow)?;
 
     let prepared_amount = amount.min(remaining_order);
@@ -58,8 +64,10 @@ pub(crate) fn repay<'info>(
     struct PositionInfo {
         user_type: UserType,
         user_key: Pubkey,
+        user_id: [u8; 32],
         remaining: u64,
         share: u64,
+        dest_owner: Pubkey,
     }
     let mut position_infos = Vec::with_capacity(num_positions);
 
@@ -107,29 +115,87 @@ pub(crate) fn repay<'info>(
         drop(position_data);
 
         position_infos.push(PositionInfo {
-            user_type: user_type,
+            user_type,
             user_key,
+            user_id,
             remaining,
             share: 0,
+            dest_owner: Pubkey::default(),
         });
     }
 
-    let open_position_total = position_infos.iter().try_fold(0u64, |total, info| {
+    // Sum of outstanding amounts for the supplied positions only.
+    let supplied_position_total = position_infos.iter().try_fold(0u64, |total, info| {
         total.checked_add(info.remaining).ok_or(ProgramError::ArithmeticOverflow)
     })?;
-    require!(open_position_total == remaining_order, OrbitError::AmountMismatch);
+
+    // Cap the amount that goes to position repayments: cannot exceed supplied
+    // position total, cannot exceed aggregate position outstanding, cannot exceed
+    // the prepared amount.
+    let position_repay_cap = supplied_position_total
+        .min(aggregate_position_outstanding)
+        .min(prepared_amount);
+
+    // Determine how much goes to ZOV settlement (excess after position repays).
+    // ZOV settlement is only allowed when ALL position debt is fully repaid.
+    let position_repay_amount;
+    let zov_settlement;
+    if prepared_amount > position_repay_cap {
+        let excess = prepared_amount
+            .checked_sub(position_repay_cap)
+            .ok_or(ProgramError::ArithmeticOverflow)?;
+
+        // remaining unsupplied position debt after this repayment
+        let remaining_unsupplied_debt = aggregate_position_outstanding
+            .checked_sub(position_repay_cap)
+            .ok_or(ProgramError::ArithmeticOverflow)?;
+
+        if remaining_unsupplied_debt == 0 {
+            // All position debt is settled; excess can go to ZOV.
+            position_repay_amount = position_repay_cap;
+            zov_settlement = excess;
+        } else {
+            // There are still open positions not supplied in this call.
+            // Excess cannot go to ZOV — cap the total at position repay cap.
+            position_repay_amount = position_repay_cap;
+            zov_settlement = 0;
+        }
+    } else {
+        position_repay_amount = prepared_amount;
+        zov_settlement = 0;
+    }
+
+    let total_repay_for_core = position_repay_amount
+        .checked_add(zov_settlement)
+        .ok_or(ProgramError::ArithmeticOverflow)?;
 
     // Allocate proportionally with ceiling division while capping each share
     // by both the position balance and the undistributed amount.
-    let mut remaining_amount = prepared_amount;
+    let mut remaining_amount = position_repay_amount;
     for info in position_infos.iter_mut() {
-        let share = if prepared_amount > 0 {
-            let numerator = prepared_amount
-                .checked_mul(info.remaining)
+        let share = if position_repay_amount > 0 && supplied_position_total > 0 {
+            let prepared_128 = position_repay_amount as u128;
+            let remaining_info_128 = info.remaining as u128;
+            let total_128 = supplied_position_total as u128;
+
+            // Perform intermediate math safely in 128-bit space
+            let numerator = prepared_128
+                .checked_mul(remaining_info_128)
                 .ok_or(ProgramError::ArithmeticOverflow)?;
-            let raw_share = (numerator + remaining_order - 1)
-                .checked_div(remaining_order)
+
+            // Ceiling division: ceil(A / B) = (A + B - 1) / B
+            let numerator_ceil = numerator
+                .checked_add(total_128.saturating_sub(1))
                 .ok_or(ProgramError::ArithmeticOverflow)?;
+
+            let raw_share_128 = numerator_ceil
+                .checked_div(total_128)
+                .ok_or(ProgramError::ArithmeticOverflow)?;
+
+            // Safe downcast back to u64
+            let raw_share = u64::try_from(raw_share_128)
+                .map_err(|_| ProgramError::ArithmeticOverflow)?;
+
             raw_share.min(info.remaining).min(remaining_amount)
         } else {
             0
@@ -139,47 +205,16 @@ pub(crate) fn repay<'info>(
         info.share = share;
     }
 
-    // Atomically move the gross amount into Core's ZOV and only the open-position
-    // principal into Orbit's distribution vault. Any excess remains in the ZOV.
-    let authority_bump = ctx.bumps.orbit_authority;
-    let authority_seeds: &[&[u8]] = &[
-        zynk_core::ORBIT_CPI_AUTHORITY_SEED,
-        &[authority_bump],
-    ];
-    let core_accounts = zynk_core::cpi::accounts::ReplenishAndRepay {
-        config: ctx.accounts.config.to_account_info(),
-        orbit_authority: ctx.accounts.orbit_authority.to_account_info(),
-        manager: ctx.accounts.manager.to_account_info(),
-        order_tracker: ctx.accounts.order_tracker.to_account_info(),
-        partner_deposit_vault: ctx.accounts.partner_deposit_vault.to_account_info(),
-        pdv_token_account: ctx.accounts.pdv_token_account.to_account_info(),
-        zynk_op_vault: ctx.accounts.zynk_op_vault.to_account_info(),
-        zov_token_account: ctx.accounts.zov_token_account.to_account_info(),
-        destination_token_account: ctx.accounts.ovault_token_account.to_account_info(),
-        mint: ctx.accounts.mint.to_account_info(),
-        token_program: ctx.accounts.token_program.to_account_info(),
-    };
-    zynk_core::cpi::replenish_and_repay(
-        CpiContext::new_with_signer(
-            ctx.accounts.zynk_core_program.to_account_info(),
-            core_accounts,
-            &[authority_seeds],
-        ),
-        zov_id,
-        amount,
-        prepared_amount,
-        meta,
-    )?;
-
-    let ovault_seeds: &[&[u8]] = &[VAULT_SEED, b"orbit", &[ctx.bumps.ovault]];
-    let ovault_signer_seeds = &[&ovault_seeds[..]];
+    let mut shares = Vec::with_capacity(num_positions);
+    let mut cpi_destinations = Vec::with_capacity(num_positions);
 
     for i in 0..num_positions {
         let base_idx = i * 3;
         let dst_token_account: &AccountInfo = &remaining_accounts[base_idx];
-        let position_pda: &AccountInfo = &remaining_accounts[base_idx + 2];
+        let info = &mut position_infos[i];
+        shares.push(info.share);
+        cpi_destinations.push(dst_token_account.clone());
 
-        let info = &position_infos[i];
         if info.share == 0 {
             continue;
         }
@@ -192,6 +227,7 @@ pub(crate) fn repay<'info>(
                 .map_err(|_| zynk_core::CoreError::InvalidAccount)?;
             token_account.owner
         };
+        info.dest_owner = dst_token_authority;
 
         match info.user_type {
             UserType::NCW => {
@@ -214,24 +250,50 @@ pub(crate) fn repay<'info>(
                 return Err(zynk_core::CoreError::Unauthorized.into());
             }
         }
+    }
 
-        let transfer_accounts = TransferChecked {
-            from: ctx.accounts.ovault_token_account.to_account_info(),
-            to: dst_token_account.to_account_info(),
-            mint: ctx.accounts.mint.to_account_info(),
-            authority: ctx.accounts.ovault.to_account_info(),
-        };
+    // Atomically move the gross amount into Core's ZOV and transfer open-position
+    // principal directly from the ZOV to each position's destination token account.
+    // Any excess remains in the ZOV.
+    let authority_bump = ctx.bumps.orbit_authority;
+    let authority_seeds: &[&[u8]] = &[
+        zynk_core::ORBIT_CPI_AUTHORITY_SEED,
+        &[authority_bump],
+    ];
+    let core_accounts = zynk_core::cpi::accounts::ReplenishAndRepay {
+        config: ctx.accounts.config.to_account_info(),
+        orbit_authority: ctx.accounts.orbit_authority.to_account_info(),
+        manager: ctx.accounts.manager.to_account_info(),
+        order_tracker: ctx.accounts.order_tracker.to_account_info(),
+        partner_deposit_vault: ctx.accounts.partner_deposit_vault.to_account_info(),
+        pdv_token_account: ctx.accounts.pdv_token_account.to_account_info(),
+        zynk_op_vault: ctx.accounts.zynk_op_vault.to_account_info(),
+        zov_token_account: ctx.accounts.zov_token_account.to_account_info(),
+        mint: ctx.accounts.mint.to_account_info(),
+        token_program: ctx.accounts.token_program.to_account_info(),
+    };
+    zynk_core::cpi::replenish_and_repay(
+        CpiContext::new_with_signer(
+            ctx.accounts.zynk_core_program.to_account_info(),
+            core_accounts,
+            &[authority_seeds],
+        )
+        .with_remaining_accounts(cpi_destinations),
+        zov_id,
+        amount,
+        total_repay_for_core,
+        shares,
+        meta,
+    )?;
 
-        let transfer_ctx = CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
-            transfer_accounts,
-            ovault_signer_seeds,
-        );
-        token_interface::transfer_checked(
-            transfer_ctx,
-            info.share,
-            ctx.accounts.mint.decimals,
-        )?;
+    for i in 0..num_positions {
+        let base_idx = i * 3;
+        let position_pda: &AccountInfo = &remaining_accounts[base_idx + 2];
+
+        let info = &position_infos[i];
+        if info.share == 0 {
+            continue;
+        }
 
         let is_position_closed = {
             let mut position_data = position_pda.try_borrow_mut_data()?;
@@ -260,20 +322,22 @@ pub(crate) fn repay<'info>(
         if is_position_closed {
             close_account(position_pda, &ctx.accounts.manager)?;
         }
-    }
 
-    emit!(TxEvent {
-        event_name: "Repay".to_string(),
-        user_id: [0u8; 32],
-        from_owner: Pubkey::default(),
-        to_owner: ctx.accounts.ovault.key(),
-        from: ctx.accounts.zov_token_account.key(),
-        to: ctx.accounts.ovault_token_account.key(),
-        amount: prepared_amount,
-        token: ctx.accounts.mint.key(),
-        domain_separator: DOMAIN_SEPARATOR,
-        order_id,
-    });
+        emit!(TxEvent {
+            event_name: "Repay".to_string(),
+            user_id: info.user_id,
+            from_owner: ctx.accounts.zov_token_account.owner,
+            to_owner: info.dest_owner,
+            from: ctx.accounts.zov_token_account.key(),
+            to: remaining_accounts[base_idx].key(),
+            amount: info.share,
+            token: ctx.accounts.mint.key(),
+            domain_separator: DOMAIN_SEPARATOR,
+            order_id,
+            signer: ctx.accounts.manager.key(),
+            timestamp: Clock::get()?.unix_timestamp,
+        });
+    }
 
     Ok(())
 }

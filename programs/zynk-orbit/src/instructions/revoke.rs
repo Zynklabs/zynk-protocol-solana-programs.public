@@ -11,6 +11,9 @@ pub(crate) fn revoke(ctx: Context<Revoke>) -> Result<()> {
         zynk_core::CoreError::Unauthorized
     );
 
+    let revoke_signer = ctx.accounts.admin.key();
+    let revoke_timestamp = Clock::get()?.unix_timestamp;
+
     macro_rules! try_revoke {
         ($data:expr, $pda_key:expr, $ty:ty, $event:expr) => {
             if let Ok(account) = <$ty>::try_deserialize(&mut &$data[..]) {
@@ -20,6 +23,9 @@ pub(crate) fn revoke(ctx: Context<Revoke>) -> Result<()> {
                     public_key: $pda_key,
                     domain_separator: DOMAIN_SEPARATOR,
                     partners: Vec::new(),
+                    signer: revoke_signer,
+                    timestamp: revoke_timestamp,
+                    value: 0,
                 });
                 true
             } else {

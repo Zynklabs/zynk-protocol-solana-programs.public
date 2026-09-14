@@ -29,6 +29,9 @@ pub(crate) fn update_cliff_period(
         public_key: ctx.accounts.user.wallets[0],
         domain_separator: DOMAIN_SEPARATOR,
         partners: Vec::new(),
+        signer: ctx.accounts.admin.key(),
+        timestamp: now,
+        value: resolved_cliff,
     });
     Ok(())
 }
@@ -55,6 +58,9 @@ pub(crate) fn approve_cliff_period(ctx: Context<ApproveCliffPeriod>, user_id: [u
         public_key: ctx.accounts.signer.key(),
         domain_separator: DOMAIN_SEPARATOR,
         partners: Vec::new(),
+        signer: ctx.accounts.signer.key(),
+        timestamp: Clock::get()?.unix_timestamp,
+        value: new_cliff_period,
     });
 
     Ok(())
@@ -68,6 +74,10 @@ pub(crate) fn reject_cliff_period(ctx: Context<RejectCliffPeriod>, user_id: [u8;
         zynk_core::CoreError::Unauthorized
     );
 
+    // Capture the rejected value before close_account zeroes the account data.
+    let rejected_cliff = ctx.accounts.request.cliff_period;
+    let timestamp = Clock::get()?.unix_timestamp;
+
     close_account(
         ctx.accounts.request.to_account_info(),
         ctx.accounts.signer.to_account_info(),
@@ -76,9 +86,12 @@ pub(crate) fn reject_cliff_period(ctx: Context<RejectCliffPeriod>, user_id: [u8;
     emit!(AxEvent {
         event_name: "CliffPeriodRejected".to_string(),
         user_id,
-        public_key: ctx.accounts.signer.key(),
+        public_key: signer,
         domain_separator: DOMAIN_SEPARATOR,
         partners: Vec::new(),
+        signer,
+        timestamp,
+        value: rejected_cliff,
     });
 
     Ok(())

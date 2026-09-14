@@ -15,6 +15,10 @@ import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   getOrCreateAssociatedTokenAccount,
   createAssociatedTokenAccount,
+  ExtensionType,
+  getMintLen,
+  createInitializeTransferFeeConfigInstruction,
+  createInitializeMintInstruction,
 } from "@solana/spl-token";
 import { ZynkCore } from "../target/types/zynk_core";
 import { assert, expect } from "chai";
@@ -424,9 +428,11 @@ describe("zynk-core", () => {
           Array.from(defaultZovId),
           true, // transient
           amount,
+          new anchor.BN(0),
           null
         )
         .accounts({
+          orbitAuthority: null,
           config: configPDA,
           manager: manager.publicKey,
           partnerDepositVault: partnerDepositVaultPDA,
@@ -478,6 +484,7 @@ describe("zynk-core", () => {
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -570,6 +577,7 @@ describe("zynk-core", () => {
           null
         )
         .accounts({
+          orbitAuthority: null,
           config: configPDA,
           manager: manager.publicKey,
           partnerDepositVault: partnerDepositVaultPDA,
@@ -621,6 +629,7 @@ describe("zynk-core", () => {
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -697,9 +706,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -806,9 +817,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
+        new anchor.BN(0),
         meta
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -851,9 +864,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false, // !transient
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -960,9 +975,11 @@ describe("zynk-core", () => {
           Array.from(defaultZovId),
           false,
           amount,
+          new anchor.BN(0),
           null
         )
         .accounts({
+          orbitAuthority: null,
           config: configPDA,
           manager: manager.publicKey,
           partnerDepositVault: partnerDepositVaultPDA,
@@ -1110,6 +1127,7 @@ describe("zynk-core", () => {
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -1211,6 +1229,7 @@ describe("zynk-core", () => {
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -1307,9 +1326,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         true, // transient
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -1404,9 +1425,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         true, // transient
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -1489,9 +1512,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false, // !transient
         new anchor.BN(1000000000000),
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -1762,9 +1787,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount.muln(2),
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -2024,9 +2051,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -2158,9 +2187,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -2248,9 +2279,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -2339,9 +2372,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -2438,6 +2473,7 @@ describe("zynk-core", () => {
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -2518,6 +2554,7 @@ describe("zynk-core", () => {
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -2588,9 +2625,11 @@ describe("zynk-core", () => {
           Array.from(defaultZovId),
           false,
           amount,
+          new anchor.BN(0),
           null
         )
         .accounts({
+          orbitAuthority: null,
           config: configPDA,
           manager: manager.publicKey,
           pdvTokenAccount: atas.partnerDepositTokenAccountInvalid, // Using invalid token
@@ -2632,6 +2671,7 @@ describe("zynk-core", () => {
           null
         )
         .accounts({
+          orbitAuthority: null,
           config: configPDA,
           manager: manager.publicKey,
           partnerDepositVault: partnerDepositVaultPDA,
@@ -2676,6 +2716,7 @@ describe("zynk-core", () => {
           null
         )
         .accounts({
+          orbitAuthority: null,
           config: configPDA,
           manager: manager.publicKey,
           partnerDepositVault: partnerDepositVaultPDA,
@@ -2717,9 +2758,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -2802,9 +2845,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -2908,6 +2953,7 @@ describe("zynk-core", () => {
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -3010,6 +3056,7 @@ describe("zynk-core", () => {
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -3096,9 +3143,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -3185,9 +3234,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -3699,9 +3750,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -3727,9 +3780,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -3854,9 +3909,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -3990,9 +4047,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -4086,17 +4145,6 @@ describe("zynk-core", () => {
       .signers([admin])
       .rpc();
 
-    // Revoke timelock to clean up the account
-    await program.methods
-      .revokeTimelock()
-      .accounts({
-        config: configPDA,
-        timelock: timelockPDA,
-        authority: admin.publicKey,
-      })
-      .signers([admin])
-      .rpc();
-
     // Close the order
     await program.methods
       .closeOrders(null)
@@ -4145,9 +4193,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -4241,9 +4291,11 @@ describe("zynk-core", () => {
         Array.from(defaultZovId),
         false,
         amount,
+        new anchor.BN(0),
         null
       )
       .accounts({
+        orbitAuthority: null,
         config: configPDA,
         manager: manager.publicKey,
         partnerDepositVault: partnerDepositVaultPDA,
@@ -4629,20 +4681,10 @@ describe("zynk-core", () => {
     configAccount = await program.account.config.fetch(configPDA);
     assert.ok(!configAccount.paused, "Expected program to be unpaused!");
 
-    // Revoke / clean up timelock PDA
-    await program.methods
-      .revokeTimelock()
-      .accounts({
-        config: configPDA,
-        timelock: timelockPDA,
-        authority: admin.publicKey,
-      })
-      .signers([admin])
-      .rpc();
-
+    // The handler closes the timelock PDA automatically upon execution.
     try {
       await program.account.timelock.fetch(timelockPDA);
-      assert.fail("Timelock account should be closed after revoke");
+      assert.fail("Timelock account should be closed after unpause");
     } catch (error) {
       assert.include(
         error.message,
@@ -4817,17 +4859,6 @@ describe("zynk-core", () => {
       "Admin should be updated to newAdmin"
     );
 
-    // Clean up timelock PDA
-    await program.methods
-      .revokeTimelock()
-      .accounts({
-        config: configPDA,
-        timelock: actionTimelockPDA,
-        authority: guardian.publicKey,
-      })
-      .signers([guardian])
-      .rpc();
-
     // Restore admin back to original admin
     await program.methods
       .requestTimelock(action, admin.publicKey)
@@ -4865,16 +4896,6 @@ describe("zynk-core", () => {
       configAccount.admin.equals(admin.publicKey),
       "Admin should be restored"
     );
-
-    await program.methods
-      .revokeTimelock()
-      .accounts({
-        config: configPDA,
-        timelock: actionTimelockPDA,
-        authority: guardian.publicKey,
-      })
-      .signers([guardian])
-      .rpc();
   });
 
   it("Should be able to update manager via multi-signer timelock: manager requests, admin acks, guardian executes", async () => {
@@ -4931,17 +4952,6 @@ describe("zynk-core", () => {
       "Manager should be updated to newManager"
     );
 
-    // Clean up timelock PDA
-    await program.methods
-      .revokeTimelock()
-      .accounts({
-        config: configPDA,
-        timelock: actionTimelockPDA,
-        authority: admin.publicKey,
-      })
-      .signers([admin])
-      .rpc();
-
     // Restore manager back to original manager
     await program.methods
       .requestTimelock(action, manager.publicKey)
@@ -4979,16 +4989,6 @@ describe("zynk-core", () => {
       configAccount.manager.equals(manager.publicKey),
       "Manager should be restored"
     );
-
-    await program.methods
-      .revokeTimelock()
-      .accounts({
-        config: configPDA,
-        timelock: actionTimelockPDA,
-        authority: admin.publicKey,
-      })
-      .signers([admin])
-      .rpc();
   });
 
   it("Should not be able to execute UpdateGuardian before ETA even if acked (requires eta && ack)", async () => {
@@ -5293,6 +5293,7 @@ describe("zynk-core", () => {
       .accounts({
         config: configPDA,
         authority: admin.publicKey,
+        mint: newMint,
         systemProgram: SystemProgram.programId,
       } as any)
       .signers([admin])
@@ -5324,6 +5325,7 @@ describe("zynk-core", () => {
       .accounts({
         config: configPDA,
         authority: guardian.publicKey,
+        mint: newMint,
         systemProgram: SystemProgram.programId,
       } as any)
       .signers([guardian])
@@ -5346,6 +5348,7 @@ describe("zynk-core", () => {
         .accounts({
           config: configPDA,
           authority: admin.publicKey,
+          mint: existingMint,
           systemProgram: SystemProgram.programId,
         } as any)
         .signers([admin])
@@ -5363,6 +5366,7 @@ describe("zynk-core", () => {
         .accounts({
           config: configPDA,
           authority: admin.publicKey,
+          mint: null,
           systemProgram: SystemProgram.programId,
         } as any)
         .signers([admin])
@@ -5397,6 +5401,7 @@ describe("zynk-core", () => {
         .accounts({
           config: configPDA,
           authority: unauthorized.publicKey,
+          mint: newMint,
           systemProgram: SystemProgram.programId,
         } as any)
         .signers([unauthorized])
@@ -5424,6 +5429,7 @@ describe("zynk-core", () => {
       .accounts({
         config: configPDA,
         authority: admin.publicKey,
+        mint: tempMint,
         systemProgram: SystemProgram.programId,
       } as any)
       .signers([admin])
@@ -5438,6 +5444,7 @@ describe("zynk-core", () => {
       .accounts({
         config: configPDA,
         authority: admin.publicKey,
+        mint: null,
         systemProgram: SystemProgram.programId,
       } as any)
       .signers([admin])
@@ -5448,6 +5455,119 @@ describe("zynk-core", () => {
     assert.isFalse(
       configAfter.whitelistedTokenMints.some((m) => m.equals(tempMint))
     );
+  });
+
+  it("Should fail when adding a fee-bearing Token-2022 mint (TransferFeeConfig) to the whitelist", async () => {
+    const feeMintKeypair = Keypair.generate();
+    const extensions = [ExtensionType.TransferFeeConfig];
+    const mintLen = getMintLen(extensions);
+    const lamports =
+      await provider.connection.getMinimumBalanceForRentExemption(mintLen);
+
+    const feeTx = new anchor.web3.Transaction().add(
+      SystemProgram.createAccount({
+        fromPubkey: manager.publicKey,
+        newAccountPubkey: feeMintKeypair.publicKey,
+        space: mintLen,
+        lamports,
+        programId: TOKEN_2022_PROGRAM_ID,
+      }),
+      createInitializeTransferFeeConfigInstruction(
+        feeMintKeypair.publicKey,
+        admin.publicKey,
+        admin.publicKey,
+        100, // 1% fee
+        BigInt(1_000_000), // max fee
+        TOKEN_2022_PROGRAM_ID
+      ),
+      createInitializeMintInstruction(
+        feeMintKeypair.publicKey,
+        6,
+        admin.publicKey,
+        null,
+        TOKEN_2022_PROGRAM_ID
+      )
+    );
+    await anchor.web3.sendAndConfirmTransaction(provider.connection, feeTx, [
+      manager,
+      feeMintKeypair,
+    ]);
+
+    try {
+      await program.methods
+        .updateWhitelistedTokenMint({ add: {} }, feeMintKeypair.publicKey)
+        .accounts({
+          config: configPDA,
+          authority: admin.publicKey,
+          mint: feeMintKeypair.publicKey,
+          systemProgram: SystemProgram.programId,
+        } as any)
+        .signers([admin])
+        .rpc();
+      assert.fail("Expected fee-bearing mint admission to fail");
+    } catch (error: any) {
+      assert.include(
+        error.message,
+        "FeeBearingMintNotSupported",
+        "Expected FeeBearingMintNotSupported error"
+      );
+    }
+  });
+
+  it("Should successfully add a non-fee-bearing Token-2022 mint to the whitelist", async () => {
+    const t22MintKeypair = Keypair.generate();
+    const t22MintLen = getMintLen([]);
+    const t22Lamports =
+      await provider.connection.getMinimumBalanceForRentExemption(t22MintLen);
+
+    const t22Tx = new anchor.web3.Transaction().add(
+      SystemProgram.createAccount({
+        fromPubkey: manager.publicKey,
+        newAccountPubkey: t22MintKeypair.publicKey,
+        space: t22MintLen,
+        lamports: t22Lamports,
+        programId: TOKEN_2022_PROGRAM_ID,
+      }),
+      createInitializeMintInstruction(
+        t22MintKeypair.publicKey,
+        6,
+        admin.publicKey,
+        null,
+        TOKEN_2022_PROGRAM_ID
+      )
+    );
+    await anchor.web3.sendAndConfirmTransaction(provider.connection, t22Tx, [
+      manager,
+      t22MintKeypair,
+    ]);
+
+    await program.methods
+      .updateWhitelistedTokenMint({ add: {} }, t22MintKeypair.publicKey)
+      .accounts({
+        config: configPDA,
+        authority: admin.publicKey,
+        mint: t22MintKeypair.publicKey,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .signers([admin])
+      .rpc();
+
+    let cfg = await program.account.config.fetch(configPDA);
+    assert.isTrue(
+      cfg.whitelistedTokenMints.some((m) => m.equals(t22MintKeypair.publicKey))
+    );
+
+    // Clean up
+    await program.methods
+      .updateWhitelistedTokenMint({ remove: {} }, t22MintKeypair.publicKey)
+      .accounts({
+        config: configPDA,
+        authority: admin.publicKey,
+        mint: null,
+        systemProgram: SystemProgram.programId,
+      } as any)
+      .signers([admin])
+      .rpc();
   });
 
   it("Should fail when removing a token mint that is not whitelisted", async () => {
@@ -5467,6 +5587,7 @@ describe("zynk-core", () => {
         .accounts({
           config: configPDA,
           authority: admin.publicKey,
+          mint: null,
           systemProgram: SystemProgram.programId,
         } as any)
         .signers([admin])
@@ -5493,6 +5614,7 @@ describe("zynk-core", () => {
         .accounts({
           config: configPDA,
           authority: unauthorized.publicKey,
+          mint: null,
           systemProgram: SystemProgram.programId,
         } as any)
         .signers([unauthorized])
@@ -5500,6 +5622,34 @@ describe("zynk-core", () => {
       assert.fail("Expected transaction to fail");
     } catch (error: any) {
       assert.include(error.message, "Unauthorized");
+    }
+  });
+
+  it("Should fail when adding a token mint without providing its account", async () => {
+    const orphanMintKeypair = Keypair.generate();
+    const orphanMint = await createMint(
+      provider.connection,
+      manager,
+      admin.publicKey,
+      null,
+      6,
+      orphanMintKeypair
+    );
+
+    try {
+      await program.methods
+        .updateWhitelistedTokenMint({ add: {} }, orphanMint)
+        .accounts({
+          config: configPDA,
+          authority: admin.publicKey,
+          mint: null,
+          systemProgram: SystemProgram.programId,
+        } as any)
+        .signers([admin])
+        .rpc();
+      assert.fail("Expected transaction to fail when mint account is omitted");
+    } catch (error: any) {
+      assert.include(error.message, "InvalidTokenMint");
     }
   });
 });

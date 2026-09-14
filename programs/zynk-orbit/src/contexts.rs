@@ -96,6 +96,13 @@ pub struct Borrow<'info> {
     #[account(mut)]
     pub manager: Signer<'info>,
 
+    /// CHECK: Orbit-owned capability PDA used to authenticate create_order CPI to zynk-core.
+    #[account(
+        seeds = [zynk_core::ORBIT_CPI_AUTHORITY_SEED],
+        bump,
+    )]
+    pub orbit_authority: UncheckedAccount<'info>,
+
     // Remaining accounts (4 per position):
     // [source_token_account, authority_account, user, position_pda]
 }
@@ -113,13 +120,6 @@ pub struct Repay<'info> {
 
     #[account(mut, constraint = zov_token_account.owner == zynk_op_vault.key() @ zynk_core::CoreError::InvalidAccount)]
     pub zov_token_account: InterfaceAccount<'info, TokenAccount>,
-
-    #[account(
-        mut,
-        constraint = ovault_token_account.owner == ovault.key() @ zynk_core::CoreError::InvalidAccount,
-        constraint = ovault_token_account.mint == mint.key() @ zynk_core::CoreError::InvalidTokenMint,
-    )]
-    pub ovault_token_account: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
         constraint = mint.key() == zov_token_account.mint @ zynk_core::CoreError::InvalidTokenMint,
@@ -170,19 +170,11 @@ pub struct Repay<'info> {
     )]
     pub zynk_op_vault: UncheckedAccount<'info>,
 
-    /// CHECK: Orbit vault PDA validated by seeds and used as transfer authority.
-    #[account(
-        seeds = [VAULT_SEED, b"orbit"],
-        bump
-    )]
-    pub ovault: UncheckedAccount<'info>,
-
     // Remaining accounts (3 per position):
     // [destination_token_account, user, position_pda]
 }
 
 #[derive(Accounts)]
-#[instruction(vault_id: [u8; 32])]
 pub struct Disburse<'info> {
     #[account(
         seeds = [zynk_core::CONFIG_SEED],
@@ -192,7 +184,10 @@ pub struct Disburse<'info> {
     )]
     pub config: Account<'info, zynk_core::Config>,
 
-    #[account(mut)]
+    #[account(
+        mut,
+        constraint = source_token_account.owner == ovault.key() @ zynk_core::CoreError::InvalidAccount,
+    )]
     pub source_token_account: InterfaceAccount<'info, TokenAccount>,
 
     #[account(mut)]
@@ -205,12 +200,12 @@ pub struct Disburse<'info> {
     )]
     pub mint: InterfaceAccount<'info, Mint>,
 
-    /// CHECK: Vault PDA validated by seeds and used as transfer authority.
+    /// CHECK: Orbit vault PDA validated by seeds and used as transfer authority.
     #[account(
-        seeds = [VAULT_SEED, vault_id.as_ref()],
+        seeds = [VAULT_SEED, b"orbit"],
         bump
     )]
-    pub spender: UncheckedAccount<'info>,
+    pub ovault: UncheckedAccount<'info>,
 
     pub user: Account<'info, User>,
 
@@ -503,21 +498,31 @@ pub struct ApproveWithdraw<'info> {
 }
 
 #[derive(Accounts)]
-pub struct RejectWithdraw<'info> {
+#[instruction(user_id: [u8; 32])]
+pub struct RevokeWithdraw<'info> {
     #[account(
         seeds = [zynk_core::CONFIG_SEED],
         seeds::program = ZynkCore::id(),
         bump,
-        has_one = admin @ zynk_core::CoreError::Unauthorized
     )]
     pub config: Account<'info, zynk_core::Config>,
 
-    /// CHECK: The admin-authorized handler closes this supplied request account.
-    #[account(mut)]
-    pub request: UncheckedAccount<'info>,
+    #[account(
+        mut,
+        seeds = [WITHDRAW_REQUEST_SEED, user_id.as_ref()],
+        bump,
+        constraint = request.user_id == user_id @ OrbitError::UserIdMismatch
+    )]
+    pub request: Account<'info, WithdrawRequest>,
+
+    #[account(
+        seeds = [USER_SEED, user_id.as_ref()],
+        bump,
+    )]
+    pub user: Account<'info, User>,
 
     #[account(mut)]
-    pub admin: Signer<'info>,
+    pub signer: Signer<'info>,
 
     pub system_program: Program<'info, System>,
 
@@ -529,6 +534,8 @@ pub struct RejectWithdraw<'info> {
 pub struct ApproveCliffPeriod<'info> {
     #[account(
         mut,
+        seeds = [USER_UPDATE_REQUEST_SEED, user_id.as_ref()],
+        bump,
         constraint = request.user_id == user_id @ OrbitError::UserIdMismatch
     )]
     pub request: Account<'info, UpdateCliffPeriodRequest >,
@@ -558,6 +565,8 @@ pub struct RejectCliffPeriod<'info> {
 
     #[account(
         mut,
+        seeds = [USER_UPDATE_REQUEST_SEED, user_id.as_ref()],
+        bump,
         constraint = request.user_id == user_id @ OrbitError::UserIdMismatch
     )]
     pub request: Account<'info, UpdateCliffPeriodRequest >,
@@ -592,8 +601,13 @@ pub struct Claim<'info> {
     )]
     pub user: Account<'info, User>,
 
-    /// ICV custody account. Pass None for NCW claims.
-    #[account(mut)]
+    /// ICV custody ATA of the User PDA for `mint`. Pass None for NCW claims.
+    #[account(
+        mut,
+        associated_token::mint = mint,
+        associated_token::authority = user,
+        associated_token::token_program = token_program,
+    )]
     pub icv_token_account: Option<InterfaceAccount<'info, TokenAccount>>,
 
     #[account(mut)]
@@ -702,5 +716,18 @@ pub struct Cctp<'info> {
     pub zynk_core_program: Program<'info, ZynkCore>,
 
     /// CHECK: Manager-authorized instruction forwards this account as the CCTP CPI target.
+    #[account(
+        constraint = cfg!(feature = "testing") || cctp_token_messenger_minter_program.key() == CCTP_TOKEN_MESSENGER_MINTER_PROGRAM
+    )]
     pub cctp_token_messenger_minter_program: UncheckedAccount<'info>,
+
+    /// CHECK: Core order tracker initialized during create_order CPI for ICV transfers.
+    #[account(mut)]
+    pub order_tracker: Option<UncheckedAccount<'info>>,
+
+    /// CHECK: Core partner deposit vault validated during create_order CPI for ICV transfers.
+    pub partner_deposit_vault: Option<UncheckedAccount<'info>>,
+
+    /// CHECK: Core ZOV validated during create_order CPI for ICV transfers.
+    pub zynk_op_vault: Option<UncheckedAccount<'info>>,
 }

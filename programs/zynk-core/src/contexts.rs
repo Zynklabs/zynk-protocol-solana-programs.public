@@ -52,27 +52,13 @@ pub struct CreateOrder<'info> {
         bump,
     )]
     pub zynk_op_vault: UncheckedAccount<'info>,
-    #[account(
-        mut,
-        constraint = zov_token_account.owner == zynk_op_vault.key() @ CoreError::InvalidAccount,
-        constraint = zov_token_account.mint == mint.key() @ CoreError::InvalidTokenMint
-    )]
-    pub zov_token_account: InterfaceAccount<'info, TokenAccount>,
+    #[account(mut)]
+    pub zov_token_account: Option<InterfaceAccount<'info, TokenAccount>>,
 
-    #[account(
-        seeds = [BENEFICIARY_SEED, partner_id.as_ref(), beneficiary_token_account.owner.as_ref()],
-        bump,
-        constraint = beneficiary.is_active @ CoreError::InvalidBeneficiary,
-        constraint = beneficiary.public_key == beneficiary_token_account.owner @ CoreError::InvalidBeneficiary,
-    )]
-    pub beneficiary: Account<'info, Beneficiary>,
+    pub beneficiary: Option<Account<'info, Beneficiary>>,
 
-    #[account(
-        mut,
-        constraint = beneficiary_token_account.mint == zov_token_account.mint @ CoreError::InvalidAccount,
-        constraint = beneficiary_token_account.owner != zynk_op_vault.key() @ CoreError::InvalidAccount,
-    )]
-    pub beneficiary_token_account: InterfaceAccount<'info, TokenAccount>,
+    #[account(mut)]
+    pub beneficiary_token_account: Option<InterfaceAccount<'info, TokenAccount>>,
 
     #[account(
         init,
@@ -89,6 +75,14 @@ pub struct CreateOrder<'info> {
     pub mint: InterfaceAccount<'info, Mint>,
     pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
+
+    #[account(
+        signer,
+        seeds = [ORBIT_CPI_AUTHORITY_SEED],
+        seeds::program = ZYNK_ORBIT_ID,
+        bump,
+    )]
+    pub orbit_authority: Option<UncheckedAccount<'info>>,
 }
 
 #[derive(Accounts)]
@@ -200,13 +194,6 @@ pub struct ReplenishAndRepay<'info> {
     pub zov_token_account: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
-        mut,
-        constraint = destination_token_account.mint == mint.key() @ CoreError::InvalidTokenMint,
-        constraint = destination_token_account.key() != zov_token_account.key() @ CoreError::InvalidAccount,
-    )]
-    pub destination_token_account: InterfaceAccount<'info, TokenAccount>,
-
-    #[account(
         constraint = config.whitelisted_token_mints.contains(&mint.key()) @ CoreError::InvalidTokenMint,
         constraint = mint.key() == order_tracker.mint @ CoreError::InvalidTokenMint,
     )]
@@ -254,7 +241,6 @@ pub struct RecordOrder<'info> {
 
     pub system_program: Program<'info, System>,
 }
-
 
 #[derive(Accounts)]
 #[instruction(partner_id: [u8; 32], public_key: Pubkey)]
@@ -359,6 +345,9 @@ pub struct UpdateWhitelistedTokenMint<'info> {
     )]
     pub authority: Signer<'info>,
 
+    /// CHECK: Validated in handler when action is Add
+    pub mint: Option<AccountInfo<'info>>,
+
     pub system_program: Program<'info, System>,
 }
 
@@ -412,7 +401,6 @@ pub struct SignTimelock<'info> {
     )]
     pub authority: Signer<'info>,
 }
-
 
 #[derive(Accounts)]
 pub struct Pause<'info> {

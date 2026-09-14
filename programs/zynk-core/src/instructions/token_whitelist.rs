@@ -17,6 +17,16 @@ pub(crate) fn update_whitelisted_token_mint(
                 !config.whitelisted_token_mints.contains(&mint),
                 CoreError::TokenMintAlreadyWhitelisted
             );
+
+            if let Some(ref acc) = ctx.accounts.mint {
+                require!(acc.key() == mint, CoreError::InvalidTokenMint);
+                validate_not_fee_bearing(acc)?;
+            } else if let Some(acc) = ctx.remaining_accounts.iter().find(|acc| acc.key() == mint) {
+                validate_not_fee_bearing(acc)?;
+            } else {
+                return Err(CoreError::InvalidTokenMint.into());
+            }
+
             config.whitelisted_token_mints.push(mint);
         }
         WhitelistAction::Remove => {

@@ -24,8 +24,6 @@ pub enum OrbitError {
     InvalidPositionOperation,
     #[msg("Position order IDs do not match")]
     PositionOrderMismatch,
-    #[msg("Cliff period is over, operation not permitted")]
-    CliffPeriodOver,
     #[msg("Cliff period is not over yet")]
     CliffPeriodNotOver,
     #[msg("Deposit would exceed max deposit cap")]
@@ -38,8 +36,6 @@ pub enum OrbitError {
     PartnerAlreadyWhitelisted,
     #[msg("Invalid partner ID format")]
     InvalidPartnerId,
-    #[msg("Repay amount exceeds remaining order amount")]
-    ExcessiveRepay,
     #[msg("Source token account has insufficient token balance for withdrawal")]
     InsufficientTokenBalance,
     #[msg("CCTP recipient is not whitelisted")]
