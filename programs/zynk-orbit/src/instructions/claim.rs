@@ -34,6 +34,8 @@ pub(crate) fn claim<'info>(
         zynk_core::CoreError::InvalidAccount
     );
 
+    require!(user.user_type == UserType::ICV, OrbitError::InvalidOperation);
+
     let claimable = user
         .principal_in
         .checked_sub(user.principal_out)
@@ -41,41 +43,36 @@ pub(crate) fn claim<'info>(
     require!(claimable > 0, OrbitError::ZeroAmount);
 
     let mut total_paid = 0u64;
-    if user.user_type == UserType::ICV {
-        let icv_token_account = ctx
-            .accounts
-            .icv_token_account
-            .as_ref()
-            .ok_or(zynk_core::CoreError::InvalidAccount)?;
-        require!(icv_token_account.owner == user.key(), zynk_core::CoreError::InvalidAccount);
-        require!(icv_token_account.mint == ctx.accounts.mint.key(), zynk_core::CoreError::InvalidTokenMint);
+    let icv_token_account = ctx
+        .accounts
+        .icv_token_account
+        .as_ref()
+        .ok_or(zynk_core::CoreError::InvalidAccount)?;
+    require!(icv_token_account.owner == user.key(), zynk_core::CoreError::InvalidAccount);
+    require!(icv_token_account.mint == ctx.accounts.mint.key(), zynk_core::CoreError::InvalidTokenMint);
 
-        let liquid_payment = icv_token_account.amount.min(claimable);
-        if liquid_payment > 0 {
-            let user_seeds: &[&[u8]] = &[
-                USER_SEED,
-                user_id.as_ref(),
-                &[ctx.bumps.user],
-            ];
-            token_interface::transfer_checked(
-                CpiContext::new_with_signer(
-                    ctx.accounts.token_program.to_account_info(),
-                    TransferChecked {
-                        from: icv_token_account.to_account_info(),
-                        to: ctx.accounts.destination_token_account.to_account_info(),
-                        mint: ctx.accounts.mint.to_account_info(),
-                        authority: ctx.accounts.user.to_account_info(),
-                    },
-                    &[user_seeds],
-                ),
-                liquid_payment,
-                ctx.accounts.mint.decimals,
-            )?;
-            total_paid = liquid_payment;
-        }
-    } else {
-        require!(user.user_type == UserType::NCW, OrbitError::InvalidOperation);
-        require!(ctx.accounts.icv_token_account.is_none(), zynk_core::CoreError::InvalidAccount);
+    let liquid_payment = icv_token_account.amount.min(claimable);
+    if liquid_payment > 0 {
+        let user_seeds: &[&[u8]] = &[
+            USER_SEED,
+            user_id.as_ref(),
+            &[ctx.bumps.user],
+        ];
+        token_interface::transfer_checked(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                TransferChecked {
+                    from: icv_token_account.to_account_info(),
+                    to: ctx.accounts.destination_token_account.to_account_info(),
+                    mint: ctx.accounts.mint.to_account_info(),
+                    authority: ctx.accounts.user.to_account_info(),
+                },
+                &[user_seeds],
+            ),
+            liquid_payment,
+            ctx.accounts.mint.decimals,
+        )?;
+        total_paid = liquid_payment;
     }
 
     for (index, operation) in operations.iter().enumerate() {

@@ -221,16 +221,6 @@ pub(crate) fn borrow<'info>(
         position_account.try_serialize(&mut &mut position_data[..])?;
         drop(position_data);
 
-        if user_type == UserType::NCW {
-            let mut user_data = user_account.try_borrow_mut_data()?;
-            let mut user = User::try_deserialize_unchecked(&mut &user_data[..])?;
-            user.principal_in = user
-                .principal_in
-                .checked_add(pos.amount)
-                .ok_or(ProgramError::ArithmeticOverflow)?;
-            user.try_serialize(&mut &mut user_data[..])?;
-        }
-
         emit!(TxEvent {
             event_name: "Borrow".to_string(),
             user_id,
