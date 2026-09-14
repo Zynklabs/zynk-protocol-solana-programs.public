@@ -2224,13 +2224,7 @@ describe("zynk-orbit", () => {
     );
 
     await program.methods
-      .repay(
-        Array.from(borrowPartnerIdBytes),
-        Array.from(repayIcvOrderId),
-        Array.from(defaultZovId),
-        repayIcvBorrowAmount,
-        null
-      )
+      .repay(Array.from(defaultZovId), repayIcvBorrowAmount, null)
       .accounts({
         zovTokenAccount: zovAta,
         mint: tokenMint,
@@ -2274,13 +2268,7 @@ describe("zynk-orbit", () => {
     );
 
     await program.methods
-      .repay(
-        Array.from(borrowPartnerIdBytes),
-        Array.from(repayNcwOrderId),
-        Array.from(defaultZovId),
-        repayNcwBorrowAmount,
-        null
-      )
+      .repay(Array.from(defaultZovId), repayNcwBorrowAmount, null)
       .accounts({
         zovTokenAccount: zovAta,
         mint: tokenMint,
@@ -2337,13 +2325,7 @@ describe("zynk-orbit", () => {
     }
 
     await program.methods
-      .repay(
-        Array.from(borrowPartnerIdBytes),
-        Array.from(repayMultiOrderId),
-        Array.from(defaultZovId),
-        totalRepayAmount,
-        null
-      )
+      .repay(Array.from(defaultZovId), totalRepayAmount, null)
       .accounts({
         zovTokenAccount: zovAta,
         mint: tokenMint,
@@ -2476,13 +2458,7 @@ describe("zynk-orbit", () => {
       .rpc();
 
     await program.methods
-      .repay(
-        Array.from(borrowPartnerIdBytes),
-        Array.from(pOId),
-        Array.from(defaultZovId),
-        partialRepayAmount,
-        null
-      )
+      .repay(Array.from(defaultZovId), partialRepayAmount, null)
       .accounts({
         zovTokenAccount: zovAta,
         mint: tokenMint,
@@ -2549,13 +2525,7 @@ describe("zynk-orbit", () => {
       (await provider.connection.getTokenAccountBalance(pdvAta)).value.amount
     );
     await program.methods
-      .repay(
-        Array.from(borrowPartnerIdBytes),
-        Array.from(pOId),
-        Array.from(defaultZovId),
-        new anchor.BN(20_000_000),
-        null
-      )
+      .repay(Array.from(defaultZovId), new anchor.BN(20_000_000), null)
       .accounts({
         zovTokenAccount: zovAta,
         mint: tokenMint,
@@ -2702,13 +2672,7 @@ describe("zynk-orbit", () => {
 
     // First settle position 5 only; position 6 remains open with its debt.
     await program.methods
-      .repay(
-        Array.from(borrowPartnerIdBytes),
-        Array.from(orderId),
-        Array.from(defaultZovId),
-        singleAmount,
-        null
-      )
+      .repay(Array.from(defaultZovId), singleAmount, null)
       .accounts({
         zovTokenAccount: zovAta,
         mint: tokenMint,
@@ -2734,13 +2698,7 @@ describe("zynk-orbit", () => {
     // Position 6 is the last outstanding debt, so the 1M excess may settle
     // the order while the 15M principal closes this final position.
     await program.methods
-      .repay(
-        Array.from(borrowPartnerIdBytes),
-        Array.from(orderId),
-        Array.from(defaultZovId),
-        new anchor.BN(16_000_000),
-        null
-      )
+      .repay(Array.from(defaultZovId), new anchor.BN(16_000_000), null)
       .accounts({
         zovTokenAccount: zovAta,
         mint: tokenMint,
@@ -2860,13 +2818,7 @@ describe("zynk-orbit", () => {
     const invalidOvaultAta = await gocAta(ovaultPDA, invalidTokenMint);
     try {
       await program.methods
-        .repay(
-          Array.from(borrowPartnerIdBytes),
-          Array.from(orderId),
-          Array.from(defaultZovId),
-          borrowAmt,
-          null
-        )
+        .repay(Array.from(defaultZovId), borrowAmt, null)
         .accounts({
           zovTokenAccount: invalidZovAta,
           mint: invalidTokenMint,
@@ -2989,13 +2941,7 @@ describe("zynk-orbit", () => {
 
     try {
       await program.methods
-        .repay(
-          Array.from(borrowPartnerIdBytes),
-          Array.from(orderId8),
-          Array.from(defaultZovId),
-          borrowAmt,
-          null
-        )
+        .repay(Array.from(defaultZovId), borrowAmt, null)
         .accounts({
           zovTokenAccount: zovAta,
           mint: tokenMint,
@@ -3130,13 +3076,7 @@ describe("zynk-orbit", () => {
     );
 
     await program.methods
-      .repay(
-        Array.from(borrowPartnerIdBytes),
-        Array.from(orderId9),
-        Array.from(defaultZovId),
-        overRepayAmt,
-        null
-      )
+      .repay(Array.from(defaultZovId), overRepayAmt, null)
       .accounts({
         zovTokenAccount: zovAta,
         mint: tokenMint,
