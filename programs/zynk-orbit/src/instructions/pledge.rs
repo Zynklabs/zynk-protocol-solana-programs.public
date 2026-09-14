@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::{hash::hash, program_error::ProgramError};
+use anchor_lang::solana_program::program_error::ProgramError;
 use zynk_core::{self, program::ZynkCore};
 
 use crate::*;
@@ -31,7 +31,7 @@ pub(crate) fn pledge(
         user.key()
     } else {
         Pubkey::find_program_address(
-            &[zynk_core::ZYNK_OP_VAULT_SEED, hash(b"0001").as_ref()],
+            &[zynk_core::ZYNK_OP_VAULT_SEED, hashed("0001").as_ref()],
             &ZynkCore::id()
         ).0
     };
