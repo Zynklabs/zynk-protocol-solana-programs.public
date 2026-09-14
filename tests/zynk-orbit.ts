@@ -6110,6 +6110,11 @@ describe("zynk-orbit", () => {
     const cctpCaller = Array.from(Buffer.alloc(32, 2));
     const destinationDomain = 0; // e.g. Ethereum
     const zeroId = Array.from(Buffer.alloc(32));
+    const maxFee = new anchor.BN(0);
+    const minFinalityThreshold = 2000;
+    const cctpProgramId = new PublicKey(
+      "CCTPV2vPZJS2u2BBsUoscuikbYjnpFmbFsvVuJdgUMQe"
+    );
 
     it("Should fail CCTP from ovault with zero amount", async () => {
       const ovaultAta = await gocAta(ovaultPDA, tokenMint);
@@ -6120,6 +6125,9 @@ describe("zynk-orbit", () => {
             new anchor.BN(0),
             destinationDomain,
             cctpRecipient,
+            maxFee,
+            minFinalityThreshold,
+            null,
             null,
             null,
             null,
@@ -6135,7 +6143,7 @@ describe("zynk-orbit", () => {
             systemProgram: SystemProgram.programId,
             config: configPDA,
             zynkCoreProgram: core_program.programId,
-            cctpTokenMessengerMinterProgram: SystemProgram.programId,
+            cctpTokenMessengerMinterProgram: cctpProgramId,
             orderTracker: null,
             partnerDepositVault: null,
             zynkOpVault: null,
@@ -6165,6 +6173,9 @@ describe("zynk-orbit", () => {
             new anchor.BN(1000),
             destinationDomain,
             cctpRecipient,
+            maxFee,
+            minFinalityThreshold,
+            null,
             null,
             null,
             null,
@@ -6180,7 +6191,7 @@ describe("zynk-orbit", () => {
             systemProgram: SystemProgram.programId,
             config: configPDA,
             zynkCoreProgram: core_program.programId,
-            cctpTokenMessengerMinterProgram: SystemProgram.programId,
+            cctpTokenMessengerMinterProgram: cctpProgramId,
             orderTracker: null,
             partnerDepositVault: null,
             zynkOpVault: null,
@@ -6202,6 +6213,9 @@ describe("zynk-orbit", () => {
             new anchor.BN(1000),
             destinationDomain,
             cctpRecipient,
+            maxFee,
+            minFinalityThreshold,
+            null,
             null,
             null,
             null,
@@ -6217,7 +6231,7 @@ describe("zynk-orbit", () => {
             systemProgram: SystemProgram.programId,
             config: configPDA,
             zynkCoreProgram: core_program.programId,
-            cctpTokenMessengerMinterProgram: SystemProgram.programId,
+            cctpTokenMessengerMinterProgram: cctpProgramId,
             orderTracker: null,
             partnerDepositVault: null,
             zynkOpVault: null,
@@ -6244,6 +6258,9 @@ describe("zynk-orbit", () => {
             new anchor.BN(0),
             destinationDomain,
             cctpRecipient,
+            maxFee,
+            minFinalityThreshold,
+            null,
             null,
             null,
             null,
@@ -6259,7 +6276,7 @@ describe("zynk-orbit", () => {
             systemProgram: SystemProgram.programId,
             config: configPDA,
             zynkCoreProgram: core_program.programId,
-            cctpTokenMessengerMinterProgram: SystemProgram.programId,
+            cctpTokenMessengerMinterProgram: cctpProgramId,
             orderTracker: null,
             partnerDepositVault: null,
             zynkOpVault: null,
@@ -6294,7 +6311,10 @@ describe("zynk-orbit", () => {
             new anchor.BN(1000),
             destinationDomain,
             cctpRecipient,
+            maxFee,
+            minFinalityThreshold,
             cctpCaller,
+            null,
             null,
             null,
             null
@@ -6309,7 +6329,7 @@ describe("zynk-orbit", () => {
             systemProgram: SystemProgram.programId,
             config: configPDA,
             zynkCoreProgram: core_program.programId,
-            cctpTokenMessengerMinterProgram: SystemProgram.programId,
+            cctpTokenMessengerMinterProgram: cctpProgramId,
             orderTracker: null,
             partnerDepositVault: null,
             zynkOpVault: null,
@@ -6336,6 +6356,9 @@ describe("zynk-orbit", () => {
             new anchor.BN(1000),
             destinationDomain,
             cctpRecipient,
+            maxFee,
+            minFinalityThreshold,
+            null,
             null,
             null,
             null,
@@ -6351,7 +6374,7 @@ describe("zynk-orbit", () => {
             systemProgram: SystemProgram.programId,
             config: configPDA,
             zynkCoreProgram: core_program.programId,
-            cctpTokenMessengerMinterProgram: SystemProgram.programId,
+            cctpTokenMessengerMinterProgram: cctpProgramId,
             orderTracker: null,
             partnerDepositVault: null,
             zynkOpVault: null,
@@ -6395,6 +6418,9 @@ describe("zynk-orbit", () => {
             new anchor.BN(0),
             destinationDomain,
             cctpRecipient,
+            maxFee,
+            minFinalityThreshold,
+            null,
             null,
             null,
             null,
@@ -6410,7 +6436,7 @@ describe("zynk-orbit", () => {
             systemProgram: SystemProgram.programId,
             config: configPDA,
             zynkCoreProgram: core_program.programId,
-            cctpTokenMessengerMinterProgram: SystemProgram.programId,
+            cctpTokenMessengerMinterProgram: cctpProgramId,
             orderTracker: null,
             partnerDepositVault: null,
             zynkOpVault: null,
@@ -6452,6 +6478,9 @@ describe("zynk-orbit", () => {
             new anchor.BN(1000),
             destinationDomain,
             cctpRecipient,
+            maxFee,
+            minFinalityThreshold,
+            null,
             null,
             null,
             null,
@@ -6467,7 +6496,7 @@ describe("zynk-orbit", () => {
             systemProgram: SystemProgram.programId,
             config: configPDA,
             zynkCoreProgram: core_program.programId,
-            cctpTokenMessengerMinterProgram: SystemProgram.programId,
+            cctpTokenMessengerMinterProgram: cctpProgramId,
             orderTracker: null,
             partnerDepositVault: null,
             zynkOpVault: null,
@@ -6480,7 +6509,7 @@ describe("zynk-orbit", () => {
       }
     });
 
-    it("Should fail CCTP from user before cliff period is over", async () => {
+    it("Should fail CCTP from user if recipient is not whitelisted", async () => {
       const cctpIcvUserId = Buffer.alloc(32);
       cctpIcvUserId.write("cctp_icv_user_1", 0, "utf-8");
       const cctpIcvUser = Keypair.generate();
@@ -6510,6 +6539,9 @@ describe("zynk-orbit", () => {
             new anchor.BN(1000),
             destinationDomain,
             cctpRecipient,
+            maxFee,
+            minFinalityThreshold,
+            null,
             null,
             null,
             null,
@@ -6525,16 +6557,16 @@ describe("zynk-orbit", () => {
             systemProgram: SystemProgram.programId,
             config: configPDA,
             zynkCoreProgram: core_program.programId,
-            cctpTokenMessengerMinterProgram: SystemProgram.programId,
+            cctpTokenMessengerMinterProgram: cctpProgramId,
             orderTracker: null,
             partnerDepositVault: null,
             zynkOpVault: null,
           } as any)
           .signers([manager])
           .rpc();
-        assert.fail("Expected CliffPeriodNotOver error");
+        assert.fail("Expected CctpRecipientNotWhitelisted error");
       } catch (err: any) {
-        assert.include(err.message, "CliffPeriodNotOver");
+        assert.include(err.message, "CctpRecipientNotWhitelisted");
       }
     });
 
@@ -6578,6 +6610,9 @@ describe("zynk-orbit", () => {
             new anchor.BN(1000),
             destinationDomain,
             cctpRecipient,
+            maxFee,
+            minFinalityThreshold,
+            null,
             null,
             null,
             null,
@@ -6593,7 +6628,7 @@ describe("zynk-orbit", () => {
             systemProgram: SystemProgram.programId,
             config: configPDA,
             zynkCoreProgram: core_program.programId,
-            cctpTokenMessengerMinterProgram: SystemProgram.programId,
+            cctpTokenMessengerMinterProgram: cctpProgramId,
             orderTracker: null,
             partnerDepositVault: null,
             zynkOpVault: null,
@@ -6637,6 +6672,9 @@ describe("zynk-orbit", () => {
             new anchor.BN(1000),
             destinationDomain,
             cctpRecipient,
+            maxFee,
+            minFinalityThreshold,
+            null,
             null,
             null,
             null,
@@ -6652,7 +6690,7 @@ describe("zynk-orbit", () => {
             systemProgram: SystemProgram.programId,
             config: configPDA,
             zynkCoreProgram: core_program.programId,
-            cctpTokenMessengerMinterProgram: SystemProgram.programId,
+            cctpTokenMessengerMinterProgram: cctpProgramId,
             orderTracker: null,
             partnerDepositVault: null,
             zynkOpVault: null,
@@ -6707,7 +6745,10 @@ describe("zynk-orbit", () => {
       let userAccount = await program.account.user.fetch(cctpUserPDA);
       assert.deepEqual(userAccount.cctpRecipients, [recipient]);
 
-      const assertReachesCpi = async (destinationCaller: number[] | null) => {
+      const assertReachesCpi = async (
+        destinationCaller: number[] | null,
+        hookData: Buffer | number[] | null = null
+      ) => {
         // Derive a fresh order tracker for each CPI attempt
         const cctpOrderId = generateOrderId();
         const cctpPartnerId = Buffer.alloc(32);
@@ -6723,7 +6764,10 @@ describe("zynk-orbit", () => {
               new anchor.BN(1000),
               destinationDomain,
               cctpRecipient,
+              maxFee,
+              minFinalityThreshold,
               destinationCaller,
+              hookData,
               Array.from(cctpPartnerId),
               Array.from(cctpOrderId),
               Array.from(defaultZovId)
@@ -6738,7 +6782,7 @@ describe("zynk-orbit", () => {
               systemProgram: SystemProgram.programId,
               config: configPDA,
               zynkCoreProgram: core_program.programId,
-              cctpTokenMessengerMinterProgram: SystemProgram.programId,
+              cctpTokenMessengerMinterProgram: cctpProgramId,
               orderTracker: cctpOrderTrackerPDA,
               partnerDepositVault: partnerDepositVaultPDA,
               zynkOpVault: zynkOpVault,
@@ -6776,8 +6820,50 @@ describe("zynk-orbit", () => {
       userAccount = await program.account.user.fetch(cctpUserPDA);
       assert.isEmpty(userAccount.cctpRecipients);
 
-      // The deployment-time destination caller bypasses the now-empty whitelist.
-      await assertReachesCpi(cctpCaller);
+      // Destination caller no longer bypasses the empty whitelist; must fail with CctpRecipientNotWhitelisted
+      const cctpOrderId = generateOrderId();
+      const cctpPartnerId = Buffer.alloc(32);
+      cctpPartnerId.write(zynkPartnerId, 0, "utf-8");
+      const [cctpOrderTrackerPDA] = PublicKey.findProgramAddressSync(
+        [Buffer.from("order_tracker"), cctpPartnerId, cctpOrderId],
+        core_program.programId
+      );
+      try {
+        await program.methods
+          .cctp(
+            Array.from(cctpIcvUserId),
+            new anchor.BN(1000),
+            destinationDomain,
+            cctpRecipient,
+            maxFee,
+            minFinalityThreshold,
+            cctpCaller,
+            null,
+            Array.from(cctpPartnerId),
+            Array.from(cctpOrderId),
+            Array.from(defaultZovId)
+          )
+          .accounts({
+            sourceTokenAccount: cctpIcvAta,
+            user: cctpUserPDA,
+            authority: cctpUserPDA,
+            mint: tokenMint,
+            manager: manager.publicKey,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+            config: configPDA,
+            zynkCoreProgram: core_program.programId,
+            cctpTokenMessengerMinterProgram: cctpProgramId,
+            orderTracker: cctpOrderTrackerPDA,
+            partnerDepositVault: partnerDepositVaultPDA,
+            zynkOpVault: zynkOpVault,
+          } as any)
+          .signers([manager])
+          .rpc();
+        assert.fail("Expected CctpRecipientNotWhitelisted error");
+      } catch (err: any) {
+        assert.include(err.message, "CctpRecipientNotWhitelisted");
+      }
     });
 
     it("Should allow manager to initiate CCTP from ovault", async () => {
@@ -6789,7 +6875,10 @@ describe("zynk-orbit", () => {
             new anchor.BN(1000),
             destinationDomain,
             cctpRecipient,
+            maxFee,
+            minFinalityThreshold,
             cctpCaller,
+            null,
             null,
             null,
             null
@@ -6804,7 +6893,7 @@ describe("zynk-orbit", () => {
             systemProgram: SystemProgram.programId,
             config: configPDA,
             zynkCoreProgram: core_program.programId,
-            cctpTokenMessengerMinterProgram: SystemProgram.programId,
+            cctpTokenMessengerMinterProgram: cctpProgramId,
             orderTracker: null,
             partnerDepositVault: null,
             zynkOpVault: null,
@@ -6833,6 +6922,9 @@ describe("zynk-orbit", () => {
             new anchor.BN(1000),
             destinationDomain,
             cctpRecipient,
+            maxFee,
+            minFinalityThreshold,
+            null,
             null,
             null,
             null,
@@ -6848,7 +6940,7 @@ describe("zynk-orbit", () => {
             systemProgram: SystemProgram.programId,
             config: configPDA,
             zynkCoreProgram: core_program.programId,
-            cctpTokenMessengerMinterProgram: SystemProgram.programId,
+            cctpTokenMessengerMinterProgram: cctpProgramId,
             orderTracker: null,
             partnerDepositVault: null,
             zynkOpVault: null,
@@ -6859,6 +6951,186 @@ describe("zynk-orbit", () => {
       } catch (err: any) {
         assert.notInclude(err.message, "Unauthorized");
         assert.notInclude(err.message, "ZeroAmount");
+        assert.notInclude(err.message, "InvalidTokenMint");
+      }
+    });
+
+    it("Should allow manager to initiate CCTP with hook_data from ovault", async () => {
+      const ovaultAta = await gocAta(ovaultPDA, tokenMint);
+      const hookData = Buffer.from("orbit_cctp_v2_hook_data");
+      try {
+        await program.methods
+          .cctp(
+            zeroId,
+            new anchor.BN(1000),
+            destinationDomain,
+            cctpRecipient,
+            maxFee,
+            minFinalityThreshold,
+            cctpCaller,
+            hookData,
+            null,
+            null,
+            null
+          )
+          .accounts({
+            sourceTokenAccount: ovaultAta,
+            mint: tokenMint,
+            authority: ovaultPDA,
+            user: null,
+            manager: manager.publicKey,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+            config: configPDA,
+            zynkCoreProgram: core_program.programId,
+            cctpTokenMessengerMinterProgram: cctpProgramId,
+            orderTracker: null,
+            partnerDepositVault: null,
+            zynkOpVault: null,
+          } as any)
+          .signers([manager])
+          .rpc();
+        assert.fail("Expected to reach CPI");
+      } catch (err: any) {
+        assert.notInclude(err.message, "Unauthorized");
+        assert.notInclude(err.message, "ZeroAmount");
+        assert.notInclude(err.message, "InvalidTokenMint");
+      }
+    });
+
+    it("Should allow manager to initiate CCTP with hook_data from spender", async () => {
+      const vaultId = Array.from(Buffer.alloc(32, 10));
+      const [spenderPDA] = PublicKey.findProgramAddressSync(
+        [Buffer.from("vault"), Buffer.from(vaultId)],
+        program.programId
+      );
+      const spenderAta = await gocAta(spenderPDA, tokenMint);
+      const hookData = Buffer.from([0x01, 0x02, 0x03, 0x04]);
+      try {
+        await program.methods
+          .cctp(
+            vaultId,
+            new anchor.BN(1000),
+            destinationDomain,
+            cctpRecipient,
+            maxFee,
+            minFinalityThreshold,
+            null,
+            hookData,
+            null,
+            null,
+            null
+          )
+          .accounts({
+            sourceTokenAccount: spenderAta,
+            mint: tokenMint,
+            authority: spenderPDA,
+            user: null,
+            manager: manager.publicKey,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+            config: configPDA,
+            zynkCoreProgram: core_program.programId,
+            cctpTokenMessengerMinterProgram: cctpProgramId,
+            orderTracker: null,
+            partnerDepositVault: null,
+            zynkOpVault: null,
+          } as any)
+          .signers([manager])
+          .rpc();
+        assert.fail("Expected to reach CPI");
+      } catch (err: any) {
+        assert.notInclude(err.message, "Unauthorized");
+        assert.notInclude(err.message, "ZeroAmount");
+        assert.notInclude(err.message, "InvalidTokenMint");
+      }
+    });
+
+    it("Should allow manager to initiate CCTP with hook_data from ICV user", async () => {
+      const cctpIcvUserId = Buffer.alloc(32);
+      cctpIcvUserId.write("cctp_icv_hook_1", 0, "utf-8");
+      const primaryUser = Keypair.generate();
+      const now = Math.floor(Date.now() / 1000);
+      const cctpUserPDA = deriveUserPDA(cctpIcvUserId);
+
+      await program.methods
+        .registerUser(
+          Array.from(cctpIcvUserId),
+          { icv: {} },
+          [primaryUser.publicKey, primaryUser.publicKey, primaryUser.publicKey],
+          new anchor.BN(now + 1),
+          new anchor.BN(100_000_000),
+          [],
+          []
+        )
+        .accounts({ admin: admin.publicKey, config: configPDA } as any)
+        .signers([admin])
+        .rpc();
+
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      const cctpIcvAta = await gocAta(cctpUserPDA, tokenMint);
+      const recipient = {
+        destinationDomain,
+        mintRecipient: cctpRecipient,
+      };
+
+      await program.methods
+        .updateCctpRecipient(Array.from(cctpIcvUserId), { add: {} }, recipient)
+        .accounts({
+          config: configPDA,
+          user: cctpUserPDA,
+          admin: admin.publicKey,
+          systemProgram: SystemProgram.programId,
+        } as any)
+        .signers([admin])
+        .rpc();
+
+      const cctpOrderId = generateOrderId();
+      const cctpPartnerId = Buffer.alloc(32);
+      cctpPartnerId.write(zynkPartnerId, 0, "utf-8");
+      const [cctpOrderTrackerPDA] = PublicKey.findProgramAddressSync(
+        [Buffer.from("order_tracker"), cctpPartnerId, cctpOrderId],
+        core_program.programId
+      );
+      const hookData = Buffer.from("icv_hook_arbitrary_data");
+      try {
+        await program.methods
+          .cctp(
+            Array.from(cctpIcvUserId),
+            new anchor.BN(1000),
+            destinationDomain,
+            cctpRecipient,
+            maxFee,
+            minFinalityThreshold,
+            null,
+            hookData,
+            Array.from(cctpPartnerId),
+            Array.from(cctpOrderId),
+            Array.from(defaultZovId)
+          )
+          .accounts({
+            sourceTokenAccount: cctpIcvAta,
+            user: cctpUserPDA,
+            authority: cctpUserPDA,
+            mint: tokenMint,
+            manager: manager.publicKey,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+            config: configPDA,
+            zynkCoreProgram: core_program.programId,
+            cctpTokenMessengerMinterProgram: cctpProgramId,
+            orderTracker: cctpOrderTrackerPDA,
+            partnerDepositVault: partnerDepositVaultPDA,
+            zynkOpVault: zynkOpVault,
+          } as any)
+          .signers([manager])
+          .rpc();
+        assert.fail("Expected to reach CPI");
+      } catch (err: any) {
+        assert.notInclude(err.message, "CctpRecipientNotWhitelisted");
+        assert.notInclude(err.message, "InvalidAccount");
+        assert.notInclude(err.message, "Unauthorized");
+        assert.notInclude(err.message, "InvalidOperation");
         assert.notInclude(err.message, "InvalidTokenMint");
       }
     });

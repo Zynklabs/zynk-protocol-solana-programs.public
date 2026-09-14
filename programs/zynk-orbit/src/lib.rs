@@ -231,16 +231,18 @@ pub mod zynk_orbit {
     /// Burns tokens through Circle CCTP for transfer to another domain.
     ///
     /// The Core-configured manager may transfer from the Orbit vault, a derived
-    /// spender vault, or an ICV User PDA. ICV transfers require an elapsed cliff
-    /// and an allowed recipient or deployment-time destination caller, and are
-    /// recorded in `principal_out`.
+    /// spender vault, or an ICV User PDA.
+    /// ICV transfers require an allowed recipient and are recorded in `principal_out`.
     pub fn cctp<'info>(
         ctx: Context<'_, '_, '_, 'info, Cctp<'info>>,
         id: [u8; 32],
         amount: u64,
         destination_domain: u32,
         mint_recipient: [u8; 32],
+        max_fee: u64,
+        min_finality_threshold: u32,
         destination_caller: Option<[u8; 32]>,
+        hook_data: Option<Vec<u8>>,
         partner_id: Option<[u8; 32]>,
         order_id: Option<[u8; 32]>,
         zov_id: Option<[u8; 32]>,
@@ -251,7 +253,10 @@ pub mod zynk_orbit {
             amount,
             destination_domain,
             mint_recipient,
+            max_fee,
+            min_finality_threshold,
             destination_caller,
+            hook_data,
             partner_id,
             order_id,
             zov_id,

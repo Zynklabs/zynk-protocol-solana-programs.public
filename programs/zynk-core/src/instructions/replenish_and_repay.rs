@@ -95,7 +95,7 @@ pub(crate) fn replenish_and_repay<'info>(
             .amount_in
             .checked_sub(order_tracker.amount_repaid)
             .ok_or(ProgramError::ArithmeticOverflow)?;
-        let zov_outstanding = zov_borrowed
+        zov_borrowed
             .checked_sub(zov_already_repaid)
             .ok_or(ProgramError::ArithmeticOverflow)?;
     }

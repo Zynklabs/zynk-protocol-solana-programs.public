@@ -11,7 +11,10 @@ pub(crate) fn cctp<'info>(
     amount: u64,
     destination_domain: u32,
     mint_recipient: [u8; 32],
+    max_fee: u64,
+    min_finality_threshold: u32,
     destination_caller: Option<[u8; 32]>,
+    hook_data: Option<Vec<u8>>,
     partner_id: Option<[u8; 32]>,
     order_id: Option<[u8; 32]>,
     zov_id: Option<[u8; 32]>,
@@ -37,21 +40,13 @@ pub(crate) fn cctp<'info>(
                 zynk_core::CoreError::InvalidAccount
             );
 
-            require!(
-                Clock::get()?.unix_timestamp >= user.cliff_period,
-                OrbitError::CliffPeriodNotOver
-            );
-
             let recipient = CctpRecipient {
                 destination_domain,
                 mint_recipient,
             };
-            let destination_caller_is_whitelisted = destination_caller
-                .map(|caller| CCTP_WHITELISTED_DESTINATION_CALLERS.contains(&caller))
-                .unwrap_or(false);
+
             require!(
-                user.cctp_recipients.contains(&recipient)
-                    || destination_caller_is_whitelisted,
+                user.cctp_recipients.contains(&recipient),
                 OrbitError::CctpRecipientNotWhitelisted
             );
 
@@ -144,6 +139,7 @@ pub(crate) fn cctp<'info>(
     let seeds: &[&[u8]] = &[seed_a, seed_b, &bump_arr];
     let signer_seeds = &[&seeds[..]];
 
+    let dest_caller_bytes = destination_caller.unwrap_or([0u8; 32]);
     cpi_cctp_deposit_for_burn(
         &ctx.accounts.cctp_token_messenger_minter_program.to_account_info(),
         ctx.remaining_accounts,
@@ -152,10 +148,12 @@ pub(crate) fn cctp<'info>(
         amount,
         destination_domain,
         mint_recipient,
-        destination_caller,
+        dest_caller_bytes,
+        max_fee,
+        min_finality_threshold,
+        hook_data
     )?;
 
-    let dest_caller_bytes = destination_caller.unwrap_or([0u8; 32]);
     emit!(CctpEvent {
         event_name: "Cctp".to_string(),
         vault: ctx.accounts.authority.key(),

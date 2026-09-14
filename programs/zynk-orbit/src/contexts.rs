@@ -716,6 +716,9 @@ pub struct Cctp<'info> {
     pub zynk_core_program: Program<'info, ZynkCore>,
 
     /// CHECK: Manager-authorized instruction forwards this account as the CCTP CPI target.
+    #[account(
+        constraint = cfg!(feature = "testing") || cctp_token_messenger_minter_program.key() == CCTP_TOKEN_MESSENGER_MINTER_PROGRAM
+    )]
     pub cctp_token_messenger_minter_program: UncheckedAccount<'info>,
 
     /// CHECK: Core order tracker initialized during create_order CPI for ICV transfers.

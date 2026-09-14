@@ -76,8 +76,7 @@ pub(crate) fn transfer_with_signer_seeds<'info>(
     token_interface::transfer_checked(cpi_ctx, amount, mint.decimals)
 }
 
-/// Invokes Circle CCTP's `deposit_for_burn` instruction, selecting the
-/// destination-caller variant when a nonzero caller is supplied.
+/// Invokes Circle CCTP's `deposit_for_burn` instruction
 pub(crate) fn cpi_cctp_deposit_for_burn<'info>(
     cctp_program: &AccountInfo<'info>,
     remaining_accounts: &[AccountInfo<'info>],
@@ -86,25 +85,36 @@ pub(crate) fn cpi_cctp_deposit_for_burn<'info>(
     amount: u64,
     destination_domain: u32,
     mint_recipient: [u8; 32],
-    destination_caller: Option<[u8; 32]>,
+    dest_caller_bytes: [u8; 32],
+    max_fee: u64,
+    min_finality_threshold: u32,
+    hook_data: Option<Vec<u8>>
 ) -> Result<()> {
     require!(amount > 0, OrbitError::ZeroAmount);
 
-    let (disc_name, caller_bytes) = match destination_caller {
-        Some(caller) if caller != [0u8; 32] => {
-            ("global:deposit_for_burn_with_caller", Some(caller))
+    let (disc_name, hook_bytes) = match hook_data {
+        Some(hook_data) if !hook_data.is_empty() => {
+            ("global:deposit_for_burn_with_hooks", hook_data)
         }
-        _ => ("global:deposit_for_burn", None),
+        _ => ("global:deposit_for_burn", Vec::new()),
     };
 
     let disc = hash(disc_name.as_bytes()).to_bytes();
-    let mut ix_data = Vec::with_capacity(8 + 8 + 4 + 32 + 32);
+    // 8+8+4+32+32+8+4 = 96 fixed bytes + up to len(hook_data) for the extension
+    let mut ix_data = Vec::with_capacity(96 + hook_bytes.len());
+
     ix_data.extend_from_slice(&disc[..8]);
     ix_data.extend_from_slice(&amount.to_le_bytes());
     ix_data.extend_from_slice(&destination_domain.to_le_bytes());
     ix_data.extend_from_slice(&mint_recipient);
-    if let Some(caller) = caller_bytes {
-        ix_data.extend_from_slice(&caller);
+
+    ix_data.extend_from_slice(&dest_caller_bytes);
+    ix_data.extend_from_slice(&max_fee.to_le_bytes());
+    ix_data.extend_from_slice(&min_finality_threshold.to_le_bytes());
+
+    if !hook_bytes.is_empty() {
+        ix_data.extend_from_slice(&(hook_bytes.len() as u32).to_le_bytes());
+        ix_data.extend_from_slice(&hook_bytes);
     }
 
     let mut account_metas = Vec::with_capacity(remaining_accounts.len());
