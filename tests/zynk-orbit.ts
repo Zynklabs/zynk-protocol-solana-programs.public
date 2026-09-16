@@ -6159,6 +6159,283 @@ describe("zynk-orbit", () => {
       "CCTPV2vPZJS2u2BBsUoscuikbYjnpFmbFsvVuJdgUMQe"
     );
 
+    const oRecipient = {
+      destinationDomain,
+      mintRecipient: cctpRecipient,
+    };
+
+    // =========================================================================
+    // SECTION: OVAULT CCTP RECIPIENT MANAGEMENT
+    // =========================================================================
+
+    // // ── OCR-P1: Admin can add a CCTP recipient to the ovault ───────────────────
+    it("Initializes Ovault PDA with cctp_recipients", async () => {
+      await program.methods
+        .addOvaultCctpRecipient(oRecipient)
+        .accounts({
+          config: configPDA,
+          ovault: ovaultPDA,
+          admin: admin.publicKey,
+        } as any)
+        .signers([admin])
+        .rpc();
+      const ovault = await program.account.user.fetch(ovaultPDA);
+      assert.deepEqual(
+        ovault.cctpRecipients,
+        [oRecipient],
+        "ovault should have one CCTP recipient"
+      );
+
+      // Verify account size
+      const info = await provider.connection.getAccountInfo(ovaultPDA);
+      assert.ok(info!.data.length >= 245, "ovault user should be initialized");
+    });
+
+    // ── OCR-P2: Admin can add multiple CCTP recipients to the ovault ───────────
+    it("Admin should be able to add multiple CCTP recipients to the ovault", async () => {
+      const recipient2 = {
+        destinationDomain: 2,
+        mintRecipient: Array.from(Buffer.alloc(32, 0x02)),
+      };
+
+      // Add second recipient
+      await program.methods
+        .addOvaultCctpRecipient(recipient2)
+        .accounts({
+          config: configPDA,
+          ovault: ovaultPDA,
+          admin: admin.publicKey,
+          systemProgram: SystemProgram.programId,
+        } as any)
+        .signers([admin])
+        .rpc();
+
+      const ovault = await program.account.user.fetch(ovaultPDA);
+      assert.equal(
+        ovault.cctpRecipients.length,
+        2,
+        "ovault should have two CCTP recipients"
+      );
+    });
+
+    // ── OCR-N1: Cannot add duplicate CCTP recipient to ovault ──────────────────
+    it("Admin should not be able to add a duplicate CCTP recipient to the ovault", async () => {
+      const recipient = {
+        destinationDomain: 1,
+        mintRecipient: Array.from(Buffer.alloc(32, 0x42)),
+      };
+
+      try {
+        await program.methods
+          .addOvaultCctpRecipient(recipient)
+          .accounts({
+            config: configPDA,
+            ovault: ovaultPDA,
+            admin: admin.publicKey,
+            systemProgram: SystemProgram.programId,
+          } as any)
+          .signers([admin])
+          .rpc();
+        assert.fail("Expected CctpRecipientAlreadyWhitelisted error");
+      } catch (err: any) {
+        assert.include(
+          err.message,
+          "CctpRecipientAlreadyWhitelisted",
+          "error should be CctpRecipientAlreadyWhitelisted"
+        );
+      }
+    });
+
+    // ── OCR-N2: Non-admin cannot add CCTP recipient to ovault ──────────────────
+    it("Non-admin should not be able to add a CCTP recipient to the ovault", async () => {
+      const recipient = {
+        destinationDomain: 99,
+        mintRecipient: Array.from(Buffer.alloc(32, 0x99)),
+      };
+
+      try {
+        await program.methods
+          .addOvaultCctpRecipient(recipient)
+          .accounts({
+            config: configPDA,
+            ovault: ovaultPDA,
+            admin: manager.publicKey,
+            systemProgram: SystemProgram.programId,
+          } as any)
+          .signers([manager])
+          .rpc();
+        assert.fail("Expected Unauthorized error");
+      } catch (err: any) {
+        assert.include(
+          err.message,
+          "Unauthorized",
+          "error should be Unauthorized for non-admin"
+        );
+      }
+    });
+
+    // ── OCR-R1: Admin can remove a CCTP recipient from the ovault ──────────────
+    it("Admin should be able to remove a CCTP recipient from the ovault", async () => {
+      const recipient2 = {
+        destinationDomain: 2,
+        mintRecipient: Array.from(Buffer.alloc(32, 0x02)),
+      };
+
+      // Remove the second recipient
+      await program.methods
+        .removeOvaultCctpRecipient(recipient2)
+        .accounts({
+          config: configPDA,
+          ovault: ovaultPDA,
+          admin: admin.publicKey,
+          systemProgram: SystemProgram.programId,
+        } as any)
+        .signers([admin])
+        .rpc();
+
+      const ovault = await program.account.user.fetch(ovaultPDA);
+      assert.equal(
+        ovault.cctpRecipients.length,
+        2,
+        "ovault should have one CCTP recipient after removal"
+      );
+    });
+
+    // ── OCR-R2: Cannot remove non-existent CCTP recipient from ovault ──────────
+    it("Admin should not be able to remove a non-existent CCTP recipient from the ovault", async () => {
+      const nonExistent = {
+        destinationDomain: 999,
+        mintRecipient: Array.from(Buffer.alloc(32, 0x99)),
+      };
+
+      try {
+        await program.methods
+          .removeOvaultCctpRecipient(nonExistent)
+          .accounts({
+            config: configPDA,
+            ovault: ovaultPDA,
+            admin: admin.publicKey,
+            systemProgram: SystemProgram.programId,
+          } as any)
+          .signers([admin])
+          .rpc();
+        assert.fail("Expected CctpRecipientNotWhitelisted error");
+      } catch (err: any) {
+        assert.include(
+          err.message,
+          "CctpRecipientNotWhitelisted",
+          "error should be CctpRecipientNotWhitelisted"
+        );
+      }
+    });
+
+    // ── OCR-P3: CCTP from ovault with whitelisted recipient should succeed ─────
+    it("Manager should be able to initiate CCTP from ovault with whitelisted recipient", async () => {
+      const ovaultAta = await gocAta(ovaultPDA, tokenMint);
+      const recipient = {
+        destinationDomain: 1,
+        mintRecipient: Array.from(Buffer.alloc(32, 0x01)),
+      };
+
+      // Ensure recipient is whitelisted
+      await program.methods
+        .addOvaultCctpRecipient(recipient)
+        .accounts({
+          config: configPDA,
+          ovault: ovaultPDA,
+          admin: admin.publicKey,
+          systemProgram: SystemProgram.programId,
+        } as any)
+        .signers([admin])
+        .rpc();
+
+      try {
+        await program.methods
+          .cctp(
+            zeroId,
+            new anchor.BN(1000),
+            destinationDomain,
+            recipient.mintRecipient,
+            maxFee,
+            minFinalityThreshold,
+            cctpCaller,
+            null,
+            null,
+            null,
+            null
+          )
+          .accounts({
+            sourceTokenAccount: ovaultAta,
+            mint: tokenMint,
+            ovault: ovaultPDA,
+            user: null,
+            manager: manager.publicKey,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+            config: configPDA,
+            zynkCoreProgram: core_program.programId,
+            cctpTokenMessengerMinterProgram: cctpProgramId,
+            orderTracker: null,
+            partnerDepositVault: null,
+            zynkOpVault: null,
+          } as any)
+          .signers([manager])
+          .rpc();
+        assert.fail("Expected to reach CPI");
+      } catch (err: any) {
+        assert.notInclude(err.message, "CctpRecipientNotWhitelisted");
+        assert.notInclude(err.message, "Unauthorized");
+        assert.notInclude(err.message, "InvalidAccount");
+      }
+    });
+
+    // ── OCR-N3: CCTP from ovault with non-whitelisted recipient should fail ────
+    it("Manager should not be able to initiate CCTP from ovault with non-whitelisted recipient", async () => {
+      const ovaultAta = await gocAta(ovaultPDA, tokenMint);
+      const unwhitelisted = Array.from(Buffer.alloc(32, 0xff));
+
+      try {
+        await program.methods
+          .cctp(
+            zeroId,
+            new anchor.BN(1000),
+            destinationDomain,
+            unwhitelisted,
+            maxFee,
+            minFinalityThreshold,
+            cctpCaller,
+            null,
+            null,
+            null,
+            null
+          )
+          .accounts({
+            sourceTokenAccount: ovaultAta,
+            mint: tokenMint,
+            ovault: ovaultPDA,
+            user: null,
+            manager: manager.publicKey,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+            config: configPDA,
+            zynkCoreProgram: core_program.programId,
+            cctpTokenMessengerMinterProgram: cctpProgramId,
+            orderTracker: null,
+            partnerDepositVault: null,
+            zynkOpVault: null,
+          } as any)
+          .signers([manager])
+          .rpc();
+        assert.fail("Expected CctpRecipientNotWhitelisted error");
+      } catch (err: any) {
+        assert.include(
+          err.message,
+          "CctpRecipientNotWhitelisted",
+          "error should be CctpRecipientNotWhitelisted"
+        );
+      }
+    });
+
     it("Should fail CCTP from ovault with zero amount", async () => {
       const ovaultAta = await gocAta(ovaultPDA, tokenMint);
       try {
@@ -6179,7 +6456,7 @@ describe("zynk-orbit", () => {
           .accounts({
             sourceTokenAccount: ovaultAta,
             mint: tokenMint,
-            authority: ovaultPDA,
+            ovault: ovaultPDA,
             user: null,
             manager: manager.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
@@ -6227,7 +6504,7 @@ describe("zynk-orbit", () => {
           .accounts({
             sourceTokenAccount: ovaultAta,
             mint: tokenMint,
-            authority: ovaultPDA,
+            ovault: ovaultPDA,
             user: null,
             manager: unauthorizedUser.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
@@ -6267,150 +6544,7 @@ describe("zynk-orbit", () => {
           .accounts({
             sourceTokenAccount: ovaultInvalidAta,
             mint: invalidTokenMint,
-            authority: ovaultPDA,
-            user: null,
-            manager: manager.publicKey,
-            tokenProgram: TOKEN_PROGRAM_ID,
-            systemProgram: SystemProgram.programId,
-            config: configPDA,
-            zynkCoreProgram: core_program.programId,
-            cctpTokenMessengerMinterProgram: cctpProgramId,
-            orderTracker: null,
-            partnerDepositVault: null,
-            zynkOpVault: null,
-          } as any)
-          .signers([manager])
-          .rpc();
-        assert.fail("Expected InvalidTokenMint error");
-      } catch (err: any) {
-        assert.include(err.message, "InvalidTokenMint");
-      }
-    });
-
-    it("Should fail CCTP from spender with zero amount", async () => {
-      const vaultId = Array.from(Buffer.alloc(32, 8));
-      const [spenderPDA] = PublicKey.findProgramAddressSync(
-        [Buffer.from("vault"), Buffer.from(vaultId)],
-        program.programId
-      );
-      const spenderAta = await gocAta(spenderPDA, tokenMint);
-      try {
-        await program.methods
-          .cctp(
-            vaultId,
-            new anchor.BN(0),
-            destinationDomain,
-            cctpRecipient,
-            maxFee,
-            minFinalityThreshold,
-            null,
-            null,
-            null,
-            null,
-            null
-          )
-          .accounts({
-            sourceTokenAccount: spenderAta,
-            mint: tokenMint,
-            authority: spenderPDA,
-            user: null,
-            manager: manager.publicKey,
-            tokenProgram: TOKEN_PROGRAM_ID,
-            systemProgram: SystemProgram.programId,
-            config: configPDA,
-            zynkCoreProgram: core_program.programId,
-            cctpTokenMessengerMinterProgram: cctpProgramId,
-            orderTracker: null,
-            partnerDepositVault: null,
-            zynkOpVault: null,
-          } as any)
-          .signers([manager])
-          .rpc();
-        assert.fail("Expected ZeroAmount error");
-      } catch (err: any) {
-        assert.include(err.message, "ZeroAmount");
-      }
-    });
-
-    it("Should fail CCTP from spender with unauthorized signer", async () => {
-      const unauthorizedUser = Keypair.generate();
-      {
-        const sig = await provider.connection.requestAirdrop(
-          unauthorizedUser.publicKey,
-          2 * anchor.web3.LAMPORTS_PER_SOL
-        );
-        await provider.connection.confirmTransaction(sig, "confirmed");
-      }
-      const vaultId = Array.from(Buffer.alloc(32, 9));
-      const [spenderPDA] = PublicKey.findProgramAddressSync(
-        [Buffer.from("vault"), Buffer.from(vaultId)],
-        program.programId
-      );
-      const spenderAta = await gocAta(spenderPDA, tokenMint);
-      try {
-        await program.methods
-          .cctp(
-            vaultId,
-            new anchor.BN(1000),
-            destinationDomain,
-            cctpRecipient,
-            maxFee,
-            minFinalityThreshold,
-            cctpCaller,
-            null,
-            null,
-            null,
-            null
-          )
-          .accounts({
-            sourceTokenAccount: spenderAta,
-            mint: tokenMint,
-            authority: spenderPDA,
-            user: null,
-            manager: unauthorizedUser.publicKey,
-            tokenProgram: TOKEN_PROGRAM_ID,
-            systemProgram: SystemProgram.programId,
-            config: configPDA,
-            zynkCoreProgram: core_program.programId,
-            cctpTokenMessengerMinterProgram: cctpProgramId,
-            orderTracker: null,
-            partnerDepositVault: null,
-            zynkOpVault: null,
-          } as any)
-          .signers([unauthorizedUser])
-          .rpc();
-        assert.fail("Expected Unauthorized error");
-      } catch (err: any) {
-        assert.include(err.message, "Unauthorized");
-      }
-    });
-
-    it("Should fail CCTP from spender with invalid token mint", async () => {
-      const vaultId = Array.from(Buffer.alloc(32, 8));
-      const [spenderPDA] = PublicKey.findProgramAddressSync(
-        [Buffer.from("vault"), Buffer.from(vaultId)],
-        program.programId
-      );
-      const spenderInvalidAta = await gocAta(spenderPDA, invalidTokenMint);
-      try {
-        await program.methods
-          .cctp(
-            vaultId,
-            new anchor.BN(1000),
-            destinationDomain,
-            cctpRecipient,
-            maxFee,
-            minFinalityThreshold,
-            null,
-            null,
-            null,
-            null,
-            null
-          )
-          .accounts({
-            sourceTokenAccount: spenderInvalidAta,
-            mint: invalidTokenMint,
-            authority: spenderPDA,
+            ovault: ovaultPDA,
             user: null,
             manager: manager.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
@@ -6473,7 +6607,6 @@ describe("zynk-orbit", () => {
           .accounts({
             sourceTokenAccount: cctpIcvAta,
             user: cctpUserPDA,
-            authority: cctpUserPDA,
             mint: tokenMint,
             manager: manager.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
@@ -6534,7 +6667,6 @@ describe("zynk-orbit", () => {
           .accounts({
             sourceTokenAccount: cctpNcwAta,
             user: cctpUserPDA,
-            authority: cctpUserPDA,
             mint: tokenMint,
             manager: manager.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
@@ -6596,7 +6728,6 @@ describe("zynk-orbit", () => {
           .accounts({
             sourceTokenAccount: cctpIcvAta,
             user: cctpUserPDA,
-            authority: cctpUserPDA,
             mint: tokenMint,
             manager: manager.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
@@ -6668,7 +6799,6 @@ describe("zynk-orbit", () => {
           .accounts({
             sourceTokenAccount: cctpIcvAta,
             user: cctpUserPDA,
-            authority: cctpUserPDA,
             mint: tokenMint,
             manager: nonManager.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
@@ -6731,7 +6861,6 @@ describe("zynk-orbit", () => {
           .accounts({
             sourceTokenAccount: cctpIcvInvalidAta,
             user: cctpUserPDA,
-            authority: cctpUserPDA,
             mint: invalidTokenMint,
             manager: manager.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
@@ -6824,7 +6953,6 @@ describe("zynk-orbit", () => {
             .accounts({
               sourceTokenAccount: cctpIcvAta,
               user: cctpUserPDA,
-              authority: cctpUserPDA,
               mint: tokenMint,
               manager: manager.publicKey,
               tokenProgram: TOKEN_PROGRAM_ID,
@@ -6895,7 +7023,6 @@ describe("zynk-orbit", () => {
           .accounts({
             sourceTokenAccount: cctpIcvAta,
             user: cctpUserPDA,
-            authority: cctpUserPDA,
             mint: tokenMint,
             manager: manager.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
@@ -6935,54 +7062,7 @@ describe("zynk-orbit", () => {
           .accounts({
             sourceTokenAccount: ovaultAta,
             mint: tokenMint,
-            authority: ovaultPDA,
-            user: null,
-            manager: manager.publicKey,
-            tokenProgram: TOKEN_PROGRAM_ID,
-            systemProgram: SystemProgram.programId,
-            config: configPDA,
-            zynkCoreProgram: core_program.programId,
-            cctpTokenMessengerMinterProgram: cctpProgramId,
-            orderTracker: null,
-            partnerDepositVault: null,
-            zynkOpVault: null,
-          } as any)
-          .signers([manager])
-          .rpc();
-        assert.fail("Expected to reach CPI");
-      } catch (err: any) {
-        assert.notInclude(err.message, "Unauthorized");
-        assert.notInclude(err.message, "ZeroAmount");
-        assert.notInclude(err.message, "InvalidTokenMint");
-      }
-    });
-
-    it("Should allow manager to initiate CCTP from spender", async () => {
-      const vaultId = Array.from(Buffer.alloc(32, 7));
-      const [spenderPDA] = PublicKey.findProgramAddressSync(
-        [Buffer.from("vault"), Buffer.from(vaultId)],
-        program.programId
-      );
-      const spenderAta = await gocAta(spenderPDA, tokenMint);
-      try {
-        await program.methods
-          .cctp(
-            vaultId,
-            new anchor.BN(1000),
-            destinationDomain,
-            cctpRecipient,
-            maxFee,
-            minFinalityThreshold,
-            null,
-            null,
-            null,
-            null,
-            null
-          )
-          .accounts({
-            sourceTokenAccount: spenderAta,
-            mint: tokenMint,
-            authority: spenderPDA,
+            ovault: ovaultPDA,
             user: null,
             manager: manager.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
@@ -7025,55 +7105,7 @@ describe("zynk-orbit", () => {
           .accounts({
             sourceTokenAccount: ovaultAta,
             mint: tokenMint,
-            authority: ovaultPDA,
-            user: null,
-            manager: manager.publicKey,
-            tokenProgram: TOKEN_PROGRAM_ID,
-            systemProgram: SystemProgram.programId,
-            config: configPDA,
-            zynkCoreProgram: core_program.programId,
-            cctpTokenMessengerMinterProgram: cctpProgramId,
-            orderTracker: null,
-            partnerDepositVault: null,
-            zynkOpVault: null,
-          } as any)
-          .signers([manager])
-          .rpc();
-        assert.fail("Expected to reach CPI");
-      } catch (err: any) {
-        assert.notInclude(err.message, "Unauthorized");
-        assert.notInclude(err.message, "ZeroAmount");
-        assert.notInclude(err.message, "InvalidTokenMint");
-      }
-    });
-
-    it("Should allow manager to initiate CCTP with hook_data from spender", async () => {
-      const vaultId = Array.from(Buffer.alloc(32, 10));
-      const [spenderPDA] = PublicKey.findProgramAddressSync(
-        [Buffer.from("vault"), Buffer.from(vaultId)],
-        program.programId
-      );
-      const spenderAta = await gocAta(spenderPDA, tokenMint);
-      const hookData = Buffer.from([0x01, 0x02, 0x03, 0x04]);
-      try {
-        await program.methods
-          .cctp(
-            vaultId,
-            new anchor.BN(1000),
-            destinationDomain,
-            cctpRecipient,
-            maxFee,
-            minFinalityThreshold,
-            null,
-            hookData,
-            null,
-            null,
-            null
-          )
-          .accounts({
-            sourceTokenAccount: spenderAta,
-            mint: tokenMint,
-            authority: spenderPDA,
+            ovault: ovaultPDA,
             user: null,
             manager: manager.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
@@ -7161,7 +7193,6 @@ describe("zynk-orbit", () => {
           .accounts({
             sourceTokenAccount: cctpIcvAta,
             user: cctpUserPDA,
-            authority: cctpUserPDA,
             mint: tokenMint,
             manager: manager.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,

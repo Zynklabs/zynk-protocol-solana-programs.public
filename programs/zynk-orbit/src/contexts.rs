@@ -726,15 +726,18 @@ pub struct Cctp<'info> {
 
     #[account(
         mut,
-        constraint = source_token_account.owner == authority.key() @ zynk_core::CoreError::InvalidAccount,
         constraint = source_token_account.mint == mint.key() @ zynk_core::CoreError::InvalidTokenMint,
     )]
     pub source_token_account: InterfaceAccount<'info, TokenAccount>,
 
     pub mint: InterfaceAccount<'info, Mint>,
 
-    /// CHECK: Handler validates the authority as the Orbit vault, derived spender, or supplied User PDA.
-    pub authority: UncheckedAccount<'info>,
+    #[account(
+        mut,
+        seeds = [VAULT_SEED, b"orbit"],
+        bump,
+    )]
+    pub ovault: Option<Account<'info, User>>,
 
     /// Optional User account. Pass Some when transferring from an ICV User.
     #[account(
@@ -766,4 +769,54 @@ pub struct Cctp<'info> {
 
     /// CHECK: Core ZOV validated during create_order CPI for ICV transfers.
     pub zynk_op_vault: Option<UncheckedAccount<'info>>,
+}
+
+#[derive(Accounts)]
+#[instruction(recipient: CctpRecipient)]
+pub struct AddOvaultCctpRecipient<'info> {
+    #[account(
+        seeds = [zynk_core::CONFIG_SEED],
+        seeds::program = ZynkCore::id(),
+        bump,
+        has_one = admin @ zynk_core::CoreError::Unauthorized
+    )]
+    pub config: Account<'info, zynk_core::Config>,
+
+    #[account(
+        init_if_needed,
+        seeds = [VAULT_SEED, b"orbit"],
+        bump,
+        payer = admin,
+        space = User::space_for_lengths(0, 16),
+    )]
+    pub ovault: Account<'info, User>,
+
+    #[account(mut)]
+    pub admin: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(recipient: CctpRecipient)]
+pub struct RemoveOvaultCctpRecipient<'info> {
+    #[account(
+        seeds = [zynk_core::CONFIG_SEED],
+        seeds::program = ZynkCore::id(),
+        bump,
+        has_one = admin @ zynk_core::CoreError::Unauthorized
+    )]
+    pub config: Account<'info, zynk_core::Config>,
+
+    #[account(
+        mut,
+        seeds = [VAULT_SEED, b"orbit"],
+        bump,
+    )]
+    pub ovault: Account<'info, User>,
+
+    #[account(mut)]
+    pub admin: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
 }

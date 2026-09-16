@@ -261,4 +261,25 @@ pub mod zynk_orbit {
             zov_id,
         )
     }
+
+    /// Adds a CCTP recipient to the Orbit vault (ovault) user record.
+    ///
+    /// Only the Core-configured admin may add recipients. The ovault user PDA
+    /// is initialized on first call if it does not yet exist.
+    pub fn add_ovault_cctp_recipient(
+        ctx: Context<AddOvaultCctpRecipient>,
+        recipient: CctpRecipient,
+    ) -> Result<()> {
+        instructions::cctp::add_ovault_cctp_recipient(ctx, recipient)
+    }
+
+    /// Removes a CCTP recipient from the Orbit vault (ovault) user record.
+    ///
+    /// Only the Core-configured admin may remove recipients.
+    pub fn remove_ovault_cctp_recipient(
+        ctx: Context<RemoveOvaultCctpRecipient>,
+        recipient: CctpRecipient,
+    ) -> Result<()> {
+        instructions::cctp::remove_ovault_cctp_recipient(ctx, recipient)
+    }
 }

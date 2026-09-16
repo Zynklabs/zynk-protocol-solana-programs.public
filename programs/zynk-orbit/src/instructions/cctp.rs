@@ -27,9 +27,14 @@ pub(crate) fn cctp<'info>(
         zynk_core::CoreError::InvalidTokenMint
     );
 
+    let recipient = CctpRecipient {
+        destination_domain,
+        mint_recipient,
+    };
+
     let event_user_id: [u8; 32];
-    let (seed_a, seed_b, bump_val): (&[u8], &[u8], u8) = match &mut ctx.accounts.user {
-        Some(user) => {
+    let (seed_a, seed_b, bump_val, authority_account): (&[u8], &[u8], u8, AccountInfo<'info>) =  match (&mut ctx.accounts.user, &mut ctx.accounts.ovault) {
+        (Some(user), _) => {
             require!(
                 user.user_type == UserType::ICV,
                 OrbitError::InvalidOperation
@@ -41,18 +46,13 @@ pub(crate) fn cctp<'info>(
             );
 
             require!(
-                ctx.accounts.authority.key() == user.key(),
-                zynk_core::CoreError::InvalidAccount
-            );
-
-            let recipient = CctpRecipient {
-                destination_domain,
-                mint_recipient,
-            };
-
-            require!(
                 user.cctp_recipients.contains(&recipient),
                 OrbitError::CctpRecipientNotWhitelisted
+            );
+
+            require!(
+                ctx.accounts.source_token_account.owner.key() == user.key(),
+                zynk_core::CoreError::InvalidAccount
             );
 
             user.principal_out = user
@@ -116,27 +116,25 @@ pub(crate) fn cctp<'info>(
 
             event_user_id = id;
             let bump = ctx.bumps.user.ok_or(zynk_core::CoreError::InvalidAccount)?;
-            (USER_SEED, id.as_ref(), bump)
+            (USER_SEED, id.as_ref(), bump, user.to_account_info())
         }
-        None => {
-            let (expected_ovault, ovault_bump) = Pubkey::find_program_address(
-                &[VAULT_SEED, b"orbit"],
-                ctx.program_id,
-            );
-            let (expected_spender, spender_bump) = Pubkey::find_program_address(
-                &[VAULT_SEED, id.as_ref()],
-                ctx.program_id,
+        (_, Some(ovault)) => {
+            require!(
+                ctx.accounts.source_token_account.owner.key() == ovault.key(),
+                zynk_core::CoreError::InvalidAccount
             );
 
-            if ctx.accounts.authority.key() == expected_ovault {
-                event_user_id = [0u8; 32];
-                (VAULT_SEED, b"orbit", ovault_bump)
-            } else if ctx.accounts.authority.key() == expected_spender {
-                event_user_id = id;
-                (VAULT_SEED, id.as_ref(), spender_bump)
-            } else {
-                return Err(zynk_core::CoreError::InvalidAccount.into());
-            }
+            require!(
+                ovault.cctp_recipients.contains(&recipient),
+                OrbitError::CctpRecipientNotWhitelisted
+            );
+
+            event_user_id = [0u8; 32];
+            let bump = ctx.bumps.ovault.ok_or(zynk_core::CoreError::InvalidAccount)?;
+            (VAULT_SEED, b"orbit", bump, ovault.to_account_info())
+        }
+        (None, None) => {
+            return Err(OrbitError::InvalidOperation.into());
         }
     };
 
@@ -148,7 +146,7 @@ pub(crate) fn cctp<'info>(
     cpi_cctp_deposit_for_burn(
         &ctx.accounts.cctp_token_messenger_minter_program.to_account_info(),
         ctx.remaining_accounts,
-        &ctx.accounts.authority.to_account_info(),
+        &authority_account,
         signer_seeds,
         amount,
         destination_domain,
@@ -161,7 +159,7 @@ pub(crate) fn cctp<'info>(
 
     emit!(CctpEvent {
         event_name: "Cctp".to_string(),
-        vault: ctx.accounts.authority.key(),
+        vault: authority_account.key(),
         user_id: event_user_id,
         amount,
         token: ctx.accounts.mint.key(),
@@ -171,6 +169,60 @@ pub(crate) fn cctp<'info>(
         domain_separator: DOMAIN_SEPARATOR,
         signer: ctx.accounts.manager.key(),
         timestamp: Clock::get()?.unix_timestamp,
+    });
+
+    Ok(())
+}
+
+pub(crate) fn add_ovault_cctp_recipient(
+    ctx: Context<AddOvaultCctpRecipient>,
+    recipient: CctpRecipient,
+) -> Result<()> {
+    let ovault = &mut ctx.accounts.ovault;
+
+    require!(
+        !ovault.cctp_recipients.contains(&recipient),
+        OrbitError::CctpRecipientAlreadyWhitelisted
+    );
+
+    ovault.cctp_recipients.push(recipient);
+
+    emit!(AxEvent {
+        event_name: "OvaultCctpRecipientAdded".to_string(),
+        user_id: ovault.user_id,
+        public_key: ctx.accounts.admin.key(),
+        domain_separator: DOMAIN_SEPARATOR,
+        partners: Vec::new(),
+        signer: ctx.accounts.admin.key(),
+        timestamp: Clock::get()?.unix_timestamp,
+        value: recipient.destination_domain as i64,
+    });
+
+    Ok(())
+}
+
+pub(crate) fn remove_ovault_cctp_recipient(
+    ctx: Context<RemoveOvaultCctpRecipient>,
+    recipient: CctpRecipient,
+) -> Result<()> {
+    let ovault = &mut ctx.accounts.ovault;
+
+    let position = ovault
+        .cctp_recipients
+        .iter()
+        .position(|entry| entry == &recipient)
+        .ok_or(OrbitError::CctpRecipientNotWhitelisted)?;
+    ovault.cctp_recipients.swap_remove(position);
+
+    emit!(AxEvent {
+        event_name: "OvaultCctpRecipientRemoved".to_string(),
+        user_id: ovault.user_id,
+        public_key: ctx.accounts.admin.key(),
+        domain_separator: DOMAIN_SEPARATOR,
+        partners: Vec::new(),
+        signer: ctx.accounts.admin.key(),
+        timestamp: Clock::get()?.unix_timestamp,
+        value: recipient.destination_domain as i64,
     });
 
     Ok(())
