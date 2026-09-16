@@ -36,6 +36,11 @@ pub(crate) fn cctp<'info>(
             );
 
             require!(
+                user.allowed_mint == ctx.accounts.mint.key(),
+                zynk_core::CoreError::InvalidTokenMint
+            );
+
+            require!(
                 ctx.accounts.authority.key() == user.key(),
                 zynk_core::CoreError::InvalidAccount
             );

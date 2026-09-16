@@ -572,6 +572,7 @@ describe("zynk-orbit", () => {
         .registerUser(
           Array.from(nonAdminUserId),
           { ncw: {} },
+          tokenMint,
           [
             nonAdminUser.publicKey,
             nonAdminUser.publicKey,
@@ -608,7 +609,8 @@ describe("zynk-orbit", () => {
       await program.methods
         .registerUser(
           Array.from(invalidTypeUserId),
-          { unknownType: {} } as any, // invalid variant — not LP / NCW / ICV
+          { unknownType: {} } as any,
+          tokenMint, // invalid variant — not LP / NCW / ICV
           [
             invalidTypeUser.publicKey,
             invalidTypeUser.publicKey,
@@ -644,6 +646,7 @@ describe("zynk-orbit", () => {
       .registerUser(
         Array.from(dupWlUserId),
         { ncw: {} },
+        tokenMint,
         [dupWlUser.publicKey],
         null,
         null,
@@ -669,6 +672,7 @@ describe("zynk-orbit", () => {
         .registerUser(
           Array.from(dupWlUserId),
           { ncw: {} },
+          tokenMint,
           [dupWlUser.publicKey, dupWlUser.publicKey, dupWlUser.publicKey],
           null,
           null,
@@ -708,6 +712,7 @@ describe("zynk-orbit", () => {
         .registerUser(
           Array.from(dupWlUserId),
           { ncw: {} },
+          tokenMint,
           [dupWlUser.publicKey, dupWlUser.publicKey, dupWlUser.publicKey],
           null,
           null,
@@ -743,6 +748,7 @@ describe("zynk-orbit", () => {
       .registerUser(
         Array.from(ncwUserId),
         { ncw: {} },
+        tokenMint,
         [ncwUser.publicKey, ncwUser.publicKey, ncwUser.publicKey],
         null,
         null,
@@ -792,6 +798,7 @@ describe("zynk-orbit", () => {
       .registerUser(
         Array.from(lpUserId),
         { lp: {} },
+        tokenMint,
         [lpUser.publicKey, lpUser.publicKey, lpUser.publicKey],
         futureCliff,
         new anchor.BN(1_000_000_000),
@@ -831,6 +838,7 @@ describe("zynk-orbit", () => {
       .registerUser(
         Array.from(icvUserNoCliffId),
         { icv: {} },
+        tokenMint,
         [
           icvUserNoCliff.publicKey,
           icvUserNoCliff.publicKey,
@@ -884,6 +892,7 @@ describe("zynk-orbit", () => {
       .registerUser(
         Array.from(icvUserNoMaxPrincipalId),
         { icv: {} },
+        tokenMint,
         [
           icvUserNoMaxPrincipal.publicKey,
           icvUserNoMaxPrincipal.publicKey,
@@ -925,6 +934,7 @@ describe("zynk-orbit", () => {
       .registerUser(
         Array.from(lpUserWithPartnersId),
         { lp: {} },
+        tokenMint,
         [lpUserWithPartners.publicKey],
         futureCliff,
         new anchor.BN(2_000_000_000),
@@ -984,7 +994,7 @@ describe("zynk-orbit", () => {
 
     // Step 4 – verify account size grew by 4 bytes per partner.
     const accountInfo = await provider.connection.getAccountInfo(userPDA);
-    const BASE_SIZE = 177;
+    const BASE_SIZE = 209;
     const expectedSize = BASE_SIZE + partnerIds.length * 4;
     assert.equal(
       accountInfo!.data.length,
@@ -1029,6 +1039,7 @@ describe("zynk-orbit", () => {
       .registerUser(
         Array.from(umdUserId),
         { icv: {} },
+        tokenMint,
         [umdUser.publicKey, umdUser.publicKey, umdUser.publicKey],
         futureCliff,
         new anchor.BN(500_000_000),
@@ -1244,6 +1255,7 @@ describe("zynk-orbit", () => {
       .registerUser(
         Array.from(depositIcvUserId),
         { icv: {} },
+        tokenMint,
         [depositIcvUser.publicKey],
         futureCliff,
         cap,
@@ -1339,6 +1351,7 @@ describe("zynk-orbit", () => {
       .registerUser(
         Array.from(depositLpUserId),
         { lp: {} },
+        tokenMint,
         [depositLpUser.publicKey],
         futureCliff,
         cap,
@@ -1403,6 +1416,7 @@ describe("zynk-orbit", () => {
       .registerUser(
         Array.from(borrowLpUserId),
         { lp: {} },
+        tokenMint,
         [
           borrowLpUser.publicKey,
           borrowLpUser.publicKey,
@@ -1486,6 +1500,7 @@ describe("zynk-orbit", () => {
       .registerUser(
         Array.from(borrowIcvRestrictedUserId),
         { icv: {} },
+        tokenMint,
         [
           borrowIcvRestrictedUser.publicKey,
           borrowIcvRestrictedUser.publicKey,
@@ -1610,6 +1625,7 @@ describe("zynk-orbit", () => {
         .registerUser(
           Array.from(borrowIcvUserId),
           { icv: {} },
+          tokenMint,
           [
             borrowIcvUser.publicKey,
             borrowIcvUser.publicKey,
@@ -1999,6 +2015,7 @@ describe("zynk-orbit", () => {
         .registerUser(
           Array.from(borrowNcwUserId),
           { ncw: {} },
+          tokenMint,
           [
             borrowNcwUser.publicKey,
             borrowNcwUser.publicKey,
@@ -2089,6 +2106,7 @@ describe("zynk-orbit", () => {
           .registerUser(
             Array.from(multiIcvUserIds[i]),
             { icv: {} },
+            tokenMint,
             [
               multiIcvUsers[i].publicKey,
               multiIcvUsers[i].publicKey,
@@ -2373,6 +2391,7 @@ describe("zynk-orbit", () => {
           .registerUser(
             Array.from(multiIcvUserIds[i]),
             { icv: {} },
+            tokenMint,
             [
               multiIcvUsers[i].publicKey,
               multiIcvUsers[i].publicKey,
@@ -2583,6 +2602,7 @@ describe("zynk-orbit", () => {
           .registerUser(
             Array.from(multiIcvUserIds[i]),
             { icv: {} },
+            tokenMint,
             [
               multiIcvUsers[i].publicKey,
               multiIcvUsers[i].publicKey,
@@ -2735,6 +2755,7 @@ describe("zynk-orbit", () => {
         .registerUser(
           Array.from(multiIcvUserIds[7]),
           { icv: {} },
+          tokenMint,
           [
             multiIcvUsers[7].publicKey,
             multiIcvUsers[7].publicKey,
@@ -2865,6 +2886,7 @@ describe("zynk-orbit", () => {
         .registerUser(
           Array.from(multiIcvUserIds[8]),
           { icv: {} },
+          tokenMint,
           [
             multiIcvUsers[8].publicKey,
             multiIcvUsers[8].publicKey,
@@ -2987,6 +3009,7 @@ describe("zynk-orbit", () => {
         .registerUser(
           Array.from(multiIcvUserIds[9]),
           { icv: {} },
+          tokenMint,
           [
             multiIcvUsers[9].publicKey,
             multiIcvUsers[9].publicKey,
@@ -3135,6 +3158,7 @@ describe("zynk-orbit", () => {
       .registerUser(
         Array.from(icvUserId),
         { icv: {} },
+        tokenMint,
         [icvUser.publicKey, icvUser.publicKey, icvUser.publicKey],
         futureCliffPeriod,
         new anchor.BN(1_000_000_000), // max_deposit: u64 — plain number
@@ -3180,7 +3204,7 @@ describe("zynk-orbit", () => {
     );
 
     // Verify the on-chain account size includes both empty vector prefixes.
-    const BASE_SIZE = 177;
+    const BASE_SIZE = 209;
     const accountInfo = await provider.connection.getAccountInfo(userPDA);
     assert.equal(
       accountInfo!.data.length,
@@ -3334,11 +3358,7 @@ describe("zynk-orbit", () => {
     );
 
     await program.methods
-      .repay(
-        Array.from(defaultZovId),
-        repayAmount,
-        null
-      )
+      .repay(Array.from(defaultZovId), repayAmount, null)
       .accounts({
         zovTokenAccount: zovAta,
         mint: tokenMint,
@@ -3381,6 +3401,8 @@ describe("zynk-orbit", () => {
         )
         .accounts({
           signer: ncwUser.publicKey,
+          mint: tokenMint,
+          config: configPDA,
         } as any)
         .signers([ncwUser])
         .rpc();
@@ -3408,6 +3430,8 @@ describe("zynk-orbit", () => {
         )
         .accounts({
           signer: icvUser.publicKey,
+          mint: tokenMint,
+          config: configPDA,
         } as any)
         .signers([icvUser])
         .rpc();
@@ -3421,7 +3445,33 @@ describe("zynk-orbit", () => {
     }
   });
 
-  // ── W-N3: Non-primary-account holder should NOT raise a request ───────────
+  // ── W-N3: Should NOT raise a withdraw request with invalid/unwhitelisted mint ─
+  it("Should NOT be able to request withdraw with an invalid or unwhitelisted mint", async () => {
+    try {
+      await program.methods
+        .requestWithdraw(
+          Array.from(icvUserId),
+          icvUser.publicKey,
+          new anchor.BN(1_000_000)
+        )
+        .accounts({
+          signer: icvUser.publicKey,
+          mint: invalidTokenMint,
+          config: configPDA,
+        } as any)
+        .signers([icvUser])
+        .rpc();
+      assert.fail("Expected transaction to fail with InvalidTokenMint");
+    } catch (err: any) {
+      assert.include(
+        err.message,
+        "InvalidTokenMint",
+        "Error should be InvalidTokenMint when requesting withdraw with invalid mint"
+      );
+    }
+  });
+
+  // ── W-N4: Non-primary-account holder should NOT raise a request ───────────
   it("No user other than the primary account holder should be able to raise a withdraw request", async () => {
     // The RequestWithdraw struct enforces signer.key() == primary_account.
     // Passing manager as signer with icvUser as primary_account must fail.
@@ -3433,9 +3483,11 @@ describe("zynk-orbit", () => {
           new anchor.BN(1_000_000)
         )
         .accounts({
-          signer: manager.publicKey, // wrong signer
+          signer: ncwUser.publicKey, // wrong signer
+          mint: tokenMint,
+          config: configPDA,
         } as any)
-        .signers([manager])
+        .signers([ncwUser])
         .rpc();
       assert.fail(
         "Expected transaction to fail — signer is not the primary account"
@@ -3465,6 +3517,8 @@ describe("zynk-orbit", () => {
       )
       .accounts({
         signer: icvUser.publicKey,
+        mint: tokenMint,
+        config: configPDA,
       } as any)
       .signers([icvUser])
       .rpc();
@@ -3485,9 +3539,10 @@ describe("zynk-orbit", () => {
       Buffer.from(request.userId).equals(icvUserId),
       "UserId in request should match"
     );
+    assert.ok(request.mint.equals(tokenMint), "Mint in request should match");
   });
 
-  // ── W-N4: Should NOT raise a duplicate withdraw request ───────────────────
+  // ── W-N5: Should NOT raise a duplicate withdraw request ───────────────────
   it("Should NOT be able to raise a withdraw request if one already exists", async () => {
     // icvUser's withdraw request was just created in W-P1 and is still pending.
     try {
@@ -3499,6 +3554,8 @@ describe("zynk-orbit", () => {
         )
         .accounts({
           signer: icvUser.publicKey,
+          mint: tokenMint,
+          config: configPDA,
         } as any)
         .signers([icvUser])
         .rpc();
@@ -3561,6 +3618,8 @@ describe("zynk-orbit", () => {
       )
       .accounts({
         signer: lpUser.publicKey,
+        mint: tokenMint,
+        config: configPDA,
       } as any)
       .signers([lpUser])
       .rpc();
@@ -3581,12 +3640,16 @@ describe("zynk-orbit", () => {
       Buffer.from(request.userId).equals(lpUserId),
       "UserId in LP request should match"
     );
+    assert.ok(
+      request.mint.equals(tokenMint),
+      "Mint in LP request should match"
+    );
 
     // Clean up — reject so later tests start clean
     await program.methods
       .revokeWithdraw(Array.from(lpUserId))
       .accounts({
-        request: lpWithdrawRequestPDA,
+        withdraw_request: lpWithdrawRequestPDA,
         user: deriveUserPDA(lpUserId),
         signer: admin.publicKey,
         config: configPDA,
@@ -3619,7 +3682,7 @@ describe("zynk-orbit", () => {
       await program.methods
         .approveWithdraw(Array.from(icvUserId))
         .accounts({
-          request: withdrawRequestPDA,
+          withdraw_request: withdrawRequestPDA,
           user: deriveUserPDA(icvUserId),
           admin: manager.publicKey, // manager — NOT the admin
           sourceTokenAccount: icvTokenAccount,
@@ -3692,6 +3755,7 @@ describe("zynk-orbit", () => {
       .registerUser(
         Array.from(lb2UserId),
         { icv: {} },
+        tokenMint,
         [lb2User.publicKey, lb2User.publicKey, lb2User.publicKey],
         futureCliff2,
         new anchor.BN(1_000_000_000),
@@ -3735,13 +3799,17 @@ describe("zynk-orbit", () => {
         lb2User.publicKey,
         new anchor.BN(20_000_000)
       )
-      .accounts({ signer: lb2User.publicKey } as any)
+      .accounts({
+        signer: lb2User.publicKey,
+        mint: tokenMint,
+        config: configPDA,
+      } as any)
       .signers([lb2User])
       .rpc();
     await program.methods
       .approveWithdraw(Array.from(lb2UserId))
       .accounts({
-        request: lb2ReqPDA,
+        withdraw_request: lb2ReqPDA,
         user: lb2UserPDA,
         admin: admin.publicKey,
         sourceTokenAccount: lb2CustodyAta,
@@ -3791,13 +3859,17 @@ describe("zynk-orbit", () => {
         lb2User.publicKey,
         new anchor.BN(20_000_000)
       )
-      .accounts({ signer: lb2User.publicKey } as any)
+      .accounts({
+        signer: lb2User.publicKey,
+        mint: tokenMint,
+        config: configPDA,
+      } as any)
       .signers([lb2User])
       .rpc();
     await program.methods
       .approveWithdraw(Array.from(lb2UserId))
       .accounts({
-        request: lb2ReqPDA2,
+        withdraw_request: lb2ReqPDA2,
         user: lb2UserPDA,
         admin: admin.publicKey,
         sourceTokenAccount: lb2CustodyAta,
@@ -3837,7 +3909,11 @@ describe("zynk-orbit", () => {
         lb2User.publicKey,
         new anchor.BN(20_000_000)
       )
-      .accounts({ signer: lb2User.publicKey } as any)
+      .accounts({
+        signer: lb2User.publicKey,
+        mint: tokenMint,
+        config: configPDA,
+      } as any)
       .signers([lb2User])
       .rpc();
 
@@ -3847,7 +3923,7 @@ describe("zynk-orbit", () => {
       await program.methods
         .approveWithdraw(Array.from(lb2UserId))
         .accounts({
-          request: lb2TestPDA,
+          withdraw_request: lb2TestPDA,
           user: lb2UserPDA,
           admin: admin.publicKey,
           sourceTokenAccount: ovaultAta, // wrong owner
@@ -3874,7 +3950,7 @@ describe("zynk-orbit", () => {
     await program.methods
       .revokeWithdraw(Array.from(lb2UserId))
       .accounts({
-        request: lb2TestPDA,
+        withdraw_request: lb2TestPDA,
         user: lb2UserPDA,
         signer: admin.publicKey,
         config: configPDA,
@@ -3897,7 +3973,7 @@ describe("zynk-orbit", () => {
     await program.methods
       .approveWithdraw(Array.from(icvUserId))
       .accounts({
-        request: withdrawRequestPDA,
+        withdraw_request: withdrawRequestPDA,
         user: userPDA,
         admin: admin.publicKey,
         sourceTokenAccount: icvTokenAccount,
@@ -3946,7 +4022,11 @@ describe("zynk-orbit", () => {
         icvUser.publicKey,
         new anchor.BN(withdrawAmount)
       )
-      .accounts({ signer: icvUser.publicKey } as any)
+      .accounts({
+        signer: icvUser.publicKey,
+        mint: tokenMint,
+        config: configPDA,
+      } as any)
       .signers([icvUser])
       .rpc();
 
@@ -3963,7 +4043,7 @@ describe("zynk-orbit", () => {
     await program.methods
       .revokeWithdraw(Array.from(icvUserId))
       .accounts({
-        request: withdrawRequestPDA,
+        withdraw_request: withdrawRequestPDA,
         user: deriveUserPDA(icvUserId),
         signer: icvUser.publicKey,
         config: configPDA,
@@ -3994,7 +4074,11 @@ describe("zynk-orbit", () => {
         icvUser.publicKey,
         new anchor.BN(3_000_000)
       )
-      .accounts({ signer: icvUser.publicKey } as any)
+      .accounts({
+        signer: icvUser.publicKey,
+        mint: tokenMint,
+        config: configPDA,
+      } as any)
       .signers([icvUser])
       .rpc();
 
@@ -4003,7 +4087,7 @@ describe("zynk-orbit", () => {
       await program.methods
         .revokeWithdraw(Array.from(icvUserId))
         .accounts({
-          request: withdrawRequestPDA,
+          withdraw_request: withdrawRequestPDA,
           user: deriveUserPDA(icvUserId),
           signer: manager.publicKey,
           config: configPDA,
@@ -4024,7 +4108,7 @@ describe("zynk-orbit", () => {
     await program.methods
       .revokeWithdraw(Array.from(icvUserId))
       .accounts({
-        request: withdrawRequestPDA,
+        withdraw_request: withdrawRequestPDA,
         user: deriveUserPDA(icvUserId),
         signer: admin.publicKey,
         config: configPDA,
@@ -4083,7 +4167,7 @@ describe("zynk-orbit", () => {
     await program.methods
       .approveCliffPeriod(Array.from(icvUserId))
       .accounts({
-        request: updateCliffRequestPDA,
+        withdraw_request: updateCliffRequestPDA,
         user: userPDA,
         signer: icvUser.publicKey,
       } as any)
@@ -4152,7 +4236,7 @@ describe("zynk-orbit", () => {
     await program.methods
       .approveCliffPeriod(Array.from(icvUserId))
       .accounts({
-        request: updateCliffRequestPDA,
+        withdraw_request: updateCliffRequestPDA,
         user: userPDA,
         signer: icvUser.publicKey,
       } as any)
@@ -4198,7 +4282,7 @@ describe("zynk-orbit", () => {
       await program.methods
         .approveCliffPeriod(Array.from(icvUserId))
         .accounts({
-          request: updateCliffRequestPDA,
+          withdraw_request: updateCliffRequestPDA,
           user: userPDA,
           signer: lpUser.publicKey, // wrong signer — not in icvUser user.wallets
         } as any)
@@ -4220,7 +4304,7 @@ describe("zynk-orbit", () => {
       .rejectCliffPeriod(Array.from(icvUserId))
       .accounts({
         config: configPDA,
-        request: updateCliffRequestPDA,
+        withdraw_request: updateCliffRequestPDA,
         user: userPDA,
         signer: icvUser.publicKey,
       } as any)
@@ -4267,7 +4351,7 @@ describe("zynk-orbit", () => {
       .rejectCliffPeriod(Array.from(icvUserId))
       .accounts({
         config: configPDA,
-        request: updateCliffRequestPDA,
+        withdraw_request: updateCliffRequestPDA,
         user: deriveUserPDA(icvUserId),
         signer: icvUser.publicKey,
       } as any)
@@ -4314,7 +4398,7 @@ describe("zynk-orbit", () => {
         .rejectCliffPeriod(Array.from(icvUserId))
         .accounts({
           config: configPDA,
-          request: updateCliffRequestPDA,
+          withdraw_request: updateCliffRequestPDA,
           user: deriveUserPDA(icvUserId),
           signer: lpUser.publicKey,
         } as any)
@@ -4332,7 +4416,7 @@ describe("zynk-orbit", () => {
       .rejectCliffPeriod(Array.from(icvUserId))
       .accounts({
         config: configPDA,
-        request: updateCliffRequestPDA,
+        withdraw_request: updateCliffRequestPDA,
         user: deriveUserPDA(icvUserId),
         signer: admin.publicKey,
       } as any)
@@ -4352,7 +4436,7 @@ describe("zynk-orbit", () => {
     const partnerA = 321420; // numeric suffix from "zp_321420"
 
     const infoBefore = await provider.connection.getAccountInfo(userPDA);
-    const sizeBefore = infoBefore!.data.length; // should be BASE_SIZE = 177
+    const sizeBefore = infoBefore!.data.length; // should be BASE_SIZE = 209
 
     await program.methods
       .updatePartnerWhitelist(
@@ -4569,6 +4653,7 @@ describe("zynk-orbit", () => {
       .registerUser(
         Array.from(claimUserId),
         { icv: {} },
+        tokenMint,
         [claimUser.publicKey],
         farFutureCliff,
         new anchor.BN(500_000_000),
@@ -4663,6 +4748,7 @@ describe("zynk-orbit", () => {
       .registerUser(
         Array.from(claimZeroBalUserId),
         { icv: {} },
+        tokenMint,
         [claimZeroBalUser.publicKey],
         nearCliff,
         new anchor.BN(500_000_000),
@@ -4734,7 +4820,7 @@ describe("zynk-orbit", () => {
     await program.methods
       .approveCliffPeriod(Array.from(claimUserId))
       .accounts({
-        request: updateCliffRequestPDA,
+        withdraw_request: updateCliffRequestPDA,
         user: claimUserPDA,
         signer: claimUser.publicKey,
       } as any)
@@ -4803,6 +4889,7 @@ describe("zynk-orbit", () => {
       .registerUser(
         Array.from(claimantId),
         { icv: {} },
+        tokenMint,
         [claimant.publicKey, claimant.publicKey, claimant.publicKey],
         cliff,
         new anchor.BN(10_000_000),
@@ -4915,6 +5002,7 @@ describe("zynk-orbit", () => {
       .registerUser(
         Array.from(revokeNcwUserId),
         { ncw: {} },
+        tokenMint,
         [revokeNcwUser.publicKey],
         null,
         null,
@@ -4958,6 +5046,7 @@ describe("zynk-orbit", () => {
       .registerUser(
         Array.from(revokeLpUserId),
         { lp: {} },
+        tokenMint,
         [revokeLpUser.publicKey],
         futureCliff,
         new anchor.BN(1_000_000_000),
@@ -4999,6 +5088,7 @@ describe("zynk-orbit", () => {
       .registerUser(
         Array.from(revokeNonAdminUserId),
         { ncw: {} },
+        tokenMint,
         [revokeNonAdminUser.publicKey],
         null,
         null,
@@ -5061,6 +5151,7 @@ describe("zynk-orbit", () => {
       .registerUser(
         Array.from(revokeRewlUserId),
         { icv: {} },
+        tokenMint,
         [revokeRewlUser.publicKey],
         farFutureCliff,
         new anchor.BN(200_000_000),
@@ -5131,6 +5222,7 @@ describe("zynk-orbit", () => {
       .registerUser(
         Array.from(revokeRewlUserId),
         { icv: {} },
+        tokenMint,
         [revokeRewlUser.publicKey],
         shortCliff,
         new anchor.BN(200_000_000),
@@ -5223,6 +5315,7 @@ describe("zynk-orbit", () => {
       .registerUser(
         Array.from(disburseNcwUserId),
         { ncw: {} },
+        tokenMint,
         [disburseNcwUser.publicKey],
         null,
         null,
@@ -5290,6 +5383,7 @@ describe("zynk-orbit", () => {
       .registerUser(
         Array.from(disburseIcvUserId),
         { icv: {} },
+        tokenMint,
         [disburseIcvUser.publicKey],
         futureCliff,
         new anchor.BN(500_000_000),
@@ -5398,6 +5492,7 @@ describe("zynk-orbit", () => {
       .registerUser(
         Array.from(dis4UserId),
         { ncw: {} },
+        tokenMint,
         [dis4User.publicKey],
         null,
         null,
@@ -5451,6 +5546,7 @@ describe("zynk-orbit", () => {
       .registerUser(
         Array.from(dis5UserId),
         { ncw: {} },
+        tokenMint,
         [dis5User.publicKey],
         null,
         null,
@@ -5515,6 +5611,7 @@ describe("zynk-orbit", () => {
       .registerUser(
         Array.from(upwUserId),
         { icv: {} },
+        tokenMint,
         [upwUser.publicKey],
         new anchor.BN(now + 365 * 24 * 60 * 60),
         new anchor.BN(500_000_000),
@@ -5526,7 +5623,7 @@ describe("zynk-orbit", () => {
       .rpc();
 
     const infoBefore = await provider.connection.getAccountInfo(upwUserPDA);
-    const sizeBefore = infoBefore!.data.length; // BASE_SIZE = 177
+    const sizeBefore = infoBefore!.data.length; // BASE_SIZE = 209
     const partnerId = 100001;
     await program.methods
       .updatePartnerWhitelist(Array.from(upwUserId), { add: {} }, partnerId)
@@ -5570,6 +5667,7 @@ describe("zynk-orbit", () => {
       .registerUser(
         Array.from(upwRemUserId),
         { icv: {} },
+        tokenMint,
         [upwRemUser.publicKey],
         new anchor.BN(now + 365 * 24 * 60 * 60),
         new anchor.BN(500_000_000),
@@ -5659,6 +5757,7 @@ describe("zynk-orbit", () => {
       .registerUser(
         Array.from(massUserId),
         { icv: {} },
+        tokenMint,
         [massUser.publicKey],
         new anchor.BN(now + 365 * 24 * 60 * 60),
         new anchor.BN(500_000_000),
@@ -5699,8 +5798,8 @@ describe("zynk-orbit", () => {
       300000 + PARTNER_COUNT,
       "last partner should be present"
     );
-    // Account size: BASE_SIZE (177) + PARTNER_COUNT * 4 bytes
-    const expectedSize = 177 + PARTNER_COUNT * 4;
+    // Account size: BASE_SIZE (209) + PARTNER_COUNT * 4 bytes
+    const expectedSize = 209 + PARTNER_COUNT * 4;
     const accountInfo = await provider.connection.getAccountInfo(massUserPDA);
     assert.equal(
       accountInfo!.data.length,
@@ -5727,6 +5826,7 @@ describe("zynk-orbit", () => {
       .registerUser(
         Array.from(upwNaUserId),
         { icv: {} },
+        tokenMint,
         [upwNaUser.publicKey],
         new anchor.BN(now + 365 * 24 * 60 * 60),
         new anchor.BN(500_000_000),
@@ -5785,6 +5885,7 @@ describe("zynk-orbit", () => {
       .registerUser(
         Array.from(pledgeIcvUserId),
         { icv: {} },
+        tokenMint,
         [pledgeIcvUser.publicKey],
         new anchor.BN(now + 2 * 365 * 24 * 60 * 60),
         new anchor.BN(500_000_000),
@@ -5854,6 +5955,7 @@ describe("zynk-orbit", () => {
       .registerUser(
         Array.from(pledgeLpUserId),
         { lp: {} },
+        tokenMint,
         [pledgeLpUser.publicKey],
         new anchor.BN(now + 2 * 365 * 24 * 60 * 60),
         new anchor.BN(500_000_000),
@@ -5926,6 +6028,7 @@ describe("zynk-orbit", () => {
       .registerUser(
         Array.from(pledgeMdUserId),
         { icv: {} },
+        tokenMint,
         [pledgeMdUser.publicKey],
         new anchor.BN(now + 2 * 365 * 24 * 60 * 60),
         cap,
@@ -6004,6 +6107,7 @@ describe("zynk-orbit", () => {
       .registerUser(
         Array.from(pledgeNmUserId),
         { icv: {} },
+        tokenMint,
         [pledgeNmUser.publicKey],
         new anchor.BN(now + 2 * 365 * 24 * 60 * 60),
         new anchor.BN(500_000_000),
@@ -6337,6 +6441,7 @@ describe("zynk-orbit", () => {
         .registerUser(
           Array.from(cctpIcvUserId),
           { icv: {} },
+          tokenMint,
           [cctpIcvUser.publicKey, cctpIcvUser.publicKey, cctpIcvUser.publicKey],
           new anchor.BN(now + 1),
           new anchor.BN(100_000_000),
@@ -6398,6 +6503,7 @@ describe("zynk-orbit", () => {
         .registerUser(
           Array.from(cctpNcwUserId),
           { ncw: {} },
+          tokenMint,
           [cctpNcwUser.publicKey, cctpNcwUser.publicKey, cctpNcwUser.publicKey],
           null,
           null,
@@ -6459,6 +6565,7 @@ describe("zynk-orbit", () => {
         .registerUser(
           Array.from(cctpIcvUserId),
           { icv: {} },
+          tokenMint,
           [cctpIcvUser.publicKey, cctpIcvUser.publicKey, cctpIcvUser.publicKey],
           new anchor.BN(now + 3600),
           new anchor.BN(100_000_000),
@@ -6528,6 +6635,7 @@ describe("zynk-orbit", () => {
         .registerUser(
           Array.from(cctpIcvUserId),
           { icv: {} },
+          tokenMint,
           [cctpIcvUser.publicKey, cctpIcvUser.publicKey, cctpIcvUser.publicKey],
           new anchor.BN(now + 1),
           new anchor.BN(100_000_000),
@@ -6591,6 +6699,7 @@ describe("zynk-orbit", () => {
         .registerUser(
           Array.from(cctpIcvUserId),
           { icv: {} },
+          tokenMint,
           [cctpIcvUser.publicKey, cctpIcvUser.publicKey, cctpIcvUser.publicKey],
           new anchor.BN(now + 1),
           new anchor.BN(100_000_000),
@@ -6653,6 +6762,7 @@ describe("zynk-orbit", () => {
         .registerUser(
           Array.from(cctpIcvUserId),
           { icv: {} },
+          tokenMint,
           [primaryUser.publicKey, primaryUser.publicKey, primaryUser.publicKey],
           new anchor.BN(now + 1),
           new anchor.BN(100_000_000),
@@ -6996,6 +7106,7 @@ describe("zynk-orbit", () => {
         .registerUser(
           Array.from(cctpIcvUserId),
           { icv: {} },
+          tokenMint,
           [primaryUser.publicKey, primaryUser.publicKey, primaryUser.publicKey],
           new anchor.BN(now + 1),
           new anchor.BN(100_000_000),

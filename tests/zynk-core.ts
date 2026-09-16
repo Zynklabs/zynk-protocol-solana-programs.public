@@ -2256,7 +2256,7 @@ describe("zynk-core", () => {
     }
   });
 
-  it("User can create and replenish/close order with same mint token", async () => {
+  it("Can create and replenish/close order with same mint token", async () => {
     const amount = new anchor.BN(100000000000);
     const orderId = generateOrderId();
     const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
@@ -2451,7 +2451,7 @@ describe("zynk-core", () => {
     }
   });
 
-  it("User is able to pull and create order and close order with same mint token", async () => {
+  it("Is able to pull and create order and close order with same mint token", async () => {
     const amount = new anchor.BN(100000000000);
     const orderId = generateOrderId();
     const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
@@ -2612,7 +2612,7 @@ describe("zynk-core", () => {
     }
   });
 
-  it("User should not be able to create order with invalid mint token", async () => {
+  it("Should not be able to create order with invalid mint token", async () => {
     const amount = new anchor.BN(100000000000);
     const orderId = generateOrderId();
     const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
@@ -2655,7 +2655,7 @@ describe("zynk-core", () => {
     }
   });
 
-  it("User should not be able to pull and create order with invalid mint token", async () => {
+  it("Should not be able to pull and create order with invalid mint token", async () => {
     const amount = new anchor.BN(100000000000);
     const orderId = generateOrderId();
     const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
@@ -2700,7 +2700,7 @@ describe("zynk-core", () => {
     }
   });
 
-  it("User should not be able to pull and create order with valid mint token but pdv and zov mint tokens are different (Both valid)", async () => {
+  it("Should not be able to pull and create order with valid mint token but pdv and zov mint tokens are different (Both valid)", async () => {
     const amount = new anchor.BN(100000000000);
     const orderId = generateOrderId();
     const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
@@ -2745,7 +2745,7 @@ describe("zynk-core", () => {
     }
   });
 
-  it("User should not be able to close order with invalid mint token (Order created by CreateOrder method)", async () => {
+  it("Should not be able to close order with invalid mint token (Order created by CreateOrder method)", async () => {
     const amount = new anchor.BN(100000000000);
     const orderId = generateOrderId();
     const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
@@ -2832,7 +2832,7 @@ describe("zynk-core", () => {
     }
   });
 
-  it("User should not be able to close order with valid mint token but pdv and zov mint tokens are different (Both valid) (Order created by CreateOrder method)", async () => {
+  it("Should not be able to close order with valid mint token but pdv and zov mint tokens are different (Both valid) (Order created by CreateOrder method)", async () => {
     const amount = new anchor.BN(100000000000);
     const orderId = generateOrderId();
     const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
@@ -2921,7 +2921,7 @@ describe("zynk-core", () => {
     }
   });
 
-  it("User should not be able to close order with invalid mint token (Order created by PullAndCreateOrder method)", async () => {
+  it("Should not be able to close order with invalid mint token (Order created by PullAndCreateOrder method)", async () => {
     const amount = new anchor.BN(100000000000);
     const orderId = generateOrderId();
     const orderTrackerPDA = deriveOrderTrackerPDA(orderId);
@@ -3024,7 +3024,7 @@ describe("zynk-core", () => {
     }
   });
 
-  it("User should not be able to close order with valid mint token but pdv and zov mint tokens are different (Both valid) (Order created by PullAndCreateOrder method)", async () => {
+  it("Should not be able to close order with valid mint token but pdv and zov mint tokens are different (Both valid) (Order created by PullAndCreateOrder method)", async () => {
     const amount = new anchor.BN(100000000000);
     const orderId = generateOrderId();
     const orderTrackerPDA = deriveOrderTrackerPDA(orderId);

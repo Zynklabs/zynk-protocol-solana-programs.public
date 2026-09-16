@@ -90,13 +90,14 @@ pub mod zynk_orbit {
         ctx: Context<RegisterUser>,
         user_id: [u8; 32],
         user_type: UserType,
+        allowed_mint: Pubkey,
         wallets: [Pubkey; 3],
         cliff_period: Option<i64>,
         max_principal: Option<u64>,
         whitelisted_partners: Vec<u32>,
         cctp_recipients: Vec<CctpRecipient>,
     ) -> Result<()> {
-        instructions::users::register_user(ctx, user_id, user_type, wallets, cliff_period, max_principal, whitelisted_partners, cctp_recipients)
+        instructions::users::register_user(ctx, user_id, user_type, allowed_mint, wallets, cliff_period, max_principal, whitelisted_partners, cctp_recipients)
     }
 
     /// Replaces the wallet allowlist for a registered user.

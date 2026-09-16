@@ -18,6 +18,11 @@ pub(crate) fn borrow<'info>(
     require!(amount > 0, OrbitError::ZeroAmount);
     require!(!positions.is_empty(), OrbitError::EmptyPositions);
     require!(
+        ctx.accounts.config.whitelisted_token_mints.contains(&ctx.accounts.mint.key()),
+        zynk_core::CoreError::InvalidTokenMint
+    );
+
+    require!(
         ctx.remaining_accounts.len() == positions.len() * 4,
         OrbitError::InvalidPositionOperation
     );
@@ -71,6 +76,11 @@ pub(crate) fn borrow<'info>(
                 zynk_core::CoreError::InvalidAccount
             );
 
+            require!(
+                user.allowed_mint == ctx.accounts.mint.key(),
+                zynk_core::CoreError::InvalidTokenMint
+            );
+
             // An empty partner list intentionally permits every partner.
             if !user.whitelisted_partners.is_empty() {
                 require!(
@@ -98,6 +108,11 @@ pub(crate) fn borrow<'info>(
                     let token_acc = TokenAccount::try_deserialize(&mut &data[..])
                         .map_err(|_| zynk_core::CoreError::InvalidAccount)?;
 
+                    require!(
+                        token_acc.mint == ctx.accounts.mint.key(),
+                        zynk_core::CoreError::InvalidTokenMint
+                    );
+
                     let has_delegate = token_acc.delegate.contains(&expected_authority);
                     (has_delegate, token_acc.delegated_amount)
                 };
@@ -124,6 +139,16 @@ pub(crate) fn borrow<'info>(
                     authority_account.key() == expected_authority,
                     zynk_core::CoreError::InvalidAccount
                 );
+
+                {
+                    let data = source_token_account.try_borrow_data()?;
+                    let token_acc = TokenAccount::try_deserialize(&mut &data[..])
+                        .map_err(|_| zynk_core::CoreError::InvalidAccount)?;
+                    require!(
+                        token_acc.mint == ctx.accounts.mint.key(),
+                        zynk_core::CoreError::InvalidTokenMint
+                    );
+                }
 
                 let seeds_with_bump: &[&[u8]] = &[USER_SEED, user_id.as_ref(), &[bump]];
                 let signer_seeds = &[&seeds_with_bump[..]];

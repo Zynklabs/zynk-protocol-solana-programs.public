@@ -41,6 +41,7 @@ pub(crate) fn request_withdraw(
     withdraw_request.user_id = user_id;
     withdraw_request.amount = amount;
     withdraw_request.destination = destination;
+    withdraw_request.mint = ctx.accounts.mint.key();
 
     emit!(AxEvent {
         event_name: "WithdrawRequested".to_string(),
@@ -59,17 +60,7 @@ pub(crate) fn approve_withdraw(
     ctx: Context<ApproveWithdraw>,
     user_id: [u8; 32],
 ) -> Result<()> {
-    let config = &ctx.accounts.config;
-    require!(
-        ctx.accounts.admin.key() == config.admin,
-        zynk_core::CoreError::Unauthorized
-    );
-
-    let request_data = ctx.accounts.request.try_borrow_data()?;
-    let withdraw_request = WithdrawRequest::try_deserialize(&mut &request_data[..])
-        .map_err(|_| OrbitError::InvalidRequestAccount)?;
-    drop(request_data);
-
+    let withdraw_request = &ctx.accounts.withdraw_request;
     let user = &mut ctx.accounts.user;
 
     user.principal_out = user
@@ -134,11 +125,6 @@ pub(crate) fn approve_withdraw(
         }
     }
 
-    close_account(
-        ctx.accounts.request.to_account_info(),
-        ctx.accounts.admin.to_account_info(),
-    )?;
-
     emit!(TxEvent {
         event_name: "WithdrawApproved".to_string(),
         user_id,
@@ -164,11 +150,6 @@ pub(crate) fn revoke_withdraw(ctx: Context<RevokeWithdraw>, user_id: [u8; 32]) -
             || is_whitelisted_wallet(&ctx.accounts.user, &signer),
         zynk_core::CoreError::Unauthorized
     );
-
-    close_account(
-        ctx.accounts.request.to_account_info(),
-        ctx.accounts.signer.to_account_info(),
-    )?;
 
     emit!(AxEvent {
         event_name: "WithdrawRevoked".to_string(),

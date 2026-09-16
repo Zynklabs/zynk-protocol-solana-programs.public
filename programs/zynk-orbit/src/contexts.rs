@@ -32,6 +32,7 @@ pub struct Deposit<'info> {
         constraint = config.whitelisted_token_mints.contains(&mint.key()) @ zynk_core::CoreError::InvalidTokenMint,
         constraint = mint.key() == source_token_account.mint @ zynk_core::CoreError::InvalidTokenMint,
         constraint = mint.key() == destination_token_account.mint @ zynk_core::CoreError::InvalidTokenMint,
+        constraint = mint.key() == user.allowed_mint @ zynk_core::CoreError::InvalidTokenMint,
     )]
     pub mint: InterfaceAccount<'info, Mint>,
 
@@ -122,6 +123,7 @@ pub struct Repay<'info> {
     pub zov_token_account: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
+        constraint = config.whitelisted_token_mints.contains(&mint.key()) @ zynk_core::CoreError::InvalidTokenMint,
         constraint = mint.key() == zov_token_account.mint @ zynk_core::CoreError::InvalidTokenMint,
     )]
     pub mint: InterfaceAccount<'info, Mint>,
@@ -193,10 +195,13 @@ pub struct Disburse<'info> {
     #[account(mut)]
     pub destination_token_account: InterfaceAccount<'info, TokenAccount>,
 
+    pub user: Account<'info, User>,
+
     #[account(
         constraint = config.whitelisted_token_mints.contains(&mint.key()) @ zynk_core::CoreError::InvalidTokenMint,
         constraint = mint.key() == source_token_account.mint @ zynk_core::CoreError::InvalidTokenMint,
         constraint = mint.key() == destination_token_account.mint @ zynk_core::CoreError::InvalidTokenMint,
+        constraint = mint.key() == user.allowed_mint @ zynk_core::CoreError::InvalidTokenMint,
     )]
     pub mint: InterfaceAccount<'info, Mint>,
 
@@ -206,8 +211,6 @@ pub struct Disburse<'info> {
         bump
     )]
     pub ovault: UncheckedAccount<'info>,
-
-    pub user: Account<'info, User>,
 
     pub manager: Signer<'info>,
 
@@ -221,6 +224,7 @@ pub struct Disburse<'info> {
 #[instruction(
     user_id: [u8; 32],
     user_type: UserType,
+    allowed_mint: Pubkey,
     wallets: [Pubkey; 3],
     cliff_period: Option<i64>,
     max_principal: Option<u64>,
@@ -232,7 +236,8 @@ pub struct RegisterUser<'info> {
         seeds = [zynk_core::CONFIG_SEED],
         seeds::program = ZynkCore::id(),
         bump,
-        has_one = admin @ zynk_core::CoreError::Unauthorized
+        has_one = admin @ zynk_core::CoreError::Unauthorized,
+        constraint = config.whitelisted_token_mints.contains(&allowed_mint) @ zynk_core::CoreError::InvalidTokenMint,
     )]
     pub config: Account<'info, zynk_core::Config>,
 
@@ -430,10 +435,24 @@ pub struct UpdateCctpRecipient<'info> {
 #[instruction(user_id: [u8; 32])]
 pub struct RequestWithdraw<'info> {
     #[account(
-        seeds = [USER_SEED, user_id.as_ref()],
+        seeds = [zynk_core::CONFIG_SEED],
+        seeds::program = ZynkCore::id(),
         bump,
     )]
+    pub config: Account<'info, zynk_core::Config>,
+
+    #[account(
+        seeds = [USER_SEED, user_id.as_ref()],
+        bump,
+        constraint = signer_user.user_id == user_id @ OrbitError::UserIdMismatch,
+    )]
     pub signer_user: Account<'info, User>,
+
+    #[account(
+        constraint = config.whitelisted_token_mints.contains(&mint.key()) @ zynk_core::CoreError::InvalidTokenMint,
+        constraint = mint.key() == signer_user.allowed_mint @ zynk_core::CoreError::InvalidTokenMint,
+    )]
+    pub mint: InterfaceAccount<'info, Mint>,
 
     #[account(
         init,
@@ -461,9 +480,14 @@ pub struct ApproveWithdraw<'info> {
     )]
     pub config: Account<'info, zynk_core::Config>,
 
-    /// CHECK: The handler deserializes this account as a withdrawal request.
-    #[account(mut)]
-    pub request: UncheckedAccount<'info>,
+    #[account(
+        mut,
+        close = admin,
+        seeds = [WITHDRAW_REQUEST_SEED, user_id.as_ref()],
+        bump,
+        constraint = withdraw_request.user_id == user_id @ OrbitError::UserIdMismatch,
+    )]
+    pub withdraw_request: Account<'info, WithdrawRequest>,
 
     #[account(
         mut,
@@ -492,6 +516,8 @@ pub struct ApproveWithdraw<'info> {
         constraint = config.whitelisted_token_mints.contains(&mint.key()) @ zynk_core::CoreError::InvalidTokenMint,
         constraint = mint.key() == source_token_account.mint @ zynk_core::CoreError::InvalidTokenMint,
         constraint = mint.key() == destination_token_account.mint @ zynk_core::CoreError::InvalidTokenMint,
+        constraint = mint.key() == user.allowed_mint @ zynk_core::CoreError::InvalidTokenMint,
+        constraint = mint.key() == withdraw_request.mint @ OrbitError::UserIdMismatch,
     )]
     pub mint: InterfaceAccount<'info, Mint>,
 
@@ -514,11 +540,12 @@ pub struct RevokeWithdraw<'info> {
 
     #[account(
         mut,
+        close = signer,
         seeds = [WITHDRAW_REQUEST_SEED, user_id.as_ref()],
         bump,
-        constraint = request.user_id == user_id @ OrbitError::UserIdMismatch
+        constraint = withdraw_request.user_id == user_id @ OrbitError::UserIdMismatch
     )]
-    pub request: Account<'info, WithdrawRequest>,
+    pub withdraw_request: Account<'info, WithdrawRequest>,
 
     #[account(
         seeds = [USER_SEED, user_id.as_ref()],
@@ -619,7 +646,9 @@ pub struct Claim<'info> {
     pub destination_token_account: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
+        constraint = config.whitelisted_token_mints.contains(&mint.key()) @ zynk_core::CoreError::InvalidTokenMint,
         constraint = mint.key() == destination_token_account.mint @ zynk_core::CoreError::InvalidTokenMint,
+        constraint = mint.key() == user.allowed_mint @ zynk_core::CoreError::InvalidTokenMint,
     )]
     pub mint: InterfaceAccount<'info, Mint>,
 
@@ -663,8 +692,10 @@ pub struct Pledge<'info> {
     pub user: Account<'info, User>,
 
     #[account(
+        constraint = config.whitelisted_token_mints.contains(&mint.key()) @ zynk_core::CoreError::InvalidTokenMint,
         constraint = mint.key() == source_token_account.mint @ zynk_core::CoreError::InvalidTokenMint,
         constraint = mint.key() == destination_token_account.mint @ zynk_core::CoreError::InvalidTokenMint,
+        constraint = mint.key() == user.allowed_mint @ zynk_core::CoreError::InvalidTokenMint,
     )]
     pub mint: InterfaceAccount<'info, Mint>,
 

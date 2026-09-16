@@ -26,6 +26,7 @@ pub struct User {
     pub wallets: [Pubkey; 3],           // 96 bytes (3 × 32)
     pub user_id: [u8; 32],              // 32 bytes
     pub user_type: UserType,            // 1  byte  (repr u8)
+    pub allowed_mint: Pubkey,           // 32 bytes
     pub cliff_period: i64,              // 8  bytes
     pub principal_in: u64,              // 8  bytes
     pub principal_out: u64,             // 8  bytes
@@ -40,14 +41,15 @@ impl User {
     /// + 96  wallets ([Pubkey; 3])
     /// + 32  user_id
     /// + 1   user_type
+    /// + 32  allowed_mint
     /// + 8   cliff_period
     /// + 8   principal_in
     /// + 8   principal_out
     /// + 8   max_principal
     /// + 4   Vec<u32> length prefix
     /// + 4   Vec<CctpRecipient> length prefix
-    /// = 177 bytes
-    pub const BASE_SIZE: usize = 8 + 96 + 32 + 1 + 8 + 8 + 8 + 8 + 4 + 4;
+    /// = 209 bytes
+    pub const BASE_SIZE: usize = 8 + 96 + 32 + 1 + 32 + 8 + 8 + 8 + 8 + 4 + 4;
 
     #[inline]
     pub fn space_for_lengths(partner_len: usize, cctp_recipient_len: usize) -> usize {
@@ -63,6 +65,7 @@ pub struct WithdrawRequest {
     pub user_id: [u8; 32],
     pub amount: u64,
     pub destination: Pubkey,
+    pub mint: Pubkey,
 }
 
 #[account]

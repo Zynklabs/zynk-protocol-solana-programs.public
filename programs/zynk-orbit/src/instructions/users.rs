@@ -8,6 +8,7 @@ pub(crate) fn register_user(
     ctx: Context<RegisterUser>,
     user_id: [u8; 32],
     user_type: UserType,
+    allowed_mint: Pubkey,
     wallets: [Pubkey; 3],
     cliff_period: Option<i64>,
     max_principal: Option<u64>,
@@ -30,6 +31,7 @@ pub(crate) fn register_user(
     user.wallets = wallets;
     user.user_id = user_id;
     user.user_type = user_type;
+    user.allowed_mint = allowed_mint;
     user.cliff_period = cliff_period.unwrap_or(i64::MAX);
     user.principal_in = 0;
     user.principal_out = 0;

@@ -86,6 +86,10 @@ pub(crate) fn repay<'info>(
             ctx.program_id,
         );
         require!(user_key == expected_user_key, zynk_core::CoreError::InvalidAccount);
+        require!(
+            user.allowed_mint == ctx.accounts.mint.key(),
+            zynk_core::CoreError::InvalidTokenMint
+        );
         drop(user_data);
 
         require!(
@@ -222,6 +226,10 @@ pub(crate) fn repay<'info>(
             let data = dst_token_account.try_borrow_data()?;
             let token_account = TokenAccount::try_deserialize_unchecked(&mut &data[..])
                 .map_err(|_| zynk_core::CoreError::InvalidAccount)?;
+            require!(
+                token_account.mint == ctx.accounts.mint.key(),
+                zynk_core::CoreError::InvalidTokenMint
+            );
             token_account.owner
         };
         info.dest_owner = dst_token_authority;
