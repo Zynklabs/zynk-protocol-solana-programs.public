@@ -29,11 +29,14 @@ import { ZynkOrbit } from "../target/types/zynk_orbit";
 
 // ─── Module-level helpers ─────────────────────────────────────────────────────
 const zynkPartnerId = `zp_321420`; // 6-digit numeric suffix required by extract_partner_number
+const hashed = (s: string): Buffer => {
+  const hash = createHash("sha256").update(s).digest("hex");
+  return Buffer.from(hash.slice(0, 32));
+};
 const generateOrderId = (): Buffer => {
   const transactionId = `txn_${randomUUID()}`;
   const orderKey = `${zynkPartnerId}::${transactionId}`;
-  const hash = createHash("sha256").update(orderKey).digest("hex");
-  return Buffer.from(hash.slice(0, 32));
+  return hashed(orderKey);
 };
 
 describe("zynk-orbit", () => {
@@ -202,7 +205,7 @@ describe("zynk-orbit", () => {
     core_program.programId
   );
 
-  const lpZovId = Buffer.from(sha256(Buffer.from("0001")));
+  const lpZovId = hashed("0001");
   const [lpZynkOpVault] = PublicKey.findProgramAddressSync(
     [Buffer.from("zynk_op_vault"), lpZovId],
     core_program.programId
@@ -211,10 +214,8 @@ describe("zynk-orbit", () => {
   const partnerId = Buffer.alloc(32);
   partnerId.write(zynkPartnerId, 0, "utf-8");
 
-  // On-chain borrow hashes partner_id string with solana sha256; replicate here.
-  const borrowPartnerIdBytes = Buffer.from(
-    sha256(new TextEncoder().encode(zynkPartnerId))
-  );
+  // On-chain borrow hashes partner_id string with hashed; replicate here.
+  const borrowPartnerIdBytes = hashed(zynkPartnerId);
 
   const [partnerDepositVaultPDA] = PublicKey.findProgramAddressSync(
     [Buffer.from("partner_deposit_vault"), borrowPartnerIdBytes],
@@ -3334,8 +3335,6 @@ describe("zynk-orbit", () => {
 
     await program.methods
       .repay(
-        Array.from(borrowPartnerIdBytes),
-        Array.from(borrowOrderId),
         Array.from(defaultZovId),
         repayAmount,
         null

@@ -52,10 +52,24 @@ pub(crate) fn borrow<'info>(
         let user_account = &remaining_accounts[base_idx + 2];
         let position_pda = &remaining_accounts[base_idx + 3];
 
+
         let (user_id, user_type) = {
+            require!(
+                user_account.owner == ctx.program_id,
+                zynk_core::CoreError::InvalidAccount
+            );
             let user_data = user_account.data.borrow();
             let user = User::try_deserialize(&mut &user_data[..])
                 .map_err(|_| zynk_core::CoreError::InvalidAccount)?;
+
+            let (expected_user_key, _) = Pubkey::find_program_address(
+                &[USER_SEED, user.user_id.as_ref()],
+                ctx.program_id,
+            );
+            require!(
+                user_account.key() == expected_user_key,
+                zynk_core::CoreError::InvalidAccount
+            );
 
             // An empty partner list intentionally permits every partner.
             if !user.whitelisted_partners.is_empty() {
